@@ -23,6 +23,7 @@ env/
 Thumbs.db
 
 # Project
+sandbox/
 .claude/
 CLAUDE.local.md
 *.jsonl
