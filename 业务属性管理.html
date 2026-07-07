@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>业务属性管理 | 本体平台</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #f0f2f6; height: 100vh; overflow: hidden; color: #1e293b; }
+        .app-container { display: flex; flex-direction: column; height: 100%; width: 100%; box-shadow: 0 0 20px rgba(0,0,0,0.05); }
+        .top-bar { background: white; padding: 12px 28px; border-bottom: 1px solid #eef2f6; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.02); flex-shrink: 0; }
+        .left-area { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+        .back-link { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500; color: #1e40af; text-decoration: none; padding: 6px 14px; border-radius: 30px; background: #e6f0ff; transition: all 0.2s; }
+        .back-link:hover { background: #eff6ff; color: #2563eb; transform: translateY(-1px); }
+        .phase-steps { display: flex; gap: 20px; flex-wrap: wrap; background: #f8fafc; padding: 6px 20px; border-radius: 40px; }
+        .phase { font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #2c3e66; }
+        .phase i { font-size: 1rem; color: #3b82f6; }
+        .phase.active { color: #1e40af; }
+        .badge-close { background: #e6f0ff; border-radius: 30px; padding: 5px 14px; font-size: 0.75rem; font-weight: 600; color: #1e4b8f; }
+        .user-info { display: flex; align-items: center; gap: 16px; background: #fff; border-radius: 48px; padding: 5px 12px 5px 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #eef2f6; }
+        .user-avatar { width: 38px; height: 38px; background: linear-gradient(145deg, #2563eb, #1e40af); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 1rem; box-shadow: 0 2px 6px rgba(37,99,235,0.2); }
+        .user-details { display: flex; flex-direction: column; line-height: 1.3; }
+        .user-name { font-weight: 700; font-size: 0.85rem; color: #0f172a; }
+        .user-role { font-size: 0.7rem; color: #5b6e8c; }
+        .login-badge { font-size: 0.7rem; background: #e6f7e6; color: #2e7d32; border-radius: 20px; padding: 2px 8px; margin-left: 4px; display: inline-flex; align-items: center; gap: 4px; }
+        .main-body { flex: 1; overflow-y: auto; padding: 28px 32px; background: #f9fafc; }
+        .page-header { background: white; border-radius: 28px; padding: 28px 32px; box-shadow: 0 4px 14px rgba(0,0,0,0.02), 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #edf2f7; margin-bottom: 24px; }
+        .page-header-inner { display: flex; align-items: center; gap: 12px; border-bottom: 2px dashed #e2e8f0; padding-bottom: 16px; margin-bottom: 16px; }
+        .page-header-inner > i { font-size: 2rem; color: #2563eb; }
+        .page-title { font-size: 1.6rem; font-weight: 700; background: linear-gradient(120deg, #1e293b, #2d3a5e); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .page-desc { font-size: 1rem; line-height: 1.55; color: #2c3e50; background: #fafcff; }
+        .insight-tag { background: #eff6ff; padding: 4px 12px; border-radius: 30px; font-size: 0.7rem; font-weight: 500; display: inline-block; margin-top: 12px; color: #1e40af; }
+        .content-card { background: white; border-radius: 24px; padding: 24px 28px; border: 1px solid #eef2ff; box-shadow: 0 6px 14px rgba(0,0,0,0.02); }
+        .toolbar-card { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px dashed #e2e8f0; }
+        .search-group { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; flex: 1; }
+        .field-label { font-size: 0.82rem; font-weight: 600; color: #1e3a6f; white-space: nowrap; }
+        .search-input, .filter-select { padding: 9px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.85rem; font-family: inherit; min-width: 130px; background: #fafcff; color: #334155; transition: all 0.2s; }
+        .filter-select { cursor: pointer; }
+        .search-input:focus, .filter-select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .action-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 10px; font-size: 0.85rem; font-weight: 600; font-family: inherit; cursor: pointer; border: none; transition: all 0.2s ease; }
+        .btn-primary { background: linear-gradient(135deg, #2563eb, #1e40af); color: white; box-shadow: 0 2px 8px rgba(37,99,235,0.25); }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(37,99,235,0.35); }
+        .btn-outline { background: white; color: #1e40af; border: 1px solid #bfdbfe; }
+        .btn-outline:hover { background: #eff6ff; }
+        .btn-danger { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .btn-danger:hover { background: #fee2e2; }
+        .btn-danger:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.8rem; table-layout: fixed; min-width: 1200px; }
+        thead tr { background: linear-gradient(90deg, #eff6ff 0%, #f8fafc 100%); border-bottom: 2px solid #eef2ff; }
+        th { padding: 11px 10px; text-align: left; font-weight: 600; color: #1e3a6f; white-space: nowrap; font-size: 0.78rem; }
+        th.center, td.center { text-align: center; }
+        td { padding: 10px; border-bottom: 1px solid #eef2f6; color: #334155; vertical-align: top; word-break: break-word; }
+        tbody tr { transition: background 0.2s; }
+        tbody tr:hover { background: #fafcff; }
+        tbody tr.selected { background: linear-gradient(90deg, #eff6ff 0%, #ffffff 100%); box-shadow: inset 3px 0 0 #2563eb; }
+        input[type="checkbox"] { accent-color: #2563eb; cursor: pointer; }
+        .code-tag { font-family: Consolas, monospace; font-size: 0.72rem; color: #1e4b8f; background: #eef2ff; padding: 2px 6px; border-radius: 5px; }
+        .attr-name { font-weight: 600; color: #1e3a6f; }
+        .cell-def { font-size: 0.78rem; line-height: 1.45; color: #475569; }
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 0.7rem; font-weight: 600; }
+        .tag-y { background: #e6f7e6; color: #2e7d32; }
+        .tag-n { background: #f1f5f9; color: #64748b; }
+        .tag-type { background: #f0f9ff; color: #0369a1; }
+        .tag-le { background: #faf5ff; color: #7e22ce; font-size: 0.68rem; }
+        .tag-unassigned { background: #f8fafc; color: #94a3b8; font-size: 0.68rem; }
+        .icon-btn { width: 30px; height: 30px; border: none; border-radius: 8px; background: #f1f5fb; color: #5f7f9e; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s; }
+        .icon-btn:hover { background: #eef2ff; color: #2563eb; }
+        .table-footer { display: flex; justify-content: space-between; align-items: center; padding: 14px 4px 0; font-size: 0.8rem; color: #5b6e8c; }
+        .table-footer #selectedInfo { color: #1e40af; font-weight: 600; }
+        .empty-state { text-align: center; padding: 48px 20px; color: #94a3b8; }
+        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.4); z-index: 1000; align-items: center; justify-content: center; padding: 20px; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: white; border-radius: 24px; width: 100%; max-width: 640px; max-height: 90vh; overflow-y: auto; border: 1px solid #eef2ff; box-shadow: 0 20px 60px rgba(0,0,0,0.12); }
+        .modal-header { padding: 24px 28px 16px; border-bottom: 2px dashed #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
+        .modal-header h3 { font-size: 1.2rem; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 10px; }
+        .modal-header h3::before { content: ''; width: 4px; height: 20px; background: linear-gradient(180deg, #2563eb, #1e40af); border-radius: 4px; }
+        .modal-close { width: 36px; height: 36px; border: none; border-radius: 10px; background: #f1f5fb; color: #5f7f9e; cursor: pointer; transition: all 0.2s; }
+        .modal-close:hover { background: #eef2ff; color: #2563eb; }
+        .modal-body { padding: 24px 28px; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 0.82rem; font-weight: 600; color: #1e3a6f; margin-bottom: 6px; }
+        .form-group label .required { color: #ef4444; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.85rem; font-family: inherit; background: #fafcff; color: #334155; transition: all 0.2s; }
+        .form-group textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .form-group input:read-only { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+        .field-hint { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
+        .field-error { font-size: 0.75rem; color: #dc2626; margin-top: 4px; display: none; }
+        .assign-summary { padding: 12px 14px; background: #fafcff; border: 1px solid #eef2ff; border-radius: 12px; margin-bottom: 14px; font-size: 0.85rem; color: #475569; line-height: 1.5; }
+        .assign-summary strong { color: #1e40af; }
+        .assign-entities { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+        .assign-chip { background: #eff6ff; color: #1e40af; padding: 2px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 500; }
+        .assign-field-label { display: block; font-size: 0.82rem; font-weight: 600; color: #1e3a6f; margin-bottom: 8px; }
+        .search-select { position: relative; }
+        .search-select-input-wrap { position: relative; }
+        .search-select-input-wrap i.fa-search { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 0.85rem; pointer-events: none; }
+        .search-select-input-wrap i.fa-chevron-down { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 0.75rem; pointer-events: none; transition: transform 0.2s; }
+        .search-select.open .search-select-input-wrap i.fa-chevron-down { transform: translateY(-50%) rotate(180deg); color: #2563eb; }
+        .search-select-input { width: 100%; padding: 10px 36px 10px 38px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.85rem; font-family: inherit; background: #fafcff; color: #334155; transition: all 0.2s; }
+        .search-select-input:focus, .search-select.open .search-select-input { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .search-select-panel { display: none; position: absolute; left: 0; right: 0; top: calc(100% + 6px); background: white; border: 1px solid #eef2ff; border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.1); z-index: 20; overflow: hidden; }
+        .search-select.open .search-select-panel { display: block; }
+        .search-select-options { max-height: 220px; overflow-y: auto; padding: 6px; }
+        .search-select-option { padding: 10px 12px; border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+        .search-select-option:hover { background: #fafcff; }
+        .search-select-option.active { background: #eff6ff; box-shadow: inset 3px 0 0 #2563eb; }
+        .search-select-option .opt-name { font-weight: 600; color: #1e3a6f; font-size: 0.85rem; }
+        .search-select-option .opt-meta { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+        .search-select-empty { padding: 24px 12px; text-align: center; color: #94a3b8; font-size: 0.82rem; }
+        .selected-preview { margin-top: 14px; padding: 12px 14px; background: #fafcff; border: 1px solid #eef2ff; border-radius: 12px; display: none; }
+        .selected-preview.show { display: block; }
+        .selected-preview .preview-label { font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px; }
+        .selected-preview .preview-name { font-weight: 600; color: #1e40af; font-size: 0.9rem; }
+        .selected-preview .preview-meta { font-size: 0.78rem; color: #64748b; margin-top: 2px; }
+        .modal-footer { padding: 16px 28px 24px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #eef2f6; }
+        .import-zone { border: 2px dashed #cbd5e1; border-radius: 20px; padding: 36px 20px; text-align: center; background: #fafcff; cursor: pointer; transition: all 0.2s; }
+        .import-zone:hover, .import-zone.dragover { border-color: #3b82f6; background: #eff6ff; }
+        .import-zone i { font-size: 2.2rem; color: #3b82f6; margin-bottom: 10px; }
+        .toast { position: fixed; bottom: 28px; right: 28px; z-index: 2000; background: #1e293b; color: white; padding: 14px 22px; border-radius: 14px; font-size: 0.85rem; display: none; align-items: center; gap: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+        .toast.show { display: flex; }
+        .toast.success { background: linear-gradient(135deg, #059669, #047857); }
+        .toast.error { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+        @media (max-width: 860px) { .phase-steps { display: none; } .user-details { display: none; } .form-row { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <div class="top-bar">
+        <div class="left-area">
+            <a class="back-link" href="Entology产品原型Index.html"><i class="fas fa-arrow-left"></i> 返回平台首页</a>
+            <div class="phase-steps">
+                <span class="phase active"><i class="fas fa-cube"></i> 构建</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-layer-group"></i> 编排</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-chart-pie"></i> 分析</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-brain"></i> 决策</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-rocket"></i> 赋能</span>
+            </div>
+            <div class="badge-close"><i class="fas fa-sync-alt"></i> 全链路闭环 v2.0</div>
+        </div>
+        <div class="user-info">
+            <div class="user-avatar">弘</div>
+            <div class="user-details">
+                <span class="user-name">弘升 <span class="login-badge"><i class="fas fa-check-circle"></i> 已认证</span></span>
+                <span class="user-role">本体构建工程师</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-body">
+        <div class="page-header">
+            <div class="page-header-inner">
+                <i class="fas fa-list-ul"></i>
+                <h1 class="page-title">业务属性管理</h1>
+            </div>
+            <p class="page-desc">定义企业内的业务属性，实现业务属性的创建、编辑、删除、查询、分配逻辑实体、导入。</p>
+            <div class="insight-tag"><i class="fas fa-cube"></i> 本体构建 · 手工建模 · 业务属性管理</div>
+        </div>
+
+        <div class="content-card">
+            <div class="toolbar-card">
+                <div class="search-group">
+                    <span class="field-label">属性名称</span>
+                    <input type="text" class="search-input" id="searchName" placeholder="支持模糊查询">
+                    <select class="filter-select" id="filterEntity">
+                        <option value="">全部逻辑实体</option>
+                    </select>
+                    <button class="btn btn-primary" id="btnSearch"><i class="fas fa-search"></i> 查询</button>
+                    <button class="btn btn-outline" id="btnReset"><i class="fas fa-undo"></i> 重置</button>
+                </div>
+                <div class="action-group">
+                    <button class="btn btn-danger" id="btnDelete" disabled><i class="fas fa-trash-alt"></i> 删除</button>
+                    <button class="btn btn-outline" id="btnImport"><i class="fas fa-file-import"></i> 导入</button>
+                    <button class="btn btn-primary" id="btnCreate"><i class="fas fa-plus"></i> 新建</button>
+                    <button class="btn btn-outline" id="btnAssign" disabled><i class="fas fa-sitemap"></i> 分配逻辑实体</button>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="center" style="width:40px;"><input type="checkbox" id="checkAll" title="全选"></th>
+                            <th style="width:96px;">逻辑实体名称</th>
+                            <th style="width:96px;">业务属性编码</th>
+                            <th style="width:96px;">业务属性名称</th>
+                            <th style="width:110px;">业务属性英文名称</th>
+                            <th>业务属性定义</th>
+                            <th class="center" style="width:72px;">数据类型</th>
+                            <th class="center" style="width:64px;">是否主键</th>
+                            <th class="center" style="width:64px;">是否非空</th>
+                            <th class="center" style="width:56px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="attrTableBody"></tbody>
+                </table>
+            </div>
+            <div class="table-footer">
+                <span id="tableInfo">共 0 条记录</span>
+                <span id="selectedInfo">已选 0 条</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="attrModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 id="modalTitle">新建业务属性</h3>
+            <button class="modal-close" id="modalClose"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="editId">
+            <div class="form-group">
+                <label>业务属性编码 <span class="required">*</span></label>
+                <input type="text" id="formCode" placeholder="如 AT00000017">
+                <div class="field-hint" id="codeHint">系统自动生成编码，须全局唯一</div>
+                <div class="field-error" id="errCode"></div>
+            </div>
+            <div class="form-group">
+                <label>业务属性名称 <span class="required">*</span></label>
+                <input type="text" id="formName" placeholder="请输入业务属性名称">
+                <div class="field-error" id="errName"></div>
+            </div>
+            <div class="form-group">
+                <label>业务属性英文名称 <span class="required">*</span></label>
+                <input type="text" id="formEnglish" placeholder="如 prHeaderId">
+                <div class="field-error" id="errEnglish"></div>
+            </div>
+            <div class="form-group">
+                <label>业务属性定义</label>
+                <textarea id="formDefinition" placeholder="请输入业务属性定义"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>数据类型</label>
+                    <select id="formDataType">
+                        <option value="INT8">INT8</option>
+                        <option value="NVARCHAR">NVARCHAR</option>
+                        <option value="TIMESTAMP">TIMESTAMP</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>是否主键</label>
+                    <select id="formIsPk"><option value="N">否</option><option value="Y">是</option></select>
+                </div>
+                <div class="form-group">
+                    <label>是否非空</label>
+                    <select id="formNotNull"><option value="N">否</option><option value="Y">是</option></select>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="modalCancel">取消</button>
+            <button class="btn btn-primary" id="modalSave"><i class="fas fa-check"></i> 确定</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="assignModal">
+    <div class="modal" style="max-width:480px;">
+        <div class="modal-header">
+            <h3>分配逻辑实体</h3>
+            <button class="modal-close" id="assignModalClose"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <div class="assign-summary" id="assignSummary"></div>
+            <label class="assign-field-label">选择逻辑实体 <span style="color:#ef4444;">*</span></label>
+            <div class="search-select" id="leSearchSelect">
+                <div class="search-select-input-wrap">
+                    <i class="fas fa-search"></i>
+                    <input type="text" class="search-select-input" id="leSearchInput" placeholder="输入逻辑实体名称搜索…" autocomplete="off">
+                    <i class="fas fa-chevron-down"></i>
+                </div>
+                <div class="search-select-panel">
+                    <div class="search-select-options" id="leOptions"></div>
+                </div>
+            </div>
+            <div class="field-hint" style="margin-top:6px;">支持模糊搜索；一个业务属性只能分配到一个逻辑实体</div>
+            <div class="selected-preview" id="selectedLePreview">
+                <div class="preview-label">已选择</div>
+                <div class="preview-name" id="previewLeName"></div>
+                <div class="preview-meta" id="previewLeMeta"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="assignCancel">取消</button>
+            <button class="btn btn-primary" id="assignConfirm"><i class="fas fa-check"></i> 确定</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="deleteModal">
+    <div class="modal" style="max-width:420px;">
+        <div class="modal-header"><h3>确认删除</h3><button class="modal-close" id="deleteModalClose"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body"><p style="color:#475569;line-height:1.6;">确定删除选中的 <strong id="deleteCount" style="color:#dc2626;">0</strong> 条业务属性吗？</p></div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="deleteCancel">取消</button>
+            <button class="btn btn-danger" id="deleteConfirm"><i class="fas fa-trash-alt"></i> 确认删除</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="importModal">
+    <div class="modal" style="max-width:460px;">
+        <div class="modal-header"><h3>导入业务属性</h3><button class="modal-close" id="importModalClose"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body">
+            <div class="import-zone" id="importZone">
+                <i class="fas fa-cloud-upload-alt"></i>
+                <p style="font-weight:600;color:#1e3a6f;">点击或拖拽文件到此处上传</p>
+                <p style="font-size:0.82rem;color:#64748b;margin-top:6px;">支持 .xlsx、.csv</p>
+            </div>
+            <input type="file" id="importFile" accept=".xlsx,.csv" style="display:none;">
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="importCancel">取消</button>
+            <button class="btn btn-primary" id="importConfirm" disabled><i class="fas fa-file-import"></i> 确定</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"><i class="fas fa-check-circle"></i><span id="toastMsg"></span></div>
+
+<script>
+    const logicalEntities = [
+        { code: 'LE000001', name: '采购需求头', english: 'prHeader' },
+        { code: 'LE000002', name: '采购需求行', english: 'prLine' },
+        { code: 'LE000003', name: '采购需求分摊行', english: 'prAllocation' },
+        { code: 'LE000006', name: '采购订单头', english: 'poHeader' },
+        { code: 'LE000007', name: '采购订单行', english: 'poLine' }
+    ];
+
+    let attributes = [
+        { id: 1, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000001', name: '采购需求头ID', english: 'prHeaderId', definition: '物理主键，唯一标识一条采购需求头记录。', dataType: 'INT8', isPk: 'N', notNull: 'Y' },
+        { id: 2, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000002', name: '采购需求编号', english: 'prNumber', definition: '采购需求的业务编号，在组织内唯一标识一份采购需求。', dataType: 'NVARCHAR', isPk: 'Y', notNull: 'Y' },
+        { id: 3, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000003', name: '业务类型', english: 'businessType', definition: '采购需求所属的业务分类。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'N' },
+        { id: 4, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000004', name: '申请人', english: 'applicant', definition: '提交采购需求的人员。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'Y' },
+        { id: 5, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000005', name: '申请部门', english: 'applyDept', definition: '申请人所属部门。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'Y' },
+        { id: 6, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000006', name: '提交时间', english: 'submitDate', definition: '采购需求提交的时间。', dataType: 'TIMESTAMP', isPk: 'N', notNull: 'Y' },
+        { id: 7, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000007', name: '审批状态', english: 'approvalStatus', definition: '采购需求的当前审批状态。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'Y' },
+        { id: 8, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000008', name: '需求类型', english: 'requisitionType', definition: '采购需求的类型分类。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'N' },
+        { id: 9, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000009', name: '采购组织', english: 'purchaseOrg', definition: '负责执行采购的组织单元。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'N' },
+        { id: 10, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000010', name: '币种', english: 'currency', definition: '采购需求使用的币种。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'N' },
+        { id: 11, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000011', name: '合计金额', english: 'totalAmount', definition: '采购需求行金额合计。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'N' },
+        { id: 12, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000012', name: '备注', english: 'remark', definition: '采购需求补充说明信息。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'N' },
+        { id: 13, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000013', name: '创建人', english: 'createdBy', definition: '记录创建人。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'Y' },
+        { id: 14, leCode: 'LE000001', leName: '采购需求头', code: 'AT00000014', name: '创建时间', english: 'createdTime', definition: '记录创建时间。', dataType: 'TIMESTAMP', isPk: 'N', notNull: 'Y' },
+        { id: 15, leCode: 'LE000002', leName: '采购需求行', code: 'AT00000015', name: '采购需求行ID', english: 'prLineId', definition: '物理主键，唯一标识一条采购需求行记录。', dataType: 'INT8', isPk: 'N', notNull: 'Y' },
+        { id: 16, leCode: 'LE000002', leName: '采购需求行', code: 'AT00000016', name: '采购需求行号', english: 'prLineNumber', definition: '采购需求行在头下的序号。', dataType: 'INT8', isPk: 'Y', notNull: 'Y' }
+    ];
+
+    let nextSeq = 17;
+    let queryName = '', queryEntity = '';
+    const selectedIds = new Set();
+    let selectedLeCode = null;
+
+    const attrTableBody = document.getElementById('attrTableBody');
+    const checkAll = document.getElementById('checkAll');
+    const btnDelete = document.getElementById('btnDelete');
+    const btnAssign = document.getElementById('btnAssign');
+
+    function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function ynTag(v) { return `<span class="tag ${v === 'Y' ? 'tag-y' : 'tag-n'}">${v === 'Y' ? '是' : '否'}</span>`; }
+
+    function showToast(msg, type = 'success') {
+        const t = document.getElementById('toast');
+        document.getElementById('toastMsg').textContent = msg;
+        t.className = 'toast show ' + type;
+        t.querySelector('i').className = type === 'success' ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
+        setTimeout(() => t.classList.remove('show'), 2800);
+    }
+
+    function openModal(id) { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+    function genCode() { return 'AT' + String(nextSeq).padStart(8, '0'); }
+
+    function initEntityFilter() {
+        const sel = document.getElementById('filterEntity');
+        logicalEntities.forEach(le => {
+            const o = document.createElement('option');
+            o.value = le.code; o.textContent = le.name + ' (' + le.code + ')';
+            sel.appendChild(o);
+        });
+    }
+
+    function getFiltered() {
+        const nk = queryName.trim().toLowerCase();
+        return attributes.filter(a => {
+            const mn = !nk || a.name.toLowerCase().includes(nk) || a.english.toLowerCase().includes(nk);
+            const me = !queryEntity || a.leCode === queryEntity;
+            return mn && me;
+        });
+    }
+
+    function updateSelectionUI() {
+        btnDelete.disabled = selectedIds.size === 0;
+        btnAssign.disabled = selectedIds.size === 0;
+        document.getElementById('selectedInfo').textContent = '已选 ' + selectedIds.size + ' 条';
+    }
+
+    function renderTable() {
+        const filtered = getFiltered();
+        selectedIds.forEach(id => { if (!filtered.some(a => a.id === id)) selectedIds.delete(id); });
+
+        if (!filtered.length) {
+            attrTableBody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><i class="fas fa-inbox" style="font-size:2rem;display:block;margin-bottom:10px;color:#cbd5e1;"></i>暂无业务属性数据</div></td></tr>';
+        } else {
+            attrTableBody.innerHTML = filtered.map(a => {
+                const chk = selectedIds.has(a.id) ? 'checked' : '';
+                const leCell = a.leCode
+                    ? `<span class="tag tag-le">${esc(a.leName)}</span>`
+                    : '<span class="tag tag-unassigned">未分配</span>';
+                return `<tr class="${chk ? 'selected' : ''}">
+                    <td class="center"><input type="checkbox" class="row-check" data-id="${a.id}" ${chk}></td>
+                    <td>${a.leName ? esc(a.leName) : '—'}</td>
+                    <td><span class="code-tag">${esc(a.code)}</span></td>
+                    <td><span class="attr-name">${esc(a.name)}</span></td>
+                    <td>${esc(a.english)}</td>
+                    <td><div class="cell-def">${esc(a.definition)}</div></td>
+                    <td class="center"><span class="tag tag-type">${esc(a.dataType)}</span></td>
+                    <td class="center">${ynTag(a.isPk)}</td>
+                    <td class="center">${ynTag(a.notNull)}</td>
+                    <td class="center"><button class="icon-btn" title="编辑" onclick="openEdit(${a.id})"><i class="fas fa-edit"></i></button></td>
+                </tr>`;
+            }).join('');
+        }
+        document.getElementById('tableInfo').textContent = '共 ' + filtered.length + ' 条记录';
+        checkAll.checked = filtered.length > 0 && filtered.every(a => selectedIds.has(a.id));
+        checkAll.indeterminate = !checkAll.checked && filtered.some(a => selectedIds.has(a.id));
+        updateSelectionUI();
+    }
+
+    function getSelected() { return attributes.filter(a => selectedIds.has(a.id)); }
+
+    function clearErrors() {
+        ['errCode','errName','errEnglish'].forEach(id => {
+            document.getElementById(id).style.display = 'none';
+            document.getElementById(id).textContent = '';
+        });
+    }
+
+    function validateForm() {
+        clearErrors();
+        const code = document.getElementById('formCode').value.trim();
+        const name = document.getElementById('formName').value.trim();
+        const english = document.getElementById('formEnglish').value.trim();
+        const editId = parseInt(document.getElementById('editId').value, 10);
+        let ok = true;
+        if (!code) { document.getElementById('errCode').textContent = '业务属性编码不能为空'; document.getElementById('errCode').style.display = 'block'; ok = false; }
+        if (!name) { document.getElementById('errName').textContent = '业务属性名称不能为空'; document.getElementById('errName').style.display = 'block'; ok = false; }
+        if (!english) { document.getElementById('errEnglish').textContent = '业务属性英文名称不能为空'; document.getElementById('errEnglish').style.display = 'block'; ok = false; }
+        if (code && attributes.some(a => a.code === code && a.id !== editId)) { document.getElementById('errCode').textContent = '业务属性编码已存在，须全局唯一'; document.getElementById('errCode').style.display = 'block'; ok = false; }
+        if (name && attributes.some(a => a.name === name && a.id !== editId)) { document.getElementById('errName').textContent = '名称已存在，须全局唯一'; document.getElementById('errName').style.display = 'block'; ok = false; }
+        if (english && attributes.some(a => a.english === english && a.id !== editId)) { document.getElementById('errEnglish').textContent = '英文名已存在，须全局唯一'; document.getElementById('errEnglish').style.display = 'block'; ok = false; }
+        return ok;
+    }
+
+    function openCreate() {
+        document.getElementById('modalTitle').textContent = '新建业务属性';
+        document.getElementById('editId').value = '';
+        document.getElementById('formCode').value = genCode();
+        document.getElementById('formCode').readOnly = false;
+        document.getElementById('codeHint').textContent = '系统自动生成编码，可修改；须全局唯一';
+        document.getElementById('formName').value = '';
+        document.getElementById('formEnglish').value = '';
+        document.getElementById('formDefinition').value = '';
+        document.getElementById('formDataType').value = 'NVARCHAR';
+        document.getElementById('formIsPk').value = 'N';
+        document.getElementById('formNotNull').value = 'N';
+        clearErrors();
+        openModal('attrModal');
+    }
+
+    function openEdit(id) {
+        const a = attributes.find(x => x.id === id);
+        if (!a) return;
+        document.getElementById('modalTitle').textContent = '编辑业务属性';
+        document.getElementById('editId').value = a.id;
+        document.getElementById('formCode').value = a.code;
+        document.getElementById('formCode').readOnly = true;
+        document.getElementById('codeHint').textContent = '编辑时业务属性编码不可修改';
+        document.getElementById('formName').value = a.name;
+        document.getElementById('formEnglish').value = a.english;
+        document.getElementById('formDefinition').value = a.definition;
+        document.getElementById('formDataType').value = a.dataType;
+        document.getElementById('formIsPk').value = a.isPk;
+        document.getElementById('formNotNull').value = a.notNull;
+        clearErrors();
+        openModal('attrModal');
+    }
+
+    function saveAttr() {
+        if (!validateForm()) return;
+        const editId = document.getElementById('editId').value;
+        const data = {
+            code: document.getElementById('formCode').value.trim(),
+            name: document.getElementById('formName').value.trim(),
+            english: document.getElementById('formEnglish').value.trim(),
+            definition: document.getElementById('formDefinition').value.trim(),
+            dataType: document.getElementById('formDataType').value,
+            isPk: document.getElementById('formIsPk').value,
+            notNull: document.getElementById('formNotNull').value
+        };
+        if (editId) {
+            const idx = attributes.findIndex(a => a.id === parseInt(editId, 10));
+            if (idx >= 0) attributes[idx] = { ...attributes[idx], ...data };
+            showToast('业务属性已保存');
+        } else {
+            attributes.push({ id: nextSeq, leCode: null, leName: null, ...data });
+            nextSeq++;
+            showToast('业务属性创建成功，请在列表中选中后点击「分配逻辑实体」');
+        }
+        closeModal('attrModal');
+        renderTable();
+    }
+
+    function openAssignModal() {
+        const sel = getSelected();
+        if (!sel.length) { showToast('请先选中需要分配的业务属性', 'error'); return; }
+        const codes = [...new Set(sel.filter(a => a.leCode).map(a => a.leCode))];
+        selectedLeCode = codes.length === 1 ? codes[0] : null;
+        const chips = sel.map(a => `<span class="assign-chip">${esc(a.code)} ${esc(a.name)}</span>`).join('');
+        const hint = codes.length === 1
+            ? '当前已分配至 <strong>' + esc(sel.find(a => a.leCode)?.leName || '') + '</strong>，可重新选择以修改分配关系。'
+            : (sel.some(a => a.leCode) ? '部分属性已分配，确认后将统一分配到所选逻辑实体。' : '以下属性尚未分配，请选择目标逻辑实体。');
+        document.getElementById('assignSummary').innerHTML = '<div>即将分配 <strong>' + sel.length + '</strong> 个业务属性</div><div class="assign-entities">' + chips + '</div><div style="margin-top:8px;font-size:0.82rem;">' + hint + '</div>';
+        document.getElementById('leSearchInput').value = '';
+        renderLeOptions('');
+        updateLePreview();
+        openModal('assignModal');
+        setTimeout(() => document.getElementById('leSearchInput').focus(), 100);
+    }
+
+    function getFilteredLe(kw) {
+        const k = kw.trim().toLowerCase();
+        if (!k) return logicalEntities;
+        return logicalEntities.filter(le => le.name.toLowerCase().includes(k));
+    }
+
+    function renderLeOptions(kw) {
+        const list = getFilteredLe(kw);
+        const c = document.getElementById('leOptions');
+        if (!list.length) { c.innerHTML = '<div class="search-select-empty"><i class="fas fa-inbox" style="margin-right:6px;"></i>未找到匹配的逻辑实体</div>'; return; }
+        c.innerHTML = list.map(le => {
+            const act = selectedLeCode === le.code ? 'active' : '';
+            return `<div class="search-select-option ${act}" data-code="${esc(le.code)}"><div class="opt-name">${esc(le.name)}</div><div class="opt-meta">${esc(le.code)} · ${esc(le.english)}</div></div>`;
+        }).join('');
+    }
+
+    function updateLePreview() {
+        const p = document.getElementById('selectedLePreview');
+        if (!selectedLeCode) { p.classList.remove('show'); return; }
+        const le = logicalEntities.find(l => l.code === selectedLeCode);
+        if (!le) { p.classList.remove('show'); return; }
+        document.getElementById('previewLeName').textContent = le.name;
+        document.getElementById('previewLeMeta').textContent = le.code + ' · ' + le.english;
+        document.getElementById('leSearchInput').value = le.name + '（' + le.code + '）';
+        p.classList.add('show');
+    }
+
+    function selectLogicalEntity(code) {
+        selectedLeCode = code;
+        renderLeOptions(document.getElementById('leSearchInput').value);
+        updateLePreview();
+        closeLeDropdown();
+    }
+
+    function openLeDropdown() { document.getElementById('leSearchSelect').classList.add('open'); }
+    function closeLeDropdown() { document.getElementById('leSearchSelect').classList.remove('open'); }
+
+    function confirmAssign() {
+        if (!selectedLeCode) { showToast('请选择要分配的逻辑实体', 'error'); return; }
+        const le = logicalEntities.find(l => l.code === selectedLeCode);
+        getSelected().forEach(a => { a.leCode = le.code; a.leName = le.name; });
+        closeModal('assignModal');
+        closeLeDropdown();
+        showToast('已将 ' + getSelected().length + ' 个业务属性分配到「' + le.name + '」');
+        renderTable();
+    }
+
+    function openDeleteConfirm() {
+        if (!selectedIds.size) return;
+        document.getElementById('deleteCount').textContent = selectedIds.size;
+        openModal('deleteModal');
+    }
+
+    function confirmDelete() {
+        attributes = attributes.filter(a => !selectedIds.has(a.id));
+        selectedIds.clear();
+        closeModal('deleteModal');
+        showToast('已删除选中业务属性');
+        renderTable();
+    }
+
+    function doSearch() {
+        queryName = document.getElementById('searchName').value;
+        queryEntity = document.getElementById('filterEntity').value;
+        renderTable();
+    }
+
+    function doReset() {
+        document.getElementById('searchName').value = '';
+        document.getElementById('filterEntity').value = '';
+        queryName = queryEntity = '';
+        renderTable();
+    }
+
+    let importFile = null;
+    function openImport() { importFile = null; document.getElementById('importConfirm').disabled = true; document.getElementById('importFile').value = ''; openModal('importModal'); }
+    function handleImport(f) {
+        if (!f) return;
+        if (!['xlsx','csv'].includes(f.name.split('.').pop().toLowerCase())) { showToast('仅支持 .xlsx 和 .csv', 'error'); return; }
+        importFile = f; document.getElementById('importConfirm').disabled = false;
+    }
+    function confirmImport() {
+        if (!importFile) return;
+        const mock = { id: nextSeq++, leCode: null, leName: null, code: genCode(), name: '扩展属性', english: 'extField', definition: '导入的扩展属性。', dataType: 'NVARCHAR', isPk: 'N', notNull: 'N' };
+        nextSeq++;
+        attributes.push(mock);
+        closeModal('importModal');
+        showToast('导入成功（演示）');
+        renderTable();
+    }
+
+    document.getElementById('btnCreate').addEventListener('click', openCreate);
+    document.getElementById('btnDelete').addEventListener('click', openDeleteConfirm);
+    document.getElementById('btnAssign').addEventListener('click', openAssignModal);
+    document.getElementById('btnSearch').addEventListener('click', doSearch);
+    document.getElementById('btnReset').addEventListener('click', doReset);
+    document.getElementById('btnImport').addEventListener('click', openImport);
+    document.getElementById('modalClose').addEventListener('click', () => closeModal('attrModal'));
+    document.getElementById('modalCancel').addEventListener('click', () => closeModal('attrModal'));
+    document.getElementById('modalSave').addEventListener('click', saveAttr);
+    document.getElementById('assignModalClose').addEventListener('click', () => { closeLeDropdown(); closeModal('assignModal'); });
+    document.getElementById('assignCancel').addEventListener('click', () => { closeLeDropdown(); closeModal('assignModal'); });
+    document.getElementById('assignConfirm').addEventListener('click', confirmAssign);
+    document.getElementById('deleteModalClose').addEventListener('click', () => closeModal('deleteModal'));
+    document.getElementById('deleteCancel').addEventListener('click', () => closeModal('deleteModal'));
+    document.getElementById('deleteConfirm').addEventListener('click', confirmDelete);
+    document.getElementById('importModalClose').addEventListener('click', () => closeModal('importModal'));
+    document.getElementById('importCancel').addEventListener('click', () => closeModal('importModal'));
+    document.getElementById('importConfirm').addEventListener('click', confirmImport);
+    document.getElementById('importZone').addEventListener('click', () => document.getElementById('importFile').click());
+    document.getElementById('importFile').addEventListener('change', e => handleImport(e.target.files[0]));
+
+    const leInput = document.getElementById('leSearchInput');
+    const leSelect = document.getElementById('leSearchSelect');
+    leInput.addEventListener('focus', () => {
+        openLeDropdown();
+        if (selectedLeCode && leInput.value.includes('（')) { leInput.value = ''; renderLeOptions(''); }
+    });
+    leInput.addEventListener('input', () => {
+        openLeDropdown();
+        renderLeOptions(leInput.value);
+        if (selectedLeCode) {
+            const le = logicalEntities.find(l => l.code === selectedLeCode);
+            if (leInput.value !== le.name + '（' + le.code + '）') {
+                selectedLeCode = null;
+                document.getElementById('selectedLePreview').classList.remove('show');
+            }
+        }
+    });
+    document.getElementById('leOptions').addEventListener('click', e => {
+        const opt = e.target.closest('.search-select-option');
+        if (opt && opt.dataset.code) selectLogicalEntity(opt.dataset.code);
+    });
+    document.addEventListener('click', e => { if (!leSelect.contains(e.target)) closeLeDropdown(); });
+
+    checkAll.addEventListener('change', () => {
+        getFiltered().forEach(a => checkAll.checked ? selectedIds.add(a.id) : selectedIds.delete(a.id));
+        renderTable();
+    });
+    attrTableBody.addEventListener('change', e => {
+        if (!e.target.classList.contains('row-check')) return;
+        const id = parseInt(e.target.dataset.id, 10);
+        e.target.checked ? selectedIds.add(id) : selectedIds.delete(id);
+        renderTable();
+    });
+    document.getElementById('searchName').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+    const iz = document.getElementById('importZone');
+    iz.addEventListener('dragover', e => { e.preventDefault(); iz.classList.add('dragover'); });
+    iz.addEventListener('dragleave', () => iz.classList.remove('dragover'));
+    iz.addEventListener('drop', e => { e.preventDefault(); iz.classList.remove('dragover'); handleImport(e.dataTransfer.files[0]); });
+
+    window.openEdit = openEdit;
+    initEntityFilter();
+    renderTable();
+</script>
+</body>
+</html>

@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>智能补全与修正 | 本体平台</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #f0f2f6; height: 100vh; overflow: hidden; color: #1e293b; }
+        .app-container { display: flex; flex-direction: column; height: 100%; }
+        .top-bar { background: white; padding: 12px 28px; border-bottom: 1px solid #eef2f6; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; flex-shrink: 0; }
+        .left-area { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+        .back-link { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500; color: #1e40af; text-decoration: none; padding: 6px 14px; border-radius: 30px; background: #e6f0ff; }
+        .back-link:hover { background: #eff6ff; color: #2563eb; }
+        .phase-steps { display: flex; gap: 20px; flex-wrap: wrap; background: #f8fafc; padding: 6px 20px; border-radius: 40px; }
+        .phase { font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #2c3e66; }
+        .phase i { color: #3b82f6; }
+        .phase.active { color: #1e40af; }
+        .badge-close { background: #e6f0ff; border-radius: 30px; padding: 5px 14px; font-size: 0.75rem; font-weight: 600; color: #1e4b8f; }
+        .user-info { display: flex; align-items: center; gap: 16px; background: #fff; border-radius: 48px; padding: 5px 12px 5px 8px; border: 1px solid #eef2f6; }
+        .user-avatar { width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(145deg, #2563eb, #1e40af); color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; }
+        .user-details { display: flex; flex-direction: column; line-height: 1.3; }
+        .user-name { font-weight: 700; font-size: 0.85rem; }
+        .user-role { font-size: 0.7rem; color: #5b6e8c; }
+        .login-badge { font-size: 0.7rem; background: #e6f7e6; color: #2e7d32; border-radius: 20px; padding: 2px 8px; margin-left: 4px; }
+
+        .workbench-nav { background: white; border-bottom: 1px solid #eef2f6; padding: 10px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; flex-wrap: wrap; }
+        .breadcrumb { font-size: 0.82rem; color: #64748b; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .breadcrumb a { color: #2563eb; text-decoration: none; }
+        .breadcrumb .current { color: #1e3a6f; font-weight: 600; }
+        .nav-center { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .nav-center label { font-size: 0.78rem; color: #64748b; }
+        .model-select { padding: 7px 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.82rem; font-family: inherit; background: #fafcff; min-width: 220px; }
+        .nav-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 10px; font-size: 0.82rem; font-weight: 600; font-family: inherit; cursor: pointer; border: none; transition: all 0.2s; white-space: nowrap; }
+        .btn-primary { background: linear-gradient(135deg, #2563eb, #1e40af); color: white; box-shadow: 0 2px 8px rgba(37,99,235,0.25); }
+        .btn-outline { background: white; color: #1e40af; border: 1px solid #bfdbfe; }
+        .btn-outline:hover { background: #eff6ff; }
+        .btn-ghost { background: #f8fafc; color: #475569; border: 1px solid #e2e8f0; }
+        .btn-ghost:hover { background: #eff6ff; color: #1e40af; }
+        .btn-danger-outline { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .btn-sm { padding: 5px 10px; font-size: 0.75rem; }
+
+        .workbench-body { flex: 1; display: grid; grid-template-columns: 280px 1fr 300px; min-height: 0; }
+        @media (max-width: 1100px) { .workbench-body { grid-template-columns: 1fr; grid-template-rows: 200px 1fr 220px; } }
+
+        .side-panel { display: flex; flex-direction: column; background: white; border-right: 1px solid #eef2f6; min-height: 0; }
+        .side-panel.right { border-right: none; border-left: 1px solid #eef2f6; }
+        .panel-tabs { display: flex; border-bottom: 1px solid #eef2f6; background: #fafcff; }
+        .panel-tab { flex: 1; padding: 10px 8px; border: none; background: transparent; font-size: 0.76rem; font-weight: 600; color: #64748b; cursor: pointer; font-family: inherit; border-bottom: 2px solid transparent; }
+        .panel-tab.active { color: #1e40af; background: white; border-bottom-color: #2563eb; }
+        .panel-content { flex: 1; overflow-y: auto; padding: 12px; }
+        .panel-pane { display: none; }
+        .panel-pane.active { display: block; }
+
+        .elem-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border: 1px solid #eef2f6; border-radius: 10px; margin-bottom: 8px; font-size: 0.78rem; cursor: pointer; transition: all 0.15s; }
+        .elem-item:hover { border-color: #93c5fd; background: #fafcff; }
+        .elem-item.selected { border-color: #2563eb; background: #eff6ff; box-shadow: inset 3px 0 0 #2563eb; }
+        .elem-item.conflict { border-color: #fca5a5; background: #fef2f2; }
+        .elem-name { font-weight: 600; color: #1e3a6f; }
+        .elem-sub { font-size: 0.68rem; color: #94a3b8; margin-top: 2px; }
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.65rem; font-weight: 600; }
+        .tag-forward { background: #eff6ff; color: #1e40af; }
+        .tag-reverse { background: #ecfdf5; color: #047857; }
+        .tag-warn { background: #fee2e2; color: #b91c1c; }
+
+        .ai-rec-item { padding: 10px 12px; border: 1px dashed #bfdbfe; border-radius: 10px; margin-bottom: 8px; background: #fafcff; font-size: 0.76rem; }
+        .ai-rec-item strong { color: #1e40af; display: block; margin-bottom: 4px; }
+        .ai-rec-item p { color: #64748b; line-height: 1.45; margin-bottom: 8px; }
+        .issue-item { padding: 10px 12px; border-left: 3px solid #ef4444; background: #fef2f2; border-radius: 0 10px 10px 0; margin-bottom: 8px; font-size: 0.76rem; color: #991b1b; line-height: 1.45; }
+
+        .canvas-wrap { position: relative; background: radial-gradient(circle at 20% 15%, #eff6ff 0%, transparent 40%), #fafcff; overflow: hidden; min-height: 0; }
+        .canvas-toolbar { position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; z-index: 5; flex-wrap: wrap; }
+        .canvas-toolbar .btn { padding: 6px 10px; font-size: 0.72rem; }
+        .canvas-tools-right { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 5; }
+        .tool-btn { width: 36px; height: 36px; border-radius: 10px; border: 1px solid #bfdbfe; background: white; color: #1e40af; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+        .tool-btn:hover { background: #eff6ff; }
+        .canvas-diagram { position: absolute; inset: 0; }
+        .canvas-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+        .canvas-svg line { stroke: #93c5fd; stroke-width: 2; }
+        .canvas-svg line.invalid { stroke: #ef4444; stroke-dasharray: 6 4; }
+        .canvas-svg text { fill: #64748b; font-size: 11px; font-family: Inter, sans-serif; }
+        .er-node { position: absolute; background: white; border: 2px solid #2563eb; border-radius: 14px; padding: 10px 12px; min-width: 96px; text-align: center; box-shadow: 0 4px 12px rgba(37,99,235,0.12); cursor: grab; transition: box-shadow 0.2s; user-select: none; }
+        .er-node:hover { box-shadow: 0 6px 16px rgba(37,99,235,0.22); }
+        .er-node.active { border-color: #1d4ed8; box-shadow: 0 0 0 4px rgba(37,99,235,0.15); }
+        .er-node.reverse { border-color: #059669; }
+        .er-node.conflict { border-color: #ef4444; background: #fef2f2; }
+        .er-node .name { font-size: 0.8rem; font-weight: 700; color: #1e40af; }
+        .er-node.reverse .name { color: #047857; }
+        .er-node .sub { font-size: 0.62rem; color: #64748b; margin-top: 3px; }
+        .er-node .src-tag { margin-top: 6px; }
+
+        .prop-section { margin-bottom: 16px; }
+        .prop-section h5 { font-size: 0.78rem; color: #1e3a6f; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px dashed #e2e8f0; }
+        .prop-row { display: flex; justify-content: space-between; font-size: 0.76rem; padding: 6px 0; border-bottom: 1px solid #f1f5f9; }
+        .prop-row label { color: #64748b; }
+        .prop-row span { color: #334155; font-weight: 500; text-align: right; max-width: 58%; }
+        .prop-form input, .prop-form select, .prop-form textarea { width: 100%; padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.8rem; font-family: inherit; margin-bottom: 8px; background: #fafcff; }
+        .attr-list { max-height: 140px; overflow-y: auto; }
+        .attr-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: #f8fafc; border-radius: 8px; margin-bottom: 4px; font-size: 0.72rem; }
+
+        .bottom-bar { background: white; border-top: 1px solid #eef2f6; padding: 10px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; flex-wrap: wrap; }
+        .bottom-left { font-size: 0.76rem; color: #64748b; }
+        .bottom-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        .ctx-menu { position: fixed; display: none; background: white; border: 1px solid #eef2f6; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); min-width: 160px; z-index: 100; overflow: hidden; }
+        .ctx-menu.show { display: block; }
+        .ctx-item { display: block; width: 100%; padding: 10px 14px; border: none; background: none; text-align: left; font-size: 0.8rem; color: #334155; cursor: pointer; font-family: inherit; }
+        .ctx-item:hover { background: #eff6ff; color: #1e40af; }
+        .ctx-item.danger { color: #dc2626; }
+        .ctx-item.danger:hover { background: #fef2f2; }
+
+        .modal-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.45); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: white; border-radius: 20px; width: 100%; max-width: 520px; overflow: hidden; box-shadow: 0 24px 48px rgba(0,0,0,0.15); }
+        .modal-header { padding: 18px 22px; border-bottom: 1px solid #eef2f6; display: flex; justify-content: space-between; align-items: center; }
+        .modal-header h3 { font-size: 1rem; color: #1e3a6f; }
+        .modal-close { background: #f1f5f9; border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; }
+        .modal-body { padding: 18px 22px; }
+        .modal-footer { padding: 14px 22px 18px; border-top: 1px solid #eef2f6; display: flex; justify-content: flex-end; gap: 8px; }
+        .load-item { padding: 12px 14px; border: 1px solid #eef2ff; border-radius: 12px; margin-bottom: 10px; cursor: pointer; transition: all 0.15s; }
+        .load-item:hover { border-color: #93c5fd; background: #fafcff; }
+        .load-item h4 { font-size: 0.85rem; color: #1e40af; margin-bottom: 4px; }
+        .load-item p { font-size: 0.74rem; color: #64748b; }
+        .toast { position: fixed; bottom: 72px; right: 24px; z-index: 2000; background: linear-gradient(135deg, #059669, #047857); color: white; padding: 12px 18px; border-radius: 12px; font-size: 0.82rem; display: none; align-items: center; gap: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); }
+        .toast.show { display: flex; }
+        .toast.warn { background: linear-gradient(135deg, #d97706, #b45309); }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+        @media (max-width: 860px) { .phase-steps, .user-details { display: none; } }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <div class="top-bar">
+        <div class="left-area">
+            <a class="back-link" href="Entology产品原型Index.html"><i class="fas fa-arrow-left"></i> 返回平台首页</a>
+            <div class="phase-steps">
+                <span class="phase active"><i class="fas fa-cube"></i> 构建</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-layer-group"></i> 编排</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-chart-pie"></i> 分析</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-brain"></i> 决策</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-rocket"></i> 赋能</span>
+            </div>
+            <div class="badge-close"><i class="fas fa-sync-alt"></i> 全链路闭环 v2.0</div>
+        </div>
+        <div class="user-info">
+            <div class="user-avatar">弘</div>
+            <div class="user-details">
+                <span class="user-name">弘升 <span class="login-badge"><i class="fas fa-check-circle"></i> 已认证</span></span>
+                <span class="user-role">本体构建工程师</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="workbench-nav">
+        <div class="breadcrumb">
+            <a href="Entology产品原型Index.html">本体构建</a>
+            <i class="fas fa-chevron-right" style="font-size:0.65rem;"></i>
+            <span>智能建模</span>
+            <i class="fas fa-chevron-right" style="font-size:0.65rem;"></i>
+            <span class="current">智能补全与修正</span>
+        </div>
+        <div class="nav-center">
+            <label>当前模型</label>
+            <select class="model-select" id="modelSelect">
+                <option>采购域多路径融合模型（演示）</option>
+                <option>电商交易融合模型 v0.3</option>
+                <option>供应商主数据融合模型</option>
+            </select>
+            <button class="btn btn-ghost btn-sm" id="btnLoadModel"><i class="fas fa-folder-open"></i> 加载模型</button>
+        </div>
+        <div class="nav-actions">
+            <button class="btn btn-outline" id="btnAiComplete"><i class="fas fa-magic"></i> AI 智能补全</button>
+            <button class="btn btn-outline" id="btnValidate"><i class="fas fa-shield-alt"></i> 一致性校验</button>
+            <button class="btn btn-ghost" id="btnFullscreen"><i class="fas fa-expand"></i> 全屏</button>
+        </div>
+    </div>
+
+    <div class="workbench-body">
+        <!-- 左侧：要素 / AI推荐 / 校验 -->
+        <div class="side-panel">
+            <div class="panel-tabs">
+                <button class="panel-tab active" data-left="elements">要素清单</button>
+                <button class="panel-tab" data-left="ai">AI 推荐</button>
+                <button class="panel-tab" data-left="issues">校验 <span class="tag tag-warn" id="issueBadge" style="margin-left:2px;">2</span></button>
+            </div>
+            <div class="panel-content">
+                <div class="panel-pane active" id="leftElements">
+                    <div class="elem-item selected" data-node="prHeader" onclick="selectNode('prHeader')">
+                        <div><div class="elem-name">采购需求头</div><div class="elem-sub">逻辑实体 · 6 属性</div></div>
+                        <span class="tag tag-forward">正向</span>
+                    </div>
+                    <div class="elem-item" data-node="prLine" onclick="selectNode('prLine')">
+                        <div><div class="elem-name">采购需求行</div><div class="elem-sub">逻辑实体 · 8 属性</div></div>
+                        <span class="tag tag-forward">正向</span>
+                    </div>
+                    <div class="elem-item" data-node="tPrHeader" onclick="selectNode('tPrHeader')">
+                        <div><div class="elem-name">T_PR_HEADER</div><div class="elem-sub">逻辑实体 · 12 属性</div></div>
+                        <span class="tag tag-reverse">逆向</span>
+                    </div>
+                    <div class="elem-item conflict" data-node="vendor" onclick="selectNode('vendor')">
+                        <div><div class="elem-name">供应商 / Vendor</div><div class="elem-sub">重复实体 · 待合并</div></div>
+                        <span class="tag tag-warn">冲突</span>
+                    </div>
+                    <div class="elem-item" data-node="poHeader" onclick="selectNode('poHeader')">
+                        <div><div class="elem-name">采购订单头</div><div class="elem-sub">逻辑实体 · 7 属性</div></div>
+                        <span class="tag tag-reverse">逆向</span>
+                    </div>
+                </div>
+                <div class="panel-pane" id="leftAi">
+                    <div class="ai-rec-item">
+                        <strong><i class="fas fa-plus-circle"></i> 推荐新增实体「预算冻结记录」</strong>
+                        <p>正向流程文档含预算冻结节点，当前模型缺失对应逻辑实体。</p>
+                        <button class="btn btn-outline btn-sm" onclick="showToast('已添加「预算冻结记录」至画布')">采纳</button>
+                    </div>
+                    <div class="ai-rec-item">
+                        <strong><i class="fas fa-link"></i> 推荐新增关系</strong>
+                        <p>采购需求头 → 采购订单头（1:N），补齐逆向表外键未映射关系。</p>
+                        <button class="btn btn-outline btn-sm" onclick="showToast('已添加关系连线')">采纳</button>
+                    </div>
+                    <div class="ai-rec-item">
+                        <strong><i class="fas fa-list"></i> 推荐补全属性「审批状态」</strong>
+                        <p>T_PR_HEADER 表含 APPROVE_STATUS 字段，建议在采购需求头同步映射。</p>
+                        <button class="btn btn-outline btn-sm" onclick="showToast('已补全属性')">采纳</button>
+                    </div>
+                </div>
+                <div class="panel-pane" id="leftIssues">
+                    <div class="issue-item"><strong>重复实体</strong><br>「供应商」与「Vendor」语义重复，建议合并或建立等价映射。</div>
+                    <div class="issue-item"><strong>无效关系</strong><br>采购订单头 → 供应商（M:N）基数与源表外键约束不一致。</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 中间：可视化画布 -->
+        <div class="canvas-wrap" id="canvasWrap">
+            <div class="canvas-toolbar">
+                <button class="btn btn-ghost" title="选择"><i class="fas fa-mouse-pointer"></i></button>
+                <button class="btn btn-ghost" title="平移"><i class="fas fa-arrows-alt"></i></button>
+                <button class="btn btn-ghost" title="缩放"><i class="fas fa-search-plus"></i></button>
+                <button class="btn btn-ghost" id="btnAddEntity"><i class="fas fa-plus"></i> 新增实体</button>
+                <button class="btn btn-ghost" id="btnAddRel"><i class="fas fa-project-diagram"></i> 新增关系</button>
+                <button class="btn btn-danger-outline btn-sm" id="btnBatchDel"><i class="fas fa-trash-alt"></i> 批量删除</button>
+            </div>
+            <div class="canvas-tools-right">
+                <button class="tool-btn" title="重置布局" onclick="showToast('布局已重置')"><i class="fas fa-redo"></i></button>
+                <button class="tool-btn" title="消歧与整合" onclick="location.href='智能消歧与整合.html'"><i class="fas fa-balance-scale"></i></button>
+            </div>
+            <div class="canvas-diagram" id="canvasDiagram">
+                <svg class="canvas-svg" viewBox="0 0 700 420" preserveAspectRatio="none">
+                    <line x1="120" y1="90" x2="280" y2="90"/><text x="185" y="82">1:N</text>
+                    <line x1="380" y1="90" x2="380" y2="220"/><text x="388" y="160">1:N</text>
+                    <line x1="480" y1="280" x2="580" y2="280"/><text x="520" y="272">M:N</text>
+                    <line x1="580" y1="280" x2="580" y2="120" class="invalid"/><text x="588" y="200" fill="#ef4444">?</text>
+                </svg>
+                <div class="er-node active" id="node-prHeader" style="left:6%;top:14%;" data-id="prHeader" oncontextmenu="showCtx(event,'prHeader')" onclick="selectNode('prHeader')">
+                    <div class="name">采购需求头</div><div class="sub">6 属性</div>
+                    <div class="src-tag"><span class="tag tag-forward">正向建模</span></div>
+                </div>
+                <div class="er-node" id="node-prLine" style="left:32%;top:12%;" data-id="prLine" oncontextmenu="showCtx(event,'prLine')" onclick="selectNode('prLine')">
+                    <div class="name">采购需求行</div><div class="sub">8 属性</div>
+                    <div class="src-tag"><span class="tag tag-forward">正向建模</span></div>
+                </div>
+                <div class="er-node reverse" id="node-tPrHeader" style="left:48%;top:38%;" data-id="tPrHeader" oncontextmenu="showCtx(event,'tPrHeader')" onclick="selectNode('tPrHeader')">
+                    <div class="name">T_PR_HEADER</div><div class="sub">12 属性</div>
+                    <div class="src-tag"><span class="tag tag-reverse">逆向建模</span></div>
+                </div>
+                <div class="er-node conflict" id="node-vendor" style="left:58%;top:58%;" data-id="vendor" oncontextmenu="showCtx(event,'vendor')" onclick="selectNode('vendor')">
+                    <div class="name">供应商</div><div class="sub">重复 · Vendor</div>
+                    <div class="src-tag"><span class="tag tag-warn">冲突</span></div>
+                </div>
+                <div class="er-node reverse" id="node-poHeader" style="left:72%;top:22%;" data-id="poHeader" oncontextmenu="showCtx(event,'poHeader')" onclick="selectNode('poHeader')">
+                    <div class="name">采购订单头</div><div class="sub">7 属性</div>
+                    <div class="src-tag"><span class="tag tag-reverse">逆向建模</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：属性面板 -->
+        <div class="side-panel right">
+            <div class="panel-tabs">
+                <button class="panel-tab active">属性面板</button>
+            </div>
+            <div class="panel-content" id="propPanel">
+                <div class="prop-section">
+                    <h5>基本信息</h5>
+                    <div class="prop-form">
+                        <input type="text" id="propName" value="采购需求头">
+                        <textarea rows="2" id="propDef" placeholder="逻辑实体定义">采购需求的汇总与控制信息，承载需求单号、申请人等头级属性。</textarea>
+                        <select id="propSource">
+                            <option selected>正向建模 · 业务文档</option>
+                            <option>逆向建模 · 多源数据</option>
+                            <option>逆向建模 · 源代码</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="prop-section">
+                    <h5>业务属性 <button class="btn btn-outline btn-sm" style="float:right;padding:2px 8px;" onclick="showToast('已新增属性行')">+ 新增</button></h5>
+                    <div class="attr-list">
+                        <div class="attr-row"><span>需求单号</span><span class="tag tag-forward">主键</span></div>
+                        <div class="attr-row"><span>申请人</span><span>STRING</span></div>
+                        <div class="attr-row"><span>审批状态</span><span>ENUM</span></div>
+                        <div class="attr-row"><span>申请日期</span><span>DATE</span></div>
+                    </div>
+                </div>
+                <div class="prop-section">
+                    <h5>关联关系</h5>
+                    <div class="prop-row"><label>包含明细</label><span>→ 采购需求行 (1:N)</span></div>
+                    <div class="prop-row"><label>生成订单</label><span>→ 采购订单头 (1:N)</span></div>
+                </div>
+                <button class="btn btn-primary" style="width:100%;margin-top:8px;" onclick="showToast('属性已保存，画布已同步')"><i class="fas fa-save"></i> 保存修改</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="bottom-bar">
+        <div class="bottom-left" id="statusHint"><i class="fas fa-info-circle"></i> 5 实体 · 3 关系 · 正向 2 · 逆向 2 · 冲突 1 · 待处理推荐 3 项</div>
+        <div class="bottom-actions">
+            <button class="btn btn-outline" id="btnSave"><i class="fas fa-save"></i> 保存草稿</button>
+            <button class="btn btn-outline" onclick="location.href='智能消歧与整合.html'"><i class="fas fa-balance-scale"></i> 消歧与整合</button>
+            <button class="btn btn-primary" id="btnImport"><i class="fas fa-file-export"></i> 导入</button>
+        </div>
+    </div>
+</div>
+
+<div class="ctx-menu" id="ctxMenu">
+    <button class="ctx-item" onclick="hideCtx();showToast('进入编辑模式')"><i class="fas fa-edit"></i> 编辑实体</button>
+    <button class="ctx-item" onclick="hideCtx();showToast('已新增属性')"><i class="fas fa-plus"></i> 新增属性</button>
+    <button class="ctx-item" onclick="hideCtx();showToast('已新增关系')"><i class="fas fa-link"></i> 新增关系</button>
+    <button class="ctx-item" onclick="hideCtx();showToast('已设置约束')"><i class="fas fa-lock"></i> 设置约束</button>
+    <button class="ctx-item danger" onclick="hideCtx();showToast('已删除选中实体')"><i class="fas fa-trash-alt"></i> 删除</button>
+</div>
+
+<div class="modal-overlay" id="loadModal">
+    <div class="modal">
+        <div class="modal-header"><h3>加载多路径建模产出</h3><button class="modal-close" onclick="closeModal('loadModal')"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body">
+            <div class="load-item" onclick="loadModel('采购域多路径融合模型')">
+                <h4>采购域多路径融合模型</h4>
+                <p>来源：业务文档建模 + 多源数据逆向 · 12 实体 · 38 属性 · 6 关系</p>
+            </div>
+            <div class="load-item" onclick="loadModel('电商交易融合模型 v0.3')">
+                <h4>电商交易融合模型 v0.3</h4>
+                <p>来源：自然语言建模 + 源代码建模 · 8 实体 · 24 属性 · 4 关系</p>
+            </div>
+            <div class="load-item" onclick="loadModel('供应商主数据融合模型')">
+                <h4>供应商主数据融合模型</h4>
+                <p>来源：多源数据逆向 + 系统页面建模 · 5 实体 · 18 属性 · 3 关系</p>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" onclick="closeModal('loadModal')">取消</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"><i class="fas fa-check-circle"></i><span id="toastMsg"></span></div>
+
+<script>
+    const NODE_PROPS = {
+        prHeader: { name: '采购需求头', def: '采购需求的汇总与控制信息，承载需求单号、申请人等头级属性。', source: 0 },
+        prLine: { name: '采购需求行', def: '采购需求明细行，记录物料、数量、需求日期等。', source: 0 },
+        tPrHeader: { name: 'T_PR_HEADER', def: '采购需求头表逆向映射实体。', source: 1 },
+        vendor: { name: '供应商', def: '与企业发生采购业务的供应商主体（与 Vendor 重复）。', source: 1 },
+        poHeader: { name: '采购订单头', def: '采购订单汇总信息，由需求转化生成。', source: 1 }
+    };
+
+    function showToast(msg, warn) {
+        const t = document.getElementById('toast');
+        document.getElementById('toastMsg').textContent = msg;
+        t.className = 'toast show' + (warn ? ' warn' : '');
+        setTimeout(() => t.classList.remove('show'), 2600);
+    }
+    function openModal(id) { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+    window.selectNode = function(id) {
+        document.querySelectorAll('.er-node').forEach(n => n.classList.toggle('active', n.dataset.id === id));
+        document.querySelectorAll('.elem-item').forEach(e => e.classList.toggle('selected', e.dataset.node === id));
+        const p = NODE_PROPS[id];
+        if (p) {
+            document.getElementById('propName').value = p.name;
+            document.getElementById('propDef').value = p.def;
+            document.getElementById('propSource').selectedIndex = p.source;
+        }
+    };
+
+    window.showCtx = function(e, id) {
+        e.preventDefault();
+        selectNode(id);
+        const m = document.getElementById('ctxMenu');
+        m.style.left = e.clientX + 'px';
+        m.style.top = e.clientY + 'px';
+        m.classList.add('show');
+    };
+    window.hideCtx = function() { document.getElementById('ctxMenu').classList.remove('show'); };
+    document.addEventListener('click', hideCtx);
+
+    document.querySelectorAll('.panel-tab[data-left]').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.side-panel .panel-tab[data-left]').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.side-panel .panel-pane').forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            const map = { elements: 'leftElements', ai: 'leftAi', issues: 'leftIssues' };
+            document.getElementById(map[tab.dataset.left]).classList.add('active');
+        });
+    });
+
+    document.getElementById('btnLoadModel').addEventListener('click', () => openModal('loadModal'));
+    window.loadModel = function(name) {
+        document.getElementById('modelSelect').innerHTML = `<option>${name}</option>`;
+        closeModal('loadModal');
+        showToast('已加载「' + name + '」，画布已渲染');
+    };
+
+    document.getElementById('btnAiComplete').addEventListener('click', () => {
+        document.querySelector('[data-left="ai"]').click();
+        showToast('AI 已生成 3 条补全推荐');
+    });
+    document.getElementById('btnValidate').addEventListener('click', () => {
+        document.querySelector('[data-left="issues"]').click();
+        showToast('校验完成：发现 2 项问题', true);
+    });
+    document.getElementById('btnFullscreen').addEventListener('click', () => {
+        const el = document.getElementById('canvasWrap');
+        if (!document.fullscreenElement) el.requestFullscreen?.(); else document.exitFullscreen?.();
+    });
+    document.getElementById('btnAddEntity').addEventListener('click', () => showToast('请在画布空白处放置新实体（演示）'));
+    document.getElementById('btnAddRel').addEventListener('click', () => showToast('请选择源/目标实体建立关系（演示）'));
+    document.getElementById('btnBatchDel').addEventListener('click', () => showToast('请先框选或勾选要删除的要素'));
+    document.getElementById('btnSave').addEventListener('click', () => showToast('草稿已保存'));
+    document.getElementById('btnImport').addEventListener('click', () => showToast('模型已导入本体库'));
+
+    let dragNode = null, offsetX = 0, offsetY = 0;
+    document.querySelectorAll('.er-node').forEach(node => {
+        node.addEventListener('mousedown', e => {
+            if (e.button !== 0) return;
+            dragNode = node;
+            const rect = node.getBoundingClientRect();
+            const parent = document.getElementById('canvasDiagram').getBoundingClientRect();
+            offsetX = e.clientX - rect.left;
+            offsetY = e.clientY - rect.top;
+            node.style.cursor = 'grabbing';
+            e.preventDefault();
+        });
+    });
+    document.addEventListener('mousemove', e => {
+        if (!dragNode) return;
+        const parent = document.getElementById('canvasDiagram').getBoundingClientRect();
+        let x = e.clientX - parent.left - offsetX;
+        let y = e.clientY - parent.top - offsetY;
+        x = Math.max(0, Math.min(x, parent.width - 100));
+        y = Math.max(0, Math.min(y, parent.height - 60));
+        dragNode.style.left = (x / parent.width * 100) + '%';
+        dragNode.style.top = (y / parent.height * 100) + '%';
+    });
+    document.addEventListener('mouseup', () => {
+        if (dragNode) { dragNode.style.cursor = 'grab'; dragNode = null; }
+    });
+</script>
+</body>
+</html>

@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>动态本体迭代 | 本体平台</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #f0f2f6; height: 100vh; overflow: hidden; color: #1e293b; }
+        .app-container { display: flex; flex-direction: column; height: 100%; width: 100%; }
+        .top-bar { background: white; padding: 12px 28px; border-bottom: 1px solid #eef2f6; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.02); flex-shrink: 0; }
+        .left-area { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+        .back-link { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500; color: #1e40af; text-decoration: none; padding: 6px 14px; border-radius: 30px; background: #e6f0ff; transition: all 0.2s; }
+        .back-link:hover { background: #eff6ff; color: #2563eb; }
+        .phase-steps { display: flex; gap: 20px; flex-wrap: wrap; background: #f8fafc; padding: 6px 20px; border-radius: 40px; }
+        .phase { font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #2c3e66; }
+        .phase i { font-size: 1rem; color: #3b82f6; }
+        .phase.active { color: #1e40af; }
+        .badge-close { background: #e6f0ff; border-radius: 30px; padding: 5px 14px; font-size: 0.75rem; font-weight: 600; color: #1e4b8f; }
+        .user-info { display: flex; align-items: center; gap: 16px; background: #fff; border-radius: 48px; padding: 5px 12px 5px 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #eef2f6; }
+        .user-avatar { width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(145deg, #2563eb, #1e40af); color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; }
+        .user-details { display: flex; flex-direction: column; line-height: 1.3; }
+        .user-name { font-weight: 700; font-size: 0.85rem; color: #0f172a; }
+        .user-role { font-size: 0.7rem; color: #5b6e8c; }
+        .login-badge { font-size: 0.7rem; background: #e6f7e6; color: #2e7d32; border-radius: 20px; padding: 2px 8px; margin-left: 4px; }
+        .main-body { flex: 1; overflow-y: auto; padding: 28px 32px; background: #f9fafc; }
+        .page-header { background: white; border-radius: 28px; padding: 28px 32px; box-shadow: 0 4px 14px rgba(0,0,0,0.02); border: 1px solid #edf2f7; margin-bottom: 24px; }
+        .page-header-inner { display: flex; align-items: center; gap: 12px; border-bottom: 2px dashed #e2e8f0; padding-bottom: 16px; margin-bottom: 16px; }
+        .page-header-inner > i { font-size: 2rem; color: #2563eb; }
+        .page-title { font-size: 1.6rem; font-weight: 700; background: linear-gradient(120deg, #1e293b, #2d3a5e); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .page-desc { font-size: 1rem; line-height: 1.55; color: #2c3e50; }
+        .insight-tag { background: #eff6ff; padding: 4px 12px; border-radius: 30px; font-size: 0.7rem; font-weight: 500; display: inline-block; margin-top: 12px; color: #1e40af; }
+        .phase-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 6px 14px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; background: #fef9c3; color: #a16207; border: 1px solid #fde68a; }
+        .rules-card { background: white; border-radius: 20px; padding: 20px 24px; border: 1px solid #eef2ff; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.02); }
+        .rules-card h3 { font-size: 0.95rem; color: #1e3a6f; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+        .rules-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 900px) { .rules-grid { grid-template-columns: 1fr; } }
+        .rules-block { background: #fafcff; border: 1px solid #eef2ff; border-radius: 14px; padding: 14px 16px; }
+        .rules-block h4 { font-size: 0.82rem; color: #1e40af; margin-bottom: 8px; }
+        .rules-block ul { padding-left: 18px; font-size: 0.8rem; color: #475569; line-height: 1.65; }
+        .content-card { background: white; border-radius: 24px; padding: 24px 28px; border: 1px solid #eef2ff; box-shadow: 0 6px 14px rgba(0,0,0,0.02); }
+        .toolbar-card { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px dashed #e2e8f0; }
+        .search-group { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; flex: 1; }
+        .field-label { font-size: 0.82rem; font-weight: 600; color: #1e3a6f; white-space: nowrap; }
+        .search-input, .filter-select { padding: 9px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.85rem; font-family: inherit; min-width: 150px; background: #fafcff; color: #334155; }
+        .search-input:focus, .filter-select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .action-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 10px; font-size: 0.85rem; font-weight: 600; font-family: inherit; cursor: pointer; border: none; transition: all 0.2s; }
+        .btn-primary { background: linear-gradient(135deg, #2563eb, #1e40af); color: white; box-shadow: 0 2px 8px rgba(37,99,235,0.25); }
+        .btn-primary:hover { transform: translateY(-1px); }
+        .btn-outline { background: white; color: #1e40af; border: 1px solid #bfdbfe; }
+        .btn-outline:hover { background: #eff6ff; }
+        .btn-danger { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .btn-danger:hover { background: #fee2e2; }
+        .btn-danger:disabled, .btn-outline:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+        thead tr { background: linear-gradient(90deg, #eff6ff 0%, #f8fafc 100%); border-bottom: 2px solid #eef2ff; }
+        th { padding: 12px 14px; text-align: left; font-weight: 600; color: #1e3a6f; font-size: 0.82rem; white-space: nowrap; }
+        th.center, td.center { text-align: center; }
+        td { padding: 11px 14px; border-bottom: 1px solid #eef2f6; color: #334155; vertical-align: middle; }
+        tbody tr:hover { background: #fafcff; }
+        tbody tr.selected { background: linear-gradient(90deg, #eff6ff 0%, #fff 100%); box-shadow: inset 3px 0 0 #2563eb; }
+        input[type="checkbox"] { accent-color: #2563eb; cursor: pointer; }
+        .code-tag { font-family: Consolas, monospace; font-size: 0.78rem; color: #1e4b8f; background: #eef2ff; padding: 2px 8px; border-radius: 6px; }
+        .tag { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.72rem; font-weight: 600; }
+        .tag-data { background: #eff6ff; color: #1d4ed8; }
+        .tag-flow { background: #faf5ff; color: #7e22ce; }
+        .tag-runtime { background: #ecfdf5; color: #047857; }
+        .tag-code { background: #f1f5f9; color: #475569; }
+        .tag-doc { background: #fef9c3; color: #a16207; }
+        .tag-watch { background: #dbeafe; color: #1e40af; }
+        .tag-pending { background: #f1f5f9; color: #64748b; }
+        .tag-running { background: #fef9c3; color: #a16207; }
+        .tag-confirm { background: #ffedd5; color: #c2410c; }
+        .tag-done { background: #dcfce7; color: #15803d; }
+        .tag-pause { background: #f1f5f9; color: #64748b; }
+        .tag-fail { background: #fee2e2; color: #b91c1c; }
+        .type-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+        .icon-btn { background: none; border: none; color: #2563eb; cursor: pointer; padding: 4px 8px; border-radius: 6px; font-size: 0.9rem; }
+        .icon-btn:hover { background: #eff6ff; }
+        .table-footer { display: flex; justify-content: space-between; padding-top: 16px; font-size: 0.82rem; color: #64748b; }
+        .empty-state { text-align: center; padding: 48px 20px; color: #94a3b8; }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.45); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 20px; backdrop-filter: blur(2px); }
+        .modal-overlay.show { display: flex; }
+        .modal { background: white; border-radius: 24px; width: 100%; max-width: 720px; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 24px 48px rgba(0,0,0,0.15); }
+        .modal.wide { max-width: 960px; }
+        .modal-header { padding: 22px 28px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eef2f6; }
+        .modal-header h3 { font-size: 1.1rem; color: #1e3a6f; }
+        .modal-close { background: #f1f5f9; border: none; width: 34px; height: 34px; border-radius: 50%; cursor: pointer; color: #64748b; }
+        .modal-body { padding: 20px 28px; overflow-y: auto; flex: 1; }
+        .modal-footer { padding: 16px 28px 24px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #eef2f6; }
+        .step-bar { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+        .step-item { flex: 1; min-width: 100px; text-align: center; padding: 10px 6px; border-radius: 12px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.76rem; color: #64748b; font-weight: 600; }
+        .step-item.active { background: #eff6ff; border-color: #93c5fd; color: #1e40af; }
+        .step-item.done { background: #f0fdf4; border-color: #86efac; color: #15803d; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 0.82rem; font-weight: 600; color: #1e3a6f; margin-bottom: 6px; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.85rem; font-family: inherit; background: #fafcff; }
+        .field-hint { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
+        .field-error { font-size: 0.75rem; color: #dc2626; margin-top: 4px; display: none; }
+        .required { color: #ef4444; }
+        .wizard-panel { display: none; }
+        .wizard-panel.active { display: block; }
+        .trigger-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        @media (max-width: 700px) { .trigger-grid { grid-template-columns: 1fr 1fr; } }
+        .trigger-card { position: relative; border: 2px solid #e2e8f0; border-radius: 14px; padding: 12px 10px; text-align: center; cursor: pointer; transition: all 0.2s; background: #fafcff; }
+        .trigger-card:hover { border-color: #93c5fd; background: #eff6ff; }
+        .trigger-card.selected { border-color: #2563eb; background: #eff6ff; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+        .trigger-card.selected::after { content: '\f00c'; font-family: 'Font Awesome 6 Free'; font-weight: 900; position: absolute; top: 6px; right: 6px; font-size: 0.65rem; color: #2563eb; }
+        .trigger-card i { font-size: 1.2rem; color: #2563eb; margin-bottom: 4px; }
+        .trigger-card span { display: block; font-size: 0.74rem; font-weight: 600; color: #1e3a6f; }
+        .rule-check-list { display: flex; flex-direction: column; gap: 10px; }
+        .rule-check-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; background: #fafcff; border: 1px solid #eef2ff; border-radius: 12px; font-size: 0.82rem; color: #475569; line-height: 1.5; }
+        .rule-check-item input { margin-top: 3px; flex-shrink: 0; }
+        .result-tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; border-bottom: 1px solid #eef2f6; padding-bottom: 10px; }
+        .result-tab { padding: 8px 14px; border-radius: 10px 10px 0 0; font-size: 0.8rem; font-weight: 600; color: #64748b; cursor: pointer; border: none; background: transparent; font-family: inherit; }
+        .result-tab.active { color: #1e40af; background: #eff6ff; border-bottom: 2px solid #2563eb; }
+        .result-panel { display: none; }
+        .result-panel.active { display: block; }
+        .mini-table { width: 100%; font-size: 0.8rem; border-collapse: collapse; }
+        .mini-table th, .mini-table td { padding: 8px 10px; border-bottom: 1px solid #eef2f6; text-align: left; }
+        .mini-table th { background: #f8fafc; color: #1e3a6f; font-weight: 600; }
+        .report-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+        @media (max-width: 800px) { .report-summary { grid-template-columns: 1fr 1fr; } }
+        .report-stat { border-radius: 14px; padding: 14px; border: 1px solid #eef2ff; background: #fafcff; text-align: center; }
+        .report-stat .num { font-size: 1.4rem; font-weight: 700; margin-bottom: 4px; color: #1e40af; }
+        .report-stat .label { font-size: 0.74rem; color: #64748b; }
+        .source-content { font-size: 0.75rem; color: #475569; line-height: 1.5; min-width: 180px; max-width: 280px; }
+        .source-content .loc { display: block; font-weight: 600; color: #1e40af; margin-bottom: 3px; font-size: 0.72rem; }
+        .source-content .quote { display: block; color: #64748b; border-left: 2px solid #bfdbfe; padding-left: 8px; }
+        .toast { position: fixed; bottom: 28px; right: 28px; z-index: 2000; background: linear-gradient(135deg, #059669, #047857); color: white; padding: 14px 22px; border-radius: 14px; font-size: 0.85rem; display: none; align-items: center; gap: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+        .toast.show { display: flex; }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+        @media (max-width: 860px) { .phase-steps, .user-details { display: none; } .main-body { padding: 16px; } }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <div class="top-bar">
+        <div class="left-area">
+            <a class="back-link" href="Entology产品原型Index.html"><i class="fas fa-arrow-left"></i> 返回平台首页</a>
+            <div class="phase-steps">
+                <span class="phase active"><i class="fas fa-cube"></i> 构建</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-layer-group"></i> 编排</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-chart-pie"></i> 分析</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-brain"></i> 决策</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-rocket"></i> 赋能</span>
+            </div>
+            <div class="badge-close"><i class="fas fa-sync-alt"></i> 全链路闭环 v2.0</div>
+        </div>
+        <div class="user-info">
+            <div class="user-avatar">弘</div>
+            <div class="user-details">
+                <span class="user-name">弘升 <span class="login-badge"><i class="fas fa-check-circle"></i> 已认证</span></span>
+                <span class="user-role">本体构建工程师</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-body">
+        <div class="page-header">
+            <div class="page-header-inner">
+                <i class="fas fa-sync-alt"></i>
+                <h1 class="page-title">动态本体迭代</h1>
+            </div>
+            <p class="page-desc">面向本体运行阶段（Post-construction），监听数据源、源代码、业务文档及流程与运行数据变化，自动感知模型偏差并智能推荐迭代优化方案，结合影响分析实现本体与业务系统持续同步；支持双路径建模成果动态融合迭代，变更须经人工确认后生效，可支撑数字孪生、业务仿真等上层应用。</p>
+            <div class="insight-tag"><i class="fas fa-brain"></i> 本体构建 · 智能建模 · 动态本体迭代</div>
+            <div class="phase-badge"><i class="fas fa-broadcast-tower"></i> Post-construction · 运行时动态更新（区别于 Pre-construction 静态建模）</div>
+        </div>
+
+        <div class="rules-card">
+            <h3><i class="fas fa-info-circle"></i> 能力说明</h3>
+            <div class="rules-grid">
+                <div class="rules-block">
+                    <h4>变更感知与推荐</h4>
+                    <ul>
+                        <li>监听业务运行数据、流程变化、数据源/代码/文档变更</li>
+                        <li>自动识别本体与真实业务之间的模型偏差</li>
+                        <li>大模型智能生成迭代优化方案（增删改实体、属性、关系、规则）</li>
+                        <li>输出影响分析报告，评估对编排、服务与上层应用的波及范围</li>
+                    </ul>
+                </div>
+                <div class="rules-block">
+                    <h4>融合迭代与确认机制</h4>
+                    <ul>
+                        <li>双路径建模（自顶向下 / 自底向上）成果动态融合，保持数据与业务口径统一</li>
+                        <li>结合场景联动触发增量更新，支持持续监听与定时扫描</li>
+                        <li>系统运行中自动构建候选变更，<strong>须人工确认</strong>后方可应用至本体库</li>
+                        <li>确认后可导入本体库，形成新版本并保留迭代履历</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="content-card">
+            <div class="toolbar-card">
+                <div class="search-group">
+                    <span class="field-label">任务名称</span>
+                    <input type="text" class="search-input" id="searchName" placeholder="支持模糊查询">
+                    <select class="filter-select" id="filterTrigger">
+                        <option value="">全部触发源</option>
+                        <option value="业务运行数据">业务运行数据</option>
+                        <option value="流程变更">流程变更</option>
+                        <option value="数据源变更">数据源变更</option>
+                        <option value="源代码变更">源代码变更</option>
+                        <option value="文档变更">文档变更</option>
+                    </select>
+                    <select class="filter-select" id="filterStatus">
+                        <option value="">全部状态</option>
+                        <option value="监听中">监听中</option>
+                        <option value="分析中">分析中</option>
+                        <option value="待确认">待确认</option>
+                        <option value="已应用">已应用</option>
+                        <option value="已暂停">已暂停</option>
+                    </select>
+                    <button class="btn btn-primary" id="btnSearch"><i class="fas fa-search"></i> 查询</button>
+                    <button class="btn btn-outline" id="btnReset"><i class="fas fa-undo"></i> 重置</button>
+                </div>
+                <div class="action-group">
+                    <button class="btn btn-danger" id="btnDelete" disabled><i class="fas fa-trash-alt"></i> 删除</button>
+                    <button class="btn btn-outline" id="btnPause" disabled><i class="fas fa-pause"></i> 暂停监听</button>
+                    <button class="btn btn-primary" id="btnCreate"><i class="fas fa-plus"></i> 新建迭代任务</button>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="center" style="width:40px;"><input type="checkbox" id="checkAll"></th>
+                            <th style="width:96px;">任务编码</th>
+                            <th>任务名称</th>
+                            <th style="width:120px;">目标本体</th>
+                            <th style="width:140px;">监听触发</th>
+                            <th class="center" style="width:52px;">偏差</th>
+                            <th class="center" style="width:52px;">推荐</th>
+                            <th class="center" style="width:52px;">待确认</th>
+                            <th class="center" style="width:72px;">状态</th>
+                            <th style="width:130px;">更新时间</th>
+                            <th class="center" style="width:100px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="taskTableBody"></tbody>
+                </table>
+            </div>
+            <div class="table-footer">
+                <span id="tableInfo">共 0 条记录</span>
+                <span id="selectedInfo">已选 0 条</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 新建向导 -->
+<div class="modal-overlay" id="wizardModal">
+    <div class="modal wide">
+        <div class="modal-header">
+            <h3>新建迭代任务</h3>
+            <button class="modal-close" id="wizardClose"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <div class="step-bar">
+                <div class="step-item active" data-step="1">1. 基本信息</div>
+                <div class="step-item" data-step="2">2. 监听配置</div>
+                <div class="step-item" data-step="3">3. 迭代策略</div>
+                <div class="step-item" data-step="4">4. 确认机制</div>
+            </div>
+            <div class="wizard-panel active" data-panel="1">
+                <div class="form-group">
+                    <label>任务名称 <span class="required">*</span></label>
+                    <input type="text" id="wizName" placeholder="如：采购域运行态本体迭代">
+                    <div class="field-error" id="errWizName">任务名称不能为空</div>
+                </div>
+                <div class="form-group">
+                    <label>目标本体模型 <span class="required">*</span></label>
+                    <select id="wizOntology">
+                        <option value="">请选择已发布本体…</option>
+                        <option value="采购域本体 v1.2">采购域本体 v1.2</option>
+                        <option value="电商交易本体 v0.8">电商交易本体 v0.8</option>
+                        <option value="供应商主数据本体 v2.0">供应商主数据本体 v2.0</option>
+                    </select>
+                    <div class="field-hint">选择运行中需持续同步的目标本体版本</div>
+                </div>
+                <div class="form-group">
+                    <label>关联场景（可选）</label>
+                    <select id="wizScene">
+                        <option value="">无特定场景</option>
+                        <option value="数字孪生-采购中心">数字孪生 · 采购中心</option>
+                        <option value="业务仿真-订单履约">业务仿真 · 订单履约</option>
+                    </select>
+                </div>
+            </div>
+            <div class="wizard-panel" data-panel="2">
+                <div class="form-group">
+                    <label>监听触发源 <span class="required">*</span></label>
+                    <div class="field-hint" style="margin-bottom:8px;">可多选，变更事件将触发偏差感知与迭代分析</div>
+                    <div class="trigger-grid" id="triggerGrid">
+                        <div class="trigger-card selected" data-trigger="业务运行数据"><i class="fas fa-chart-area"></i><span>业务运行数据</span></div>
+                        <div class="trigger-card" data-trigger="流程变更"><i class="fas fa-project-diagram"></i><span>流程变更</span></div>
+                        <div class="trigger-card selected" data-trigger="数据源变更"><i class="fas fa-database"></i><span>数据源变更</span></div>
+                        <div class="trigger-card" data-trigger="源代码变更"><i class="fas fa-code"></i><span>源代码变更</span></div>
+                        <div class="trigger-card" data-trigger="文档变更"><i class="fas fa-file-alt"></i><span>文档变更</span></div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>监听模式</label>
+                    <select id="wizWatchMode">
+                        <option value="持续监听">持续监听（实时感知变更）</option>
+                        <option value="定时扫描">定时扫描（按周期批量分析）</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>扫描周期</label>
+                    <select id="wizInterval">
+                        <option>每 15 分钟</option>
+                        <option selected>每 1 小时</option>
+                        <option>每 6 小时</option>
+                        <option>每日</option>
+                    </select>
+                    <div class="field-hint">持续监听模式下，高频事件将合并为批次分析</div>
+                </div>
+            </div>
+            <div class="wizard-panel" data-panel="3">
+                <div class="form-group">
+                    <label>偏差感知灵敏度</label>
+                    <select id="wizSensitivity">
+                        <option value="medium">中等（推荐，平衡误报与漏报）</option>
+                        <option value="high">高（更敏感，捕获细微偏差）</option>
+                        <option value="low">低（仅显著偏差触发推荐）</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="rule-check-item"><input type="checkbox" id="wizDualPath" checked> 启用双路径建模动态融合（自顶向下业务模型 + 自底向上数据模型增量对齐）</label>
+                </div>
+                <div class="form-group">
+                    <label class="rule-check-item"><input type="checkbox" id="wizAutoRecommend" checked> 自动生成迭代优化方案（实体/属性/关系/规则增删改建议）</label>
+                </div>
+                <div class="form-group">
+                    <label class="rule-check-item"><input type="checkbox" id="wizImpact" checked> 同步输出影响分析（编排 Pipeline、API 服务、数字孪生等）</label>
+                </div>
+            </div>
+            <div class="wizard-panel" data-panel="4">
+                <div class="form-group">
+                    <label>人工确认策略 <span class="required">*</span></label>
+                    <select id="wizConfirm">
+                        <option value="all">全部变更须人工确认后应用（推荐）</option>
+                        <option value="high">仅高影响变更须确认，低风险可自动应用</option>
+                        <option value="manual">仅生成报告，不自动写入候选变更</option>
+                    </select>
+                    <div class="field-hint">系统运行中构建候选变更，确认后方可更新本体库</div>
+                </div>
+                <div class="rule-check-list">
+                    <label class="rule-check-item"><input type="checkbox" checked disabled> 变更应用前保留 diff 对比与回滚点</label>
+                    <label class="rule-check-item"><input type="checkbox" checked disabled> 记录迭代履历，关联触发事件与确认人</label>
+                    <label class="rule-check-item"><input type="checkbox" id="wizNotify" checked> 待确认变更推送站内通知</label>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="wizardCancel">取消</button>
+            <button class="btn btn-outline" id="wizardPrev" style="display:none;"><i class="fas fa-arrow-left"></i> 上一步</button>
+            <button class="btn btn-primary" id="wizardNext"><i class="fas fa-arrow-right"></i> 下一步</button>
+            <button class="btn btn-primary" id="wizardSubmit" style="display:none;"><i class="fas fa-play"></i> 启动监听</button>
+        </div>
+    </div>
+</div>
+
+<!-- 迭代结果阅览 -->
+<div class="modal-overlay" id="resultModal">
+    <div class="modal wide">
+        <div class="modal-header">
+            <h3 id="resultTitle">迭代结果阅览</h3>
+            <button class="modal-close" id="resultClose"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <div class="result-tabs">
+                <button class="result-tab active" data-tab="deviation">偏差感知报告</button>
+                <button class="result-tab" data-tab="recommend">迭代推荐方案 (5)</button>
+                <button class="result-tab" data-tab="impact">影响分析</button>
+                <button class="result-tab" data-tab="confirm">待确认变更 (3)</button>
+                <button class="result-tab" data-tab="model">迭代后模型</button>
+            </div>
+            <div class="result-panel active" id="panel-deviation">
+                <div class="report-summary">
+                    <div class="report-stat"><div class="num">6</div><div class="label">感知偏差项</div></div>
+                    <div class="report-stat"><div class="num">5</div><div class="label">推荐方案</div></div>
+                    <div class="report-stat"><div class="num">3</div><div class="label">待人工确认</div></div>
+                    <div class="report-stat"><div class="num">2</div><div class="label">波及应用</div></div>
+                </div>
+                <table class="mini-table">
+                    <thead><tr><th>偏差类型</th><th>本体要素</th><th>触发源</th><th>偏差描述</th><th>来源内容</th></tr></thead>
+                    <tbody>
+                        <tr><td><span class="tag tag-runtime">运行数据偏差</span></td><td>采购订单头 · 审批状态</td><td>业务运行数据</td><td>实际流程新增「加急审批」状态，本体枚举未覆盖</td><td><div class="source-content"><span class="loc">运行日志 2026-06-10</span><span class="quote">「status=URGENT_APPROVE 出现 128 次」</span></div></td></tr>
+                        <tr><td><span class="tag tag-flow">流程变更</span></td><td>采购需求 · 活动流</td><td>流程变更</td><td>BPM 新增「预算冻结」节点，活动流缺失</td><td><div class="source-content"><span class="loc">流程版本 v3.2</span><span class="quote">「BudgetFreeze 节点已上线」</span></div></td></tr>
+                        <tr><td><span class="tag tag-data">数据口径偏差</span></td><td>供应商 · 合格有效期</td><td>数据源变更</td><td>表字段 QUALIFIED_UNTIL 新增，本体无对应属性</td><td><div class="source-content"><span class="loc">DDL 变更</span><span class="quote">「ALTER TABLE T_VENDOR ADD QUALIFIED_UNTIL DATE」</span></div></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="result-panel" id="panel-recommend">
+                <table class="mini-table">
+                    <thead><tr><th>方案编号</th><th>变更类型</th><th>目标要素</th><th>推荐操作</th><th>置信度</th><th>说明</th></tr></thead>
+                    <tbody>
+                        <tr><td><span class="code-tag">RP001</span></td><td>新增属性</td><td>采购订单头</td><td>新增枚举值「加急审批」</td><td>高</td><td>对齐运行态审批状态枚举</td></tr>
+                        <tr><td><span class="code-tag">RP002</span></td><td>新增活动</td><td>采购需求流程</td><td>新增活动「预算冻结」</td><td>高</td><td>同步 BPM v3.2 流程节点</td></tr>
+                        <tr><td><span class="code-tag">RP003</span></td><td>新增属性</td><td>供应商</td><td>新增「合格有效期」属性</td><td>中</td><td>映射数据源 QUALIFIED_UNTIL 字段</td></tr>
+                        <tr><td><span class="code-tag">RP004</span></td><td>修改关系</td><td>采购订单-供应商</td><td>基数调整为多对多</td><td>中</td><td>运行数据出现一订单多供应商场景</td></tr>
+                        <tr><td><span class="code-tag">RP005</span></td><td>新增规则</td><td>采购域</td><td>加急审批须校验预算余额</td><td>高</td><td>流程规则与业务约束补齐</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="result-panel" id="panel-impact">
+                <table class="mini-table">
+                    <thead><tr><th>波及对象</th><th>类型</th><th>影响等级</th><th>影响说明</th></tr></thead>
+                    <tbody>
+                        <tr><td>采购审批 Pipeline</td><td>知识编排</td><td><span class="tag tag-confirm">高</span></td><td>审批状态枚举变更，需更新映射规则 3 处</td></tr>
+                        <tr><td>采购订单查询 API</td><td>本体服务</td><td><span class="tag tag-running">中</span></td><td>新增属性需扩展 API 出参 schema</td></tr>
+                        <tr><td>数字孪生 · 采购中心</td><td>上层应用</td><td><span class="tag tag-running">中</span></td><td>活动流变更影响仿真路径配置</td></tr>
+                        <tr><td>供应商主数据同步任务</td><td>数据映射</td><td><span class="tag tag-done">低</span></td><td>新增字段映射，不影响现有同步逻辑</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="result-panel" id="panel-confirm">
+                <table class="mini-table">
+                    <thead><tr><th>变更项</th><th>变更类型</th><th>推荐方案</th><th>影响等级</th><th>操作</th></tr></thead>
+                    <tbody>
+                        <tr><td>采购订单头 · 审批状态枚举</td><td>修改</td><td>RP001</td><td>高</td><td><button class="btn btn-outline btn-sm" style="padding:4px 10px;font-size:0.72rem;" onclick="showToast('已确认采纳 RP001')">确认采纳</button></td></tr>
+                        <tr><td>采购需求 · 预算冻结活动</td><td>新增</td><td>RP002</td><td>高</td><td><button class="btn btn-outline btn-sm" style="padding:4px 10px;font-size:0.72rem;" onclick="showToast('已确认采纳 RP002')">确认采纳</button></td></tr>
+                        <tr><td>采购订单-供应商关系基数</td><td>修改</td><td>RP004</td><td>中</td><td><button class="btn btn-outline btn-sm" style="padding:4px 10px;font-size:0.72rem;" onclick="showToast('已驳回 RP004')">驳回</button></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="result-panel" id="panel-model">
+                <table class="mini-table">
+                    <thead><tr><th>逻辑实体编码</th><th>逻辑实体名称</th><th>变更摘要</th><th>版本</th><th>状态</th></tr></thead>
+                    <tbody>
+                        <tr><td><span class="code-tag">LE000006</span></td><td>采购订单头</td><td>审批状态 +1 枚举；规则 +1</td><td>v1.2 → v1.3（候选）</td><td><span class="tag tag-confirm">待确认</span></td></tr>
+                        <tr><td><span class="code-tag">LE000002</span></td><td>采购需求头</td><td>活动流 +1 节点</td><td>v1.2 → v1.3（候选）</td><td><span class="tag tag-confirm">待确认</span></td></tr>
+                        <tr><td><span class="code-tag">LE000015</span></td><td>供应商</td><td>属性 +1（合格有效期）</td><td>v1.2 → v1.3（候选）</td><td><span class="tag tag-pending">待生成</span></td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="resultCancel">关闭</button>
+            <button class="btn btn-outline" id="resultConfirmAll"><i class="fas fa-user-check"></i> 批量确认</button>
+            <button class="btn btn-primary" id="resultApply"><i class="fas fa-check-circle"></i> 应用至本体库</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="deleteModal">
+    <div class="modal" style="max-width:440px;">
+        <div class="modal-header"><h3>确认删除</h3><button class="modal-close" id="deleteModalClose"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body"><p style="color:#475569;">确定删除选中的 <strong id="deleteCount" style="color:#dc2626;">0</strong> 条迭代任务吗？</p></div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="deleteCancel">取消</button>
+            <button class="btn btn-danger" id="deleteConfirm"><i class="fas fa-trash-alt"></i> 确定删除</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"><i class="fas fa-check-circle"></i><span id="toastMsg"></span></div>
+
+<script>
+    const TRIGGER_TAG = {
+        '业务运行数据': 'tag-runtime', '流程变更': 'tag-flow', '数据源变更': 'tag-data',
+        '源代码变更': 'tag-code', '文档变更': 'tag-doc'
+    };
+    const STATUS_TAG = {
+        '监听中': 'tag-watch', '分析中': 'tag-running', '待确认': 'tag-confirm',
+        '已应用': 'tag-done', '已暂停': 'tag-pause', '失败': 'tag-fail'
+    };
+
+    let tasks = [
+        { id: 1, code: 'DI000001', name: '采购域运行态本体迭代', ontology: '采购域本体 v1.2', triggers: ['业务运行数据', '流程变更', '数据源变更'], deviationCount: 6, recommendCount: 5, confirmCount: 3, status: '待确认', updatedAt: '2026-06-10 14:32', hasResult: true },
+        { id: 2, code: 'DI000002', name: '电商订单流程变更监听', ontology: '电商交易本体 v0.8', triggers: ['流程变更', '文档变更'], deviationCount: 2, recommendCount: 2, confirmCount: 0, status: '监听中', updatedAt: '2026-06-11 09:15', hasResult: false },
+        { id: 3, code: 'DI000003', name: '供应商主数据同步迭代', ontology: '供应商主数据本体 v2.0', triggers: ['数据源变更', '源代码变更'], deviationCount: 4, recommendCount: 4, confirmCount: 0, status: '已应用', updatedAt: '2026-06-08 16:20', hasResult: true }
+    ];
+
+    let nextId = 4, nextCode = 4, wizardStep = 1;
+    let queryName = '', queryTrigger = '', queryStatus = '';
+    const selectedIds = new Set();
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function showToast(msg) {
+        const t = document.getElementById('toast');
+        document.getElementById('toastMsg').textContent = msg;
+        t.className = 'toast show';
+        setTimeout(() => t.classList.remove('show'), 2600);
+    }
+    function openModal(id) { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+    function renderTriggers(triggers) {
+        return '<div class="type-tags">' + triggers.map(t =>
+            `<span class="tag ${TRIGGER_TAG[t] || 'tag-data'}">${esc(t)}</span>`
+        ).join('') + '</div>';
+    }
+
+    function getFiltered() {
+        const nk = queryName.trim().toLowerCase();
+        return tasks.filter(t => {
+            const mn = !nk || t.name.toLowerCase().includes(nk) || t.code.toLowerCase().includes(nk);
+            const mt = !queryTrigger || t.triggers.includes(queryTrigger);
+            const ms = !queryStatus || t.status === queryStatus;
+            return mn && mt && ms;
+        });
+    }
+
+    function renderTable() {
+        const filtered = getFiltered();
+        const tbody = document.getElementById('taskTableBody');
+        selectedIds.forEach(id => { if (!filtered.some(t => t.id === id)) selectedIds.delete(id); });
+        if (!filtered.length) {
+            tbody.innerHTML = '<tr><td colspan="11"><div class="empty-state"><i class="fas fa-inbox" style="font-size:2rem;display:block;margin-bottom:10px;"></i>暂无迭代任务</div></td></tr>';
+        } else {
+            tbody.innerHTML = filtered.map(t => {
+                const chk = selectedIds.has(t.id) ? 'checked' : '';
+                const stCls = STATUS_TAG[t.status] || 'tag-pending';
+                const confirmBtn = t.status === '待确认' ? `<button class="icon-btn" title="人工确认" onclick="viewResult(${t.id})"><i class="fas fa-user-check"></i></button>` : '';
+                return `<tr class="${chk ? 'selected' : ''}">
+                    <td class="center"><input type="checkbox" class="row-check" data-id="${t.id}" ${chk}></td>
+                    <td><span class="code-tag">${esc(t.code)}</span></td>
+                    <td><strong style="color:#1e40af;">${esc(t.name)}</strong></td>
+                    <td style="font-size:0.78rem;">${esc(t.ontology)}</td>
+                    <td>${renderTriggers(t.triggers)}</td>
+                    <td class="center">${t.deviationCount || '—'}</td>
+                    <td class="center">${t.recommendCount || '—'}</td>
+                    <td class="center">${t.confirmCount || '—'}</td>
+                    <td class="center"><span class="tag ${stCls}">${esc(t.status)}</span></td>
+                    <td style="font-size:0.8rem;color:#64748b;">${esc(t.updatedAt)}</td>
+                    <td class="center">
+                        ${confirmBtn}
+                        ${t.hasResult ? `<button class="icon-btn" title="查看结果" onclick="viewResult(${t.id})"><i class="fas fa-eye"></i></button>` : ''}
+                    </td></tr>`;
+            }).join('');
+        }
+        document.getElementById('tableInfo').textContent = '共 ' + filtered.length + ' 条记录';
+        document.getElementById('selectedInfo').textContent = '已选 ' + selectedIds.size + ' 条';
+        document.getElementById('checkAll').checked = filtered.length > 0 && filtered.every(t => selectedIds.has(t.id));
+        document.getElementById('btnDelete').disabled = selectedIds.size === 0;
+        document.getElementById('btnPause').disabled = !filtered.filter(t => selectedIds.has(t.id)).some(t => t.status === '监听中');
+    }
+
+    window.viewResult = function(id) {
+        const t = tasks.find(x => x.id === id);
+        document.getElementById('resultTitle').textContent = '迭代结果阅览 · ' + (t ? t.name : '');
+        openModal('resultModal');
+    };
+
+    function updateWizardUI() {
+        document.querySelectorAll('.step-item').forEach(el => {
+            const s = parseInt(el.dataset.step, 10);
+            el.classList.toggle('active', s === wizardStep);
+            el.classList.toggle('done', s < wizardStep);
+        });
+        document.querySelectorAll('.wizard-panel').forEach(p => p.classList.toggle('active', parseInt(p.dataset.panel, 10) === wizardStep));
+        document.getElementById('wizardPrev').style.display = wizardStep > 1 ? '' : 'none';
+        document.getElementById('wizardNext').style.display = wizardStep < 4 ? '' : 'none';
+        document.getElementById('wizardSubmit').style.display = wizardStep === 4 ? '' : 'none';
+    }
+
+    document.getElementById('btnCreate').addEventListener('click', () => {
+        wizardStep = 1;
+        document.getElementById('wizName').value = '';
+        document.getElementById('errWizName').style.display = 'none';
+        updateWizardUI();
+        openModal('wizardModal');
+    });
+    document.getElementById('wizardClose').addEventListener('click', () => closeModal('wizardModal'));
+    document.getElementById('wizardCancel').addEventListener('click', () => closeModal('wizardModal'));
+    document.getElementById('wizardPrev').addEventListener('click', () => { if (wizardStep > 1) { wizardStep--; updateWizardUI(); } });
+    document.getElementById('wizardNext').addEventListener('click', () => {
+        if (wizardStep === 1) {
+            if (!document.getElementById('wizName').value.trim()) {
+                document.getElementById('errWizName').style.display = 'block'; return;
+            }
+            if (!document.getElementById('wizOntology').value) { showToast('请选择目标本体模型'); return; }
+        }
+        if (wizardStep === 2 && !document.querySelectorAll('#triggerGrid .trigger-card.selected').length) {
+            showToast('请至少选择一种监听触发源'); return;
+        }
+        if (wizardStep < 4) { wizardStep++; updateWizardUI(); }
+    });
+    document.getElementById('wizardSubmit').addEventListener('click', () => {
+        const triggers = [...document.querySelectorAll('#triggerGrid .trigger-card.selected')].map(c => c.dataset.trigger);
+        tasks.unshift({
+            id: nextId++, code: 'DI' + String(nextCode++).padStart(6, '0'),
+            name: document.getElementById('wizName').value.trim(),
+            ontology: document.getElementById('wizOntology').value,
+            triggers, deviationCount: 0, recommendCount: 0, confirmCount: 0,
+            status: '监听中', updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'),
+            hasResult: false
+        });
+        closeModal('wizardModal');
+        renderTable();
+        showToast('迭代任务已启动，正在监听变更…');
+    });
+
+    document.querySelectorAll('#triggerGrid .trigger-card').forEach(card => {
+        card.addEventListener('click', () => card.classList.toggle('selected'));
+    });
+    document.querySelectorAll('.result-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.result-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.result-panel').forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+        });
+    });
+
+    document.getElementById('resultClose').addEventListener('click', () => closeModal('resultModal'));
+    document.getElementById('resultCancel').addEventListener('click', () => closeModal('resultModal'));
+    document.getElementById('resultConfirmAll').addEventListener('click', () => showToast('已批量确认待采纳变更'));
+    document.getElementById('resultApply').addEventListener('click', () => { closeModal('resultModal'); showToast('已应用至本体库，生成新版本 v1.3'); });
+
+    document.getElementById('btnSearch').addEventListener('click', () => {
+        queryName = document.getElementById('searchName').value;
+        queryTrigger = document.getElementById('filterTrigger').value;
+        queryStatus = document.getElementById('filterStatus').value;
+        renderTable();
+    });
+    document.getElementById('btnReset').addEventListener('click', () => {
+        document.getElementById('searchName').value = '';
+        document.getElementById('filterTrigger').value = '';
+        document.getElementById('filterStatus').value = '';
+        queryName = queryTrigger = queryStatus = '';
+        renderTable();
+    });
+    document.getElementById('btnDelete').addEventListener('click', () => {
+        document.getElementById('deleteCount').textContent = selectedIds.size;
+        openModal('deleteModal');
+    });
+    document.getElementById('deleteConfirm').addEventListener('click', () => {
+        tasks = tasks.filter(t => !selectedIds.has(t.id));
+        selectedIds.clear();
+        closeModal('deleteModal');
+        renderTable();
+        showToast('已删除');
+    });
+    document.getElementById('deleteModalClose').addEventListener('click', () => closeModal('deleteModal'));
+    document.getElementById('deleteCancel').addEventListener('click', () => closeModal('deleteModal'));
+    document.getElementById('btnPause').addEventListener('click', () => {
+        tasks.forEach(t => { if (selectedIds.has(t.id) && t.status === '监听中') t.status = '已暂停'; });
+        renderTable();
+        showToast('已暂停选中任务的监听');
+    });
+    document.getElementById('checkAll').addEventListener('change', e => {
+        getFiltered().forEach(t => e.target.checked ? selectedIds.add(t.id) : selectedIds.delete(t.id));
+        renderTable();
+    });
+    document.getElementById('taskTableBody').addEventListener('change', e => {
+        if (!e.target.classList.contains('row-check')) return;
+        const id = parseInt(e.target.dataset.id, 10);
+        e.target.checked ? selectedIds.add(id) : selectedIds.delete(id);
+        renderTable();
+    });
+
+    renderTable();
+</script>
+</body>
+</html>

@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>逻辑实体管理 | 本体平台</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #f0f2f6; height: 100vh; overflow: hidden; color: #1e293b; }
+        .app-container { display: flex; flex-direction: column; height: 100%; width: 100%; box-shadow: 0 0 20px rgba(0,0,0,0.05); }
+        .top-bar { background: white; padding: 12px 28px; border-bottom: 1px solid #eef2f6; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.02); flex-shrink: 0; }
+        .left-area { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+        .back-link { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500; color: #1e40af; text-decoration: none; padding: 6px 14px; border-radius: 30px; background: #e6f0ff; transition: all 0.2s; }
+        .back-link:hover { background: #eff6ff; color: #2563eb; transform: translateY(-1px); }
+        .phase-steps { display: flex; gap: 20px; flex-wrap: wrap; background: #f8fafc; padding: 6px 20px; border-radius: 40px; }
+        .phase { font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #2c3e66; }
+        .phase i { font-size: 1rem; color: #3b82f6; }
+        .phase.active { color: #1e40af; }
+        .badge-close { background: #e6f0ff; border-radius: 30px; padding: 5px 14px; font-size: 0.75rem; font-weight: 600; color: #1e4b8f; }
+        .user-info { display: flex; align-items: center; gap: 16px; background: #fff; border-radius: 48px; padding: 5px 12px 5px 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #eef2f6; }
+        .user-avatar { width: 38px; height: 38px; background: linear-gradient(145deg, #2563eb, #1e40af); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 1rem; box-shadow: 0 2px 6px rgba(37,99,235,0.2); }
+        .user-details { display: flex; flex-direction: column; line-height: 1.3; }
+        .user-name { font-weight: 700; font-size: 0.85rem; color: #0f172a; }
+        .user-role { font-size: 0.7rem; color: #5b6e8c; }
+        .login-badge { font-size: 0.7rem; background: #e6f7e6; color: #2e7d32; border-radius: 20px; padding: 2px 8px; margin-left: 4px; display: inline-flex; align-items: center; gap: 4px; }
+        .main-body { flex: 1; overflow-y: auto; padding: 28px 32px; background: #f9fafc; }
+        .page-header { background: white; border-radius: 28px; padding: 28px 32px; box-shadow: 0 4px 14px rgba(0,0,0,0.02), 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #edf2f7; margin-bottom: 24px; }
+        .page-header-inner { display: flex; align-items: center; gap: 12px; border-bottom: 2px dashed #e2e8f0; padding-bottom: 16px; margin-bottom: 16px; }
+        .page-header-inner > i { font-size: 2rem; color: #2563eb; }
+        .page-title { font-size: 1.6rem; font-weight: 700; background: linear-gradient(120deg, #1e293b, #2d3a5e); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .page-desc { font-size: 1rem; line-height: 1.55; color: #2c3e50; background: #fafcff; }
+        .insight-tag { background: #eff6ff; padding: 4px 12px; border-radius: 30px; font-size: 0.7rem; font-weight: 500; display: inline-block; margin-top: 12px; color: #1e40af; }
+        .content-card { background: white; border-radius: 24px; padding: 24px 28px; border: 1px solid #eef2ff; box-shadow: 0 6px 14px rgba(0,0,0,0.02); }
+        .toolbar-card { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px dashed #e2e8f0; }
+        .search-group { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; flex: 1; }
+        .field-label { font-size: 0.82rem; font-weight: 600; color: #1e3a6f; white-space: nowrap; }
+        .search-input, .filter-select { padding: 9px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.85rem; font-family: inherit; min-width: 140px; background: #fafcff; color: #334155; transition: all 0.2s; }
+        .filter-select { cursor: pointer; }
+        .search-input:focus, .filter-select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .action-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 10px; font-size: 0.85rem; font-weight: 600; font-family: inherit; cursor: pointer; border: none; transition: all 0.2s ease; }
+        .btn-primary { background: linear-gradient(135deg, #2563eb, #1e40af); color: white; box-shadow: 0 2px 8px rgba(37,99,235,0.25); }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(37,99,235,0.35); }
+        .btn-outline { background: white; color: #1e40af; border: 1px solid #bfdbfe; }
+        .btn-outline:hover { background: #eff6ff; }
+        .btn-danger { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .btn-danger:hover { background: #fee2e2; }
+        .btn-danger:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+        .btn-sm { padding: 6px 12px; font-size: 0.78rem; }
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.84rem; table-layout: fixed; }
+        col.col-check { width: 44px; } col.col-code { width: 96px; } col.col-name { width: 110px; }
+        col.col-en { width: 110px; } col.col-def { width: auto; } col.col-primary { width: 88px; }
+        col.col-category { width: 80px; } col.col-biz { width: 100px; } col.col-action { width: 72px; }
+        thead tr { background: linear-gradient(90deg, #eff6ff 0%, #f8fafc 100%); border-bottom: 2px solid #eef2ff; }
+        th { padding: 12px 14px; text-align: left; font-weight: 600; color: #1e3a6f; white-space: nowrap; font-size: 0.82rem; }
+        th.center, td.center { text-align: center; }
+        td { padding: 11px 14px; border-bottom: 1px solid #eef2f6; color: #334155; vertical-align: top; word-break: break-word; }
+        tbody tr { transition: background 0.2s; }
+        tbody tr:hover { background: #fafcff; }
+        tbody tr.selected { background: linear-gradient(90deg, #eff6ff 0%, #ffffff 100%); box-shadow: inset 3px 0 0 #2563eb; }
+        input[type="checkbox"] { accent-color: #2563eb; cursor: pointer; }
+        .entity-code { font-family: Consolas, monospace; font-size: 0.78rem; color: #1e4b8f; background: #eef2ff; padding: 2px 8px; border-radius: 6px; }
+        .entity-name { font-weight: 600; color: #1e3a6f; }
+        .cell-def { font-size: 0.82rem; line-height: 1.5; color: #475569; }
+        .tag { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
+        .tag-yes { background: #e6f7e6; color: #2e7d32; }
+        .tag-no { background: #f1f5f9; color: #64748b; }
+        .tag-transaction { background: #fff7ed; color: #c2410c; }
+        .tag-biz { background: #f0f9ff; color: #0369a1; font-size: 0.7rem; }
+        .tag-unassigned { background: #f8fafc; color: #94a3b8; font-size: 0.7rem; }
+        .tag-master { background: #eff6ff; color: #1e40af; }
+        .icon-btn { width: 32px; height: 32px; border: none; border-radius: 8px; background: #f1f5fb; color: #5f7f9e; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s; }
+        .icon-btn:hover { background: #eef2ff; color: #2563eb; transform: translateY(-1px); }
+        .table-footer { display: flex; justify-content: space-between; align-items: center; padding: 14px 4px 0; font-size: 0.8rem; color: #5b6e8c; }
+        .table-footer #selectedInfo { color: #1e40af; font-weight: 600; }
+        .empty-state { text-align: center; padding: 48px 20px; color: #94a3b8; }
+        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.4); z-index: 1000; align-items: center; justify-content: center; padding: 20px; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: white; border-radius: 24px; width: 100%; max-width: 640px; max-height: 90vh; overflow-y: auto; border: 1px solid #eef2ff; box-shadow: 0 20px 60px rgba(0,0,0,0.12); }
+        .modal-header { padding: 24px 28px 16px; border-bottom: 2px dashed #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
+        .modal-header h3 { font-size: 1.2rem; font-weight: 700; color: #1e293b; display: flex; align-items: center; gap: 10px; }
+        .modal-header h3::before { content: ''; width: 4px; height: 20px; background: linear-gradient(180deg, #2563eb, #1e40af); border-radius: 4px; }
+        .modal-close { width: 36px; height: 36px; border: none; border-radius: 10px; background: #f1f5fb; color: #5f7f9e; cursor: pointer; transition: all 0.2s; }
+        .modal-close:hover { background: #eef2ff; color: #2563eb; }
+        .modal-body { padding: 24px 28px; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 0.82rem; font-weight: 600; color: #1e3a6f; margin-bottom: 6px; }
+        .form-group label .required { color: #ef4444; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.85rem; font-family: inherit; background: #fafcff; color: #334155; transition: all 0.2s; }
+        .form-group textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .form-group input:read-only { background: #f1f5f9; color: #64748b; cursor: not-allowed; }
+        .field-hint { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
+        .field-error { font-size: 0.75rem; color: #dc2626; margin-top: 4px; display: none; }
+        .assign-summary { padding: 12px 14px; background: #fafcff; border: 1px solid #eef2ff; border-radius: 12px; margin-bottom: 14px; font-size: 0.85rem; color: #475569; line-height: 1.5; }
+        .assign-summary strong { color: #1e40af; }
+        .assign-entities { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+        .assign-chip { background: #eff6ff; color: #1e40af; padding: 2px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 500; }
+        .assign-field { margin-top: 4px; }
+        .assign-field-label { display: block; font-size: 0.82rem; font-weight: 600; color: #1e3a6f; margin-bottom: 8px; }
+        .search-select { position: relative; }
+        .search-select-input-wrap { position: relative; }
+        .search-select-input-wrap i.fa-search {
+            position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+            color: #94a3b8; font-size: 0.85rem; pointer-events: none;
+        }
+        .search-select-input-wrap i.fa-chevron-down {
+            position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+            color: #94a3b8; font-size: 0.75rem; pointer-events: none; transition: transform 0.2s;
+        }
+        .search-select.open .search-select-input-wrap i.fa-chevron-down { transform: translateY(-50%) rotate(180deg); color: #2563eb; }
+        .search-select-input {
+            width: 100%; padding: 10px 36px 10px 38px; border: 1px solid #e2e8f0; border-radius: 10px;
+            font-size: 0.85rem; font-family: inherit; background: #fafcff; color: #334155; transition: all 0.2s;
+        }
+        .search-select-input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .search-select.open .search-select-input { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .search-select-panel {
+            display: none; position: absolute; left: 0; right: 0; top: calc(100% + 6px);
+            background: white; border: 1px solid #eef2ff; border-radius: 12px;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.1); z-index: 20; overflow: hidden;
+        }
+        .search-select.open .search-select-panel { display: block; }
+        .search-select-options { max-height: 220px; overflow-y: auto; padding: 6px; }
+        .search-select-option {
+            padding: 10px 12px; border-radius: 8px; cursor: pointer; transition: all 0.15s;
+        }
+        .search-select-option:hover { background: #fafcff; }
+        .search-select-option.active { background: #eff6ff; box-shadow: inset 3px 0 0 #2563eb; }
+        .search-select-option .opt-name { font-weight: 600; color: #1e3a6f; font-size: 0.85rem; }
+        .search-select-option .opt-meta { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+        .search-select-empty { padding: 24px 12px; text-align: center; color: #94a3b8; font-size: 0.82rem; }
+        .selected-bo-preview {
+            margin-top: 14px; padding: 12px 14px; background: #fafcff; border: 1px solid #eef2ff;
+            border-radius: 12px; display: none;
+        }
+        .selected-bo-preview.show { display: block; }
+        .selected-bo-preview .preview-label { font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px; }
+        .selected-bo-preview .preview-name { font-weight: 600; color: #1e40af; font-size: 0.9rem; }
+        .selected-bo-preview .preview-meta { font-size: 0.78rem; color: #64748b; margin-top: 2px; }
+        .modal-footer { padding: 16px 28px 24px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #eef2f6; }
+        .delete-note { margin-top: 12px; padding: 10px 14px; background: #fff7ed; border-radius: 10px; font-size: 0.82rem; color: #9a3412; line-height: 1.5; }
+        .import-zone { border: 2px dashed #cbd5e1; border-radius: 20px; padding: 36px 20px; text-align: center; background: #fafcff; cursor: pointer; transition: all 0.2s; }
+        .import-zone:hover, .import-zone.dragover { border-color: #3b82f6; background: #eff6ff; }
+        .import-zone i { font-size: 2.2rem; color: #3b82f6; margin-bottom: 10px; }
+        .toast { position: fixed; bottom: 28px; right: 28px; z-index: 2000; background: #1e293b; color: white; padding: 14px 22px; border-radius: 14px; font-size: 0.85rem; display: none; align-items: center; gap: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+        .toast.show { display: flex; }
+        .toast.success { background: linear-gradient(135deg, #059669, #047857); }
+        .toast.error { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+        @media (max-width: 860px) { .phase-steps { display: none; } .user-details { display: none; } .main-body { padding: 16px; } .page-header { padding: 20px; border-radius: 20px; } }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <div class="top-bar">
+        <div class="left-area">
+            <a class="back-link" href="Entology产品原型Index.html"><i class="fas fa-arrow-left"></i> 返回平台首页</a>
+            <div class="phase-steps">
+                <span class="phase active"><i class="fas fa-cube"></i> 构建</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-layer-group"></i> 编排</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-chart-pie"></i> 分析</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-brain"></i> 决策</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-rocket"></i> 赋能</span>
+            </div>
+            <div class="badge-close"><i class="fas fa-sync-alt"></i> 全链路闭环 v2.0</div>
+        </div>
+        <div class="user-info">
+            <div class="user-avatar">弘</div>
+            <div class="user-details">
+                <span class="user-name">弘升 <span class="login-badge"><i class="fas fa-check-circle"></i> 已认证</span></span>
+                <span class="user-role">本体构建工程师</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-body">
+        <div class="page-header">
+            <div class="page-header-inner">
+                <i class="fas fa-sitemap"></i>
+                <h1 class="page-title">逻辑实体管理</h1>
+            </div>
+            <p class="page-desc">定义企业内的逻辑实体，实现逻辑实体的创建、编辑、删除、查询、归属业务对象、导入。</p>
+            <div class="insight-tag"><i class="fas fa-cube"></i> 本体构建 · 手工建模 · 逻辑实体管理</div>
+        </div>
+
+        <div class="content-card">
+            <div class="toolbar-card">
+                <div class="search-group">
+                    <span class="field-label">逻辑实体名称</span>
+                    <input type="text" class="search-input" id="searchName" placeholder="支持模糊查询">
+                    <select class="filter-select" id="filterBizObj">
+                        <option value="">所属业务对象</option>
+                    </select>
+                    <select class="filter-select" id="filterPrimary">
+                        <option value="">是否主逻辑实体</option>
+                        <option value="是">是</option>
+                        <option value="否">否</option>
+                    </select>
+                    <select class="filter-select" id="filterCategory">
+                        <option value="">全部类别</option>
+                        <option value="事务数据">事务数据</option>
+                        <option value="主数据">主数据</option>
+                    </select>
+                    <button class="btn btn-primary" id="btnSearch"><i class="fas fa-search"></i> 查询</button>
+                    <button class="btn btn-outline" id="btnReset"><i class="fas fa-undo"></i> 重置</button>
+                </div>
+                <div class="action-group">
+                    <button class="btn btn-danger" id="btnDelete" disabled><i class="fas fa-trash-alt"></i> 删除</button>
+                    <button class="btn btn-outline" id="btnImport"><i class="fas fa-file-import"></i> 导入</button>
+                    <button class="btn btn-primary" id="btnCreate"><i class="fas fa-plus"></i> 新建</button>
+                    <button class="btn btn-outline" id="btnAssign" disabled><i class="fas fa-link"></i> 归属业务对象</button>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <colgroup>
+                        <col class="col-check"><col class="col-code"><col class="col-name"><col class="col-en">
+                        <col class="col-def"><col class="col-primary"><col class="col-category"><col class="col-biz"><col class="col-action">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th class="center"><input type="checkbox" id="checkAll" title="全选"></th>
+                            <th>逻辑实体编码</th>
+                            <th>逻辑实体名称</th>
+                            <th>逻辑实体英文名</th>
+                            <th>逻辑实体定义</th>
+                            <th class="center">是否主逻辑实体</th>
+                            <th class="center">数据类别</th>
+                            <th class="center">归属业务对象</th>
+                            <th class="center">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="entityTableBody"></tbody>
+                </table>
+            </div>
+            <div class="table-footer">
+                <span id="tableInfo">共 0 条记录</span>
+                <span id="selectedInfo">已选 0 条</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="entityModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 id="modalTitle">新建逻辑实体</h3>
+            <button class="modal-close" id="modalClose"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="editId">
+            <div class="form-group">
+                <label>逻辑实体编码 <span class="required">*</span></label>
+                <input type="text" id="formCode" placeholder="如 LE000008">
+                <div class="field-hint" id="codeHint">系统自动生成编码，须全局唯一</div>
+                <div class="field-error" id="errCode"></div>
+            </div>
+            <div class="form-group">
+                <label>逻辑实体名称 <span class="required">*</span></label>
+                <input type="text" id="formName" placeholder="请输入逻辑实体名称">
+                <div class="field-error" id="errName"></div>
+            </div>
+            <div class="form-group">
+                <label>逻辑实体英文名 <span class="required">*</span></label>
+                <input type="text" id="formEnglish" placeholder="如 prHeader">
+                <div class="field-error" id="errEnglish"></div>
+            </div>
+            <div class="form-group">
+                <label>逻辑实体定义</label>
+                <textarea id="formDefinition" placeholder="请输入逻辑实体定义"></textarea>
+            </div>
+            <div class="form-group">
+                <label>是否主逻辑实体</label>
+                <select id="formPrimary">
+                    <option value="是">是</option>
+                    <option value="否">否</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>数据类别</label>
+                <select id="formCategory">
+                    <option value="事务数据">事务数据</option>
+                    <option value="主数据">主数据</option>
+                </select>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="modalCancel">取消</button>
+            <button class="btn btn-primary" id="modalSave"><i class="fas fa-check"></i> 确定</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="assignModal">
+    <div class="modal" style="max-width:480px;">
+        <div class="modal-header">
+            <h3>归属业务对象</h3>
+            <button class="modal-close" id="assignModalClose"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <div class="assign-summary" id="assignSummary"></div>
+            <div class="assign-field">
+                <label class="assign-field-label">选择业务对象 <span style="color:#ef4444;">*</span></label>
+                <div class="search-select" id="boSearchSelect">
+                    <div class="search-select-input-wrap">
+                        <i class="fas fa-search"></i>
+                        <input type="text" class="search-select-input" id="boSearchInput" placeholder="输入业务对象名称搜索…" autocomplete="off">
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="search-select-panel">
+                        <div class="search-select-options" id="boOptions"></div>
+                    </div>
+                </div>
+                <div class="field-hint" style="margin-top:6px;">支持模糊搜索，一个逻辑实体只能归属到一个业务对象</div>
+            </div>
+            <div class="selected-bo-preview" id="selectedBoPreview">
+                <div class="preview-label">已选择</div>
+                <div class="preview-name" id="previewBoName"></div>
+                <div class="preview-meta" id="previewBoMeta"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="assignCancel">取消</button>
+            <button class="btn btn-primary" id="assignConfirm"><i class="fas fa-check"></i> 确定</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="deleteModal">
+    <div class="modal" style="max-width:440px;">
+        <div class="modal-header"><h3>确认删除</h3><button class="modal-close" id="deleteModalClose"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body">
+            <p style="color:#475569;line-height:1.6;">确定删除选中的 <strong id="deleteCount" style="color:#dc2626;">0</strong> 个逻辑实体吗？删除后不可恢复。</p>
+            <div class="delete-note"><i class="fas fa-info-circle"></i> 删除逻辑实体时，将同步删除其与业务对象属性的关联关系，以及逻辑实体之间的实例关系。</div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="deleteCancel">取消</button>
+            <button class="btn btn-danger" id="deleteConfirm"><i class="fas fa-trash-alt"></i> 确认</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="importModal">
+    <div class="modal" style="max-width:460px;">
+        <div class="modal-header"><h3>导入逻辑实体</h3><button class="modal-close" id="importModalClose"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body">
+            <div class="import-zone" id="importZone">
+                <i class="fas fa-cloud-upload-alt"></i>
+                <p style="font-weight:600;color:#1e3a6f;">点击或拖拽文件到此处上传</p>
+                <p style="font-size:0.82rem;color:#64748b;margin-top:6px;">支持 .xlsx、.csv，列顺序：编码、名称、逻辑实体英文名、定义、是否主逻辑实体、数据类别</p>
+            </div>
+            <input type="file" id="importFile" accept=".xlsx,.csv" style="display:none;">
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="importCancel">取消</button>
+            <button class="btn btn-primary" id="importConfirm" disabled><i class="fas fa-file-import"></i> 确定</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"><i class="fas fa-check-circle"></i><span id="toastMsg"></span></div>
+
+<script>
+    const businessObjects = [
+        { code: 'B00001', name: '供应商', english: 'Supplier' },
+        { code: 'B00002', name: '物料', english: 'Material' },
+        { code: 'B00003', name: '管理单元', english: 'Management Unit' },
+        { code: 'B00004', name: '采购需求', english: 'Purchase Requisition' },
+        { code: 'B00005', name: '采购订单', english: 'Purchase Order' },
+        { code: 'B00006', name: '采购验收单', english: 'Purchase Receipt' },
+        { code: 'B00007', name: '仓库', english: 'Warehouse' },
+        { code: 'B00008', name: '员工', english: 'Employee' }
+    ];
+
+    let entities = [
+        { id: 1, code: 'LE000001', name: '采购需求头', english: 'prHeader', definition: '指采购需求的汇总与控制信息，承载需求单号、申请人、申请部门、申请日期、审批状态、需求类型等头级属性，是采购需求业务对象的主逻辑实体。主要属性包括：需求单号、申请人、部门、申请日期、审批状态等。', isPrimary: '是', category: '事务数据', bizObjCode: 'B00004', bizObjName: '采购需求' },
+        { id: 2, code: 'LE000002', name: '采购需求行', english: 'prLine', definition: '指采购需求头下的具体明细行，记录具体采购物料的编码、名称、规格、数量、单位、需求日期、预算单价等行级属性。主要属性包括：行号、物料编码、物料名称、数量、单位、需求日期、预算单价等。', isPrimary: '否', category: '事务数据', bizObjCode: 'B00004', bizObjName: '采购需求' },
+        { id: 3, code: 'LE000003', name: '采购需求分摊行', english: 'prAllocation', definition: '指采购需求行的费用预分摊明细，将需求成本分摊至成本中心、项目、内部订单等承担对象，支撑预算控制与核算。', isPrimary: '否', category: '事务数据', bizObjCode: 'B00004', bizObjName: '采购需求' },
+        { id: 4, code: 'LE000004', name: '采购需求关系', english: 'prRelation', definition: '指采购需求与其他来源单据（如生产计划、销售订单等）之间的关联记录，用于需求溯源与上下游追溯。', isPrimary: '否', category: '事务数据', bizObjCode: 'B00004', bizObjName: '采购需求' },
+        { id: 5, code: 'LE000005', name: '采购需求行关系', english: 'pr line relation', definition: '指采购需求行与下游执行行（如采购订单行）之间的映射关系，支撑需求到订单的闭环管理。', isPrimary: '否', category: '事务数据', bizObjCode: 'B00004', bizObjName: '采购需求' },
+        { id: 6, code: 'LE000006', name: '采购订单头', english: 'poHeader', definition: '指采购订单的汇总与控制信息，承载订单号、供应商、采购组织、订单日期、订单状态等头级属性，是采购订单业务对象的主逻辑实体，是收货、验收、付款的核心依据。', isPrimary: '是', category: '事务数据', bizObjCode: 'B00005', bizObjName: '采购订单' },
+        { id: 7, code: 'LE000007', name: '采购订单行', english: 'poLine', definition: '指采购订单的执行单元，承载订购物料/服务、数量、单价、税率、交货日期等行级属性，是订单履约与结算的最小粒度。', isPrimary: '否', category: '事务数据', bizObjCode: 'B00005', bizObjName: '采购订单' }
+    ];
+
+    let nextSeq = 8;
+    let queryName = '', queryBizObj = '', queryPrimary = '', queryCategory = '';
+    const selectedIds = new Set();
+    let selectedBoCode = null;
+
+    const entityTableBody = document.getElementById('entityTableBody');
+    const checkAll = document.getElementById('checkAll');
+    const btnDelete = document.getElementById('btnDelete');
+    const btnAssign = document.getElementById('btnAssign');
+
+    function esc(str) {
+        if (!str) return '';
+        const d = document.createElement('div');
+        d.textContent = str;
+        return d.innerHTML;
+    }
+
+    function showToast(msg, type = 'success') {
+        const toast = document.getElementById('toast');
+        document.getElementById('toastMsg').textContent = msg;
+        toast.className = 'toast show ' + type;
+        toast.querySelector('i').className = type === 'success' ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
+        setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+
+    function openModal(id) { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+    function genCode() { return 'LE' + String(nextSeq).padStart(6, '0'); }
+
+    function getFiltered() {
+        const nameKw = queryName.trim().toLowerCase();
+        return entities.filter(e => {
+            const matchName = !nameKw || e.name.toLowerCase().includes(nameKw) || e.english.toLowerCase().includes(nameKw);
+            const matchBizObj = !queryBizObj || e.bizObjCode === queryBizObj;
+            const matchPrimary = !queryPrimary || e.isPrimary === queryPrimary;
+            const matchCategory = !queryCategory || e.category === queryCategory;
+            return matchName && matchBizObj && matchPrimary && matchCategory;
+        });
+    }
+
+    function initFilterBizObj() {
+        const sel = document.getElementById('filterBizObj');
+        businessObjects.forEach(bo => {
+            const opt = document.createElement('option');
+            opt.value = bo.code;
+            opt.textContent = bo.name;
+            sel.appendChild(opt);
+        });
+    }
+
+    function renderTable() {
+        const filtered = getFiltered();
+        selectedIds.forEach(id => { if (!filtered.some(e => e.id === id)) selectedIds.delete(id); });
+
+        if (filtered.length === 0) {
+            entityTableBody.innerHTML = `<tr><td colspan="9"><div class="empty-state"><i class="fas fa-inbox" style="font-size:2rem;display:block;margin-bottom:10px;color:#cbd5e1;"></i>暂无逻辑实体数据</div></td></tr>`;
+        } else {
+            entityTableBody.innerHTML = filtered.map(e => {
+                const checked = selectedIds.has(e.id) ? 'checked' : '';
+                const primaryCls = e.isPrimary === '是' ? 'tag-yes' : 'tag-no';
+                const catCls = e.category === '事务数据' ? 'tag-transaction' : 'tag-master';
+                const bizTag = e.bizObjName
+                    ? `<span class="tag tag-biz">${esc(e.bizObjName)}</span>`
+                    : `<span class="tag tag-unassigned">未归属</span>`;
+                return `<tr class="${checked ? 'selected' : ''}">
+                    <td class="center"><input type="checkbox" class="row-check" data-id="${e.id}" ${checked}></td>
+                    <td><span class="entity-code">${esc(e.code)}</span></td>
+                    <td><span class="entity-name">${esc(e.name)}</span></td>
+                    <td>${esc(e.english)}</td>
+                    <td><div class="cell-def">${esc(e.definition)}</div></td>
+                    <td class="center"><span class="tag ${primaryCls}">${esc(e.isPrimary)}</span></td>
+                    <td class="center"><span class="tag ${catCls}">${esc(e.category)}</span></td>
+                    <td class="center">${bizTag}</td>
+                    <td class="center"><button class="icon-btn" title="编辑" onclick="openEdit(${e.id})"><i class="fas fa-edit"></i></button></td>
+                </tr>`;
+            }).join('');
+        }
+
+        document.getElementById('tableInfo').textContent = `共 ${filtered.length} 条记录`;
+        checkAll.checked = filtered.length > 0 && filtered.every(e => selectedIds.has(e.id));
+        checkAll.indeterminate = !checkAll.checked && filtered.some(e => selectedIds.has(e.id));
+        updateSelectionUI();
+    }
+
+    function updateSelectionUI() {
+        const count = selectedIds.size;
+        btnDelete.disabled = count === 0;
+        btnAssign.disabled = count === 0;
+        document.getElementById('selectedInfo').textContent = `已选 ${count} 条`;
+    }
+
+    function getSelectedEntities() {
+        return entities.filter(e => selectedIds.has(e.id));
+    }
+
+    function clearFormErrors() {
+        ['errCode', 'errName', 'errEnglish'].forEach(id => {
+            document.getElementById(id).style.display = 'none';
+            document.getElementById(id).textContent = '';
+        });
+    }
+
+    function showFieldError(id, msg) {
+        const el = document.getElementById(id);
+        el.textContent = msg;
+        el.style.display = 'block';
+    }
+
+    function validateForm() {
+        clearFormErrors();
+        const code = document.getElementById('formCode').value.trim();
+        const name = document.getElementById('formName').value.trim();
+        const english = document.getElementById('formEnglish').value.trim();
+        const editId = parseInt(document.getElementById('editId').value, 10);
+        let valid = true;
+        if (!code) { showFieldError('errCode', '逻辑实体编码不能为空'); valid = false; }
+        if (!name) { showFieldError('errName', '逻辑实体名称不能为空'); valid = false; }
+        if (!english) { showFieldError('errEnglish', '逻辑实体英文名不能为空'); valid = false; }
+        if (code && entities.some(e => e.code === code && e.id !== editId)) { showFieldError('errCode', '逻辑实体编码已存在，须全局唯一'); valid = false; }
+        if (name && entities.some(e => e.name === name && e.id !== editId)) { showFieldError('errName', '逻辑实体名称已存在，须全局唯一'); valid = false; }
+        if (english && entities.some(e => e.english === english && e.id !== editId)) { showFieldError('errEnglish', '逻辑实体英文名已存在，须全局唯一'); valid = false; }
+        return valid;
+    }
+
+    function openCreate() {
+        document.getElementById('modalTitle').textContent = '新建逻辑实体';
+        document.getElementById('editId').value = '';
+        document.getElementById('formCode').value = genCode();
+        document.getElementById('formCode').readOnly = false;
+        document.getElementById('codeHint').textContent = '系统自动生成编码，可修改；须全局唯一';
+        document.getElementById('formName').value = '';
+        document.getElementById('formEnglish').value = '';
+        document.getElementById('formDefinition').value = '';
+        document.getElementById('formPrimary').value = '否';
+        document.getElementById('formCategory').value = '事务数据';
+        clearFormErrors();
+        openModal('entityModal');
+    }
+
+    function openEdit(id) {
+        const e = entities.find(x => x.id === id);
+        if (!e) return;
+        document.getElementById('modalTitle').textContent = '编辑逻辑实体';
+        document.getElementById('editId').value = e.id;
+        document.getElementById('formCode').value = e.code;
+        document.getElementById('formCode').readOnly = true;
+        document.getElementById('codeHint').textContent = '编辑时逻辑实体编码不可修改';
+        document.getElementById('formName').value = e.name;
+        document.getElementById('formEnglish').value = e.english;
+        document.getElementById('formDefinition').value = e.definition;
+        document.getElementById('formPrimary').value = e.isPrimary;
+        document.getElementById('formCategory').value = e.category;
+        clearFormErrors();
+        openModal('entityModal');
+    }
+
+    function saveEntity() {
+        if (!validateForm()) return;
+        const editId = document.getElementById('editId').value;
+        const data = {
+            code: document.getElementById('formCode').value.trim(),
+            name: document.getElementById('formName').value.trim(),
+            english: document.getElementById('formEnglish').value.trim(),
+            definition: document.getElementById('formDefinition').value.trim(),
+            isPrimary: document.getElementById('formPrimary').value,
+            category: document.getElementById('formCategory').value
+        };
+        if (editId) {
+            const idx = entities.findIndex(e => e.id === parseInt(editId, 10));
+            if (idx >= 0) entities[idx] = { ...entities[idx], ...data };
+            showToast('逻辑实体已保存');
+        } else {
+            entities.push({ id: nextSeq, ...data, bizObjCode: null, bizObjName: null });
+            nextSeq++;
+            showToast('逻辑实体创建成功，请在列表中选中后点击「归属业务对象」');
+        }
+        closeModal('entityModal');
+        renderTable();
+    }
+
+    function openAssignModal() {
+        const selected = getSelectedEntities();
+        if (selected.length === 0) {
+            showToast('请先选中需要归属的逻辑实体', 'error');
+            return;
+        }
+        const codes = [...new Set(selected.filter(e => e.bizObjCode).map(e => e.bizObjCode))];
+        selectedBoCode = codes.length === 1 ? codes[0] : null;
+
+        const chips = selected.map(e => `<span class="assign-chip">${esc(e.code)} ${esc(e.name)}</span>`).join('');
+        const modeHint = codes.length === 1
+            ? `当前已归属至 <strong>${esc(selected.find(e => e.bizObjCode)?.bizObjName || '')}</strong>，可重新选择以修改归属关系。`
+            : (selected.some(e => e.bizObjCode) ? '部分逻辑实体已归属，确认后将统一归属到所选业务对象。' : '以下逻辑实体尚未归属，请选择目标业务对象。');
+        document.getElementById('assignSummary').innerHTML = `
+            <div>即将归属 <strong>${selected.length}</strong> 个逻辑实体</div>
+            <div class="assign-entities">${chips}</div>
+            <div style="margin-top:8px;font-size:0.82rem;">${modeHint}</div>`;
+
+        document.getElementById('boSearchInput').value = '';
+        renderBoOptions('');
+        updateBoPreview();
+        openModal('assignModal');
+        setTimeout(() => document.getElementById('boSearchInput').focus(), 100);
+    }
+
+    function getFilteredBusinessObjects(keyword) {
+        const kw = keyword.trim().toLowerCase();
+        if (!kw) return businessObjects;
+        return businessObjects.filter(bo => bo.name.toLowerCase().includes(kw));
+    }
+
+    function renderBoOptions(keyword) {
+        const list = getFilteredBusinessObjects(keyword);
+        const container = document.getElementById('boOptions');
+        if (list.length === 0) {
+            container.innerHTML = '<div class="search-select-empty"><i class="fas fa-inbox" style="margin-right:6px;"></i>未找到匹配的业务对象</div>';
+            return;
+        }
+        container.innerHTML = list.map(bo => {
+            const active = selectedBoCode === bo.code ? 'active' : '';
+            return `<div class="search-select-option ${active}" data-code="${esc(bo.code)}">
+                <div class="opt-name">${esc(bo.name)}</div>
+                <div class="opt-meta">${esc(bo.code)} · ${esc(bo.english)}</div>
+            </div>`;
+        }).join('');
+    }
+
+    function updateBoPreview() {
+        const preview = document.getElementById('selectedBoPreview');
+        if (!selectedBoCode) {
+            preview.classList.remove('show');
+            return;
+        }
+        const bo = businessObjects.find(b => b.code === selectedBoCode);
+        if (!bo) {
+            preview.classList.remove('show');
+            return;
+        }
+        document.getElementById('previewBoName').textContent = bo.name;
+        document.getElementById('previewBoMeta').textContent = `${bo.code} · ${bo.english}`;
+        preview.classList.add('show');
+        document.getElementById('boSearchInput').value = `${bo.name}（${bo.code}）`;
+    }
+
+    function selectBusinessObject(code) {
+        selectedBoCode = code;
+        renderBoOptions(document.getElementById('boSearchInput').value);
+        updateBoPreview();
+        closeBoDropdown();
+    }
+
+    function openBoDropdown() {
+        document.getElementById('boSearchSelect').classList.add('open');
+    }
+
+    function closeBoDropdown() {
+        document.getElementById('boSearchSelect').classList.remove('open');
+    }
+
+    function toggleBoDropdown() {
+        const el = document.getElementById('boSearchSelect');
+        el.classList.toggle('open');
+    }
+
+    function confirmAssign() {
+        const selected = getSelectedEntities();
+        if (selected.length === 0) return;
+        if (!selectedBoCode) {
+            showToast('请选择要归属的业务对象', 'error');
+            return;
+        }
+        const bo = businessObjects.find(b => b.code === selectedBoCode);
+        selected.forEach(e => {
+            e.bizObjCode = bo.code;
+            e.bizObjName = bo.name;
+        });
+        closeModal('assignModal');
+        showToast(`已将 ${selected.length} 个逻辑实体归属到「${bo.name}」`);
+        renderTable();
+    }
+
+    function openDeleteConfirm() {
+        if (selectedIds.size === 0) return;
+        document.getElementById('deleteCount').textContent = selectedIds.size;
+        openModal('deleteModal');
+    }
+
+    function confirmDelete() {
+        entities = entities.filter(e => !selectedIds.has(e.id));
+        selectedIds.clear();
+        closeModal('deleteModal');
+        showToast('已删除选中逻辑实体及关联关系（演示）');
+        renderTable();
+    }
+
+    function doSearch() {
+        queryName = document.getElementById('searchName').value;
+        queryBizObj = document.getElementById('filterBizObj').value;
+        queryPrimary = document.getElementById('filterPrimary').value;
+        queryCategory = document.getElementById('filterCategory').value;
+        renderTable();
+    }
+
+    function doReset() {
+        document.getElementById('searchName').value = '';
+        document.getElementById('filterBizObj').value = '';
+        document.getElementById('filterPrimary').value = '';
+        document.getElementById('filterCategory').value = '';
+        queryName = queryBizObj = queryPrimary = queryCategory = '';
+        renderTable();
+    }
+
+    let importFileSelected = null;
+
+    function openImport() {
+        importFileSelected = null;
+        document.getElementById('importConfirm').disabled = true;
+        document.getElementById('importFile').value = '';
+        openModal('importModal');
+    }
+
+    function handleImportFile(file) {
+        if (!file) return;
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (!['xlsx', 'csv'].includes(ext)) { showToast('仅支持 .xlsx 和 .csv 格式', 'error'); return; }
+        importFileSelected = file;
+        document.getElementById('importConfirm').disabled = false;
+    }
+
+    function confirmImport() {
+        if (!importFileSelected) return;
+        const mock = { code: 'LE000008', name: '采购验收头', english: 'receiptHeader', definition: '采购验收单的汇总控制信息。', isPrimary: '是', category: '事务数据', bizObjCode: 'B00006', bizObjName: '采购验收单' };
+        if (!entities.some(e => e.code === mock.code || e.name === mock.name || e.english === mock.english)) {
+            entities.push({ id: nextSeq++, ...mock });
+        }
+        closeModal('importModal');
+        showToast('导入成功（演示）');
+        renderTable();
+    }
+
+    document.getElementById('btnCreate').addEventListener('click', openCreate);
+    document.getElementById('btnDelete').addEventListener('click', openDeleteConfirm);
+    document.getElementById('btnAssign').addEventListener('click', openAssignModal);
+    document.getElementById('btnSearch').addEventListener('click', doSearch);
+    document.getElementById('btnReset').addEventListener('click', doReset);
+    document.getElementById('btnImport').addEventListener('click', openImport);
+    document.getElementById('modalClose').addEventListener('click', () => closeModal('entityModal'));
+    document.getElementById('modalCancel').addEventListener('click', () => closeModal('entityModal'));
+    document.getElementById('modalSave').addEventListener('click', saveEntity);
+    document.getElementById('assignModalClose').addEventListener('click', () => { closeBoDropdown(); closeModal('assignModal'); });
+    document.getElementById('assignCancel').addEventListener('click', () => { closeBoDropdown(); closeModal('assignModal'); });
+    document.getElementById('assignConfirm').addEventListener('click', confirmAssign);
+    document.getElementById('deleteModalClose').addEventListener('click', () => closeModal('deleteModal'));
+    document.getElementById('deleteCancel').addEventListener('click', () => closeModal('deleteModal'));
+    document.getElementById('deleteConfirm').addEventListener('click', confirmDelete);
+    document.getElementById('importModalClose').addEventListener('click', () => closeModal('importModal'));
+    document.getElementById('importCancel').addEventListener('click', () => closeModal('importModal'));
+    document.getElementById('importConfirm').addEventListener('click', confirmImport);
+    document.getElementById('importZone').addEventListener('click', () => document.getElementById('importFile').click());
+    document.getElementById('importFile').addEventListener('change', e => handleImportFile(e.target.files[0]));
+
+    const boSearchInput = document.getElementById('boSearchInput');
+    const boSearchSelect = document.getElementById('boSearchSelect');
+    boSearchInput.addEventListener('focus', () => {
+        openBoDropdown();
+        if (selectedBoCode && boSearchInput.value.includes('（')) {
+            boSearchInput.value = '';
+            renderBoOptions('');
+        }
+    });
+    boSearchInput.addEventListener('input', () => {
+        openBoDropdown();
+        renderBoOptions(boSearchInput.value);
+        if (selectedBoCode) {
+            const bo = businessObjects.find(b => b.code === selectedBoCode);
+            const display = bo ? `${bo.name}（${bo.code}）` : '';
+            if (boSearchInput.value !== display) {
+                selectedBoCode = null;
+                document.getElementById('selectedBoPreview').classList.remove('show');
+            }
+        }
+    });
+    boSearchInput.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeBoDropdown();
+    });
+    document.addEventListener('click', e => {
+        if (!boSearchSelect.contains(e.target)) closeBoDropdown();
+    });
+
+    document.getElementById('boOptions').addEventListener('click', e => {
+        const opt = e.target.closest('.search-select-option');
+        if (opt && opt.dataset.code) selectBusinessObject(opt.dataset.code);
+    });
+
+    checkAll.addEventListener('change', () => {
+        getFiltered().forEach(e => checkAll.checked ? selectedIds.add(e.id) : selectedIds.delete(e.id));
+        renderTable();
+    });
+    entityTableBody.addEventListener('change', e => {
+        if (!e.target.classList.contains('row-check')) return;
+        const id = parseInt(e.target.dataset.id, 10);
+        e.target.checked ? selectedIds.add(id) : selectedIds.delete(id);
+        renderTable();
+    });
+    document.getElementById('searchName').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+
+    const importZone = document.getElementById('importZone');
+    importZone.addEventListener('dragover', e => { e.preventDefault(); importZone.classList.add('dragover'); });
+    importZone.addEventListener('dragleave', () => importZone.classList.remove('dragover'));
+    importZone.addEventListener('drop', e => { e.preventDefault(); importZone.classList.remove('dragover'); handleImportFile(e.dataTransfer.files[0]); });
+
+    window.openEdit = openEdit;
+    initFilterBizObj();
+    renderTable();
+</script>
+</body>
+</html>

@@ -1,0 +1,1692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>数据源建模 | 本体平台</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #f0f2f6; height: 100vh; overflow: hidden; color: #1e293b; }
+        .app-container { display: flex; flex-direction: column; height: 100%; width: 100%; box-shadow: 0 0 20px rgba(0,0,0,0.05); }
+        .top-bar { background: white; padding: 12px 28px; border-bottom: 1px solid #eef2f6; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.02); flex-shrink: 0; }
+        .left-area { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+        .back-link { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500; color: #1e40af; text-decoration: none; padding: 6px 14px; border-radius: 30px; background: #e6f0ff; transition: all 0.2s; }
+        .back-link:hover { background: #eff6ff; color: #2563eb; transform: translateY(-1px); }
+        .phase-steps { display: flex; gap: 20px; flex-wrap: wrap; background: #f8fafc; padding: 6px 20px; border-radius: 40px; }
+        .phase { font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 8px; color: #2c3e66; }
+        .phase i { font-size: 1rem; color: #3b82f6; }
+        .phase.active { color: #1e40af; }
+        .badge-close { background: #e6f0ff; border-radius: 30px; padding: 5px 14px; font-size: 0.75rem; font-weight: 600; color: #1e4b8f; }
+        .user-info { display: flex; align-items: center; gap: 16px; background: #fff; border-radius: 48px; padding: 5px 12px 5px 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #eef2f6; }
+        .user-avatar { width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(145deg, #2563eb, #1e40af); color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; }
+        .user-details { display: flex; flex-direction: column; line-height: 1.3; }
+        .user-name { font-weight: 700; font-size: 0.85rem; color: #0f172a; }
+        .user-role { font-size: 0.7rem; color: #5b6e8c; }
+        .login-badge { font-size: 0.7rem; background: #e6f7e6; color: #2e7d32; border-radius: 20px; padding: 2px 8px; margin-left: 4px; }
+        .main-body { flex: 1; overflow-y: auto; padding: 28px 32px; background: #f9fafc; }
+        .page-header { background: white; border-radius: 28px; padding: 28px 32px; box-shadow: 0 4px 14px rgba(0,0,0,0.02); border: 1px solid #edf2f7; margin-bottom: 24px; }
+        .page-header-inner { display: flex; align-items: center; gap: 12px; border-bottom: 2px dashed #e2e8f0; padding-bottom: 16px; margin-bottom: 16px; }
+        .page-header-inner > i { font-size: 2rem; color: #2563eb; }
+        .page-title { font-size: 1.6rem; font-weight: 700; background: linear-gradient(120deg, #1e293b, #2d3a5e); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .page-desc { font-size: 1rem; line-height: 1.55; color: #2c3e50; background: #fafcff; }
+        .insight-tag { background: #eff6ff; padding: 4px 12px; border-radius: 30px; font-size: 0.7rem; font-weight: 500; display: inline-block; margin-top: 12px; color: #1e40af; }
+        .rules-card { background: white; border-radius: 20px; padding: 20px 24px; border: 1px solid #eef2ff; margin-bottom: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.02); }
+        .rules-card h3 { font-size: 0.95rem; color: #1e3a6f; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+        .rules-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        @media (max-width: 900px) { .rules-grid { grid-template-columns: 1fr; } }
+        .rules-block { background: #fafcff; border: 1px solid #eef2ff; border-radius: 14px; padding: 14px 16px; }
+        .rules-block h4 { font-size: 0.82rem; color: #1e40af; margin-bottom: 8px; }
+        .rules-block ul { padding-left: 18px; font-size: 0.8rem; color: #475569; line-height: 1.65; }
+        .content-card { background: white; border-radius: 24px; padding: 24px 28px; border: 1px solid #eef2ff; box-shadow: 0 6px 14px rgba(0,0,0,0.02); }
+        .toolbar-card { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px dashed #e2e8f0; }
+        .search-group { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; flex: 1; }
+        .field-label { font-size: 0.82rem; font-weight: 600; color: #1e3a6f; white-space: nowrap; }
+        .search-input, .filter-select { padding: 9px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.85rem; font-family: inherit; min-width: 160px; background: #fafcff; color: #334155; }
+        .search-input:focus, .filter-select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+        .action-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 10px; font-size: 0.85rem; font-weight: 600; font-family: inherit; cursor: pointer; border: none; transition: all 0.2s; }
+        .btn-primary { background: linear-gradient(135deg, #2563eb, #1e40af); color: white; box-shadow: 0 2px 8px rgba(37,99,235,0.25); }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(37,99,235,0.35); }
+        .btn-outline { background: white; color: #1e40af; border: 1px solid #bfdbfe; }
+        .btn-outline:hover { background: #eff6ff; }
+        .btn-danger { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+        .btn-danger:hover { background: #fee2e2; }
+        .btn-danger:disabled, .btn-outline:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+        .btn-sm { padding: 5px 10px; font-size: 0.78rem; }
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+        thead tr { background: linear-gradient(90deg, #eff6ff 0%, #f8fafc 100%); border-bottom: 2px solid #eef2ff; }
+        th { padding: 12px 14px; text-align: left; font-weight: 600; color: #1e3a6f; font-size: 0.82rem; white-space: nowrap; }
+        th.center, td.center { text-align: center; }
+        td { padding: 11px 14px; border-bottom: 1px solid #eef2f6; color: #334155; vertical-align: middle; }
+        tbody tr:hover { background: #fafcff; }
+        tbody tr.selected { background: linear-gradient(90deg, #eff6ff 0%, #fff 100%); box-shadow: inset 3px 0 0 #2563eb; }
+        input[type="checkbox"] { accent-color: #2563eb; cursor: pointer; }
+        .code-tag { font-family: Consolas, monospace; font-size: 0.78rem; color: #1e4b8f; background: #eef2ff; padding: 2px 8px; border-radius: 6px; }
+        .tag { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+        .tag-mysql { background: #ecfdf5; color: #047857; }
+        .tag-oracle { background: #fff7ed; color: #c2410c; }
+        .tag-pg { background: #eff6ff; color: #1d4ed8; }
+        .tag-file { background: #f5f3ff; color: #6d28d9; }
+        .tag-api { background: #fef2f2; color: #b91c1c; }
+        .tag-pending { background: #f1f5f9; color: #64748b; }
+        .tag-running { background: #fef9c3; color: #a16207; }
+        .tag-done { background: #dcfce7; color: #15803d; }
+        .tag-fail { background: #fee2e2; color: #b91c1c; }
+        .icon-btn { background: none; border: none; color: #2563eb; cursor: pointer; padding: 4px 8px; border-radius: 6px; font-size: 0.9rem; }
+        .icon-btn:hover { background: #eff6ff; }
+        .table-footer { display: flex; justify-content: space-between; padding-top: 16px; font-size: 0.82rem; color: #64748b; }
+        .empty-state { text-align: center; padding: 48px 20px; color: #94a3b8; }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.45); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 20px; backdrop-filter: blur(2px); }
+        .modal-overlay.show { display: flex; }
+        .modal { background: white; border-radius: 24px; width: 100%; max-width: 720px; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 24px 48px rgba(0,0,0,0.15); }
+        .modal.wide { max-width: 960px; }
+        .modal-header { padding: 22px 28px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eef2f6; }
+        .modal-header h3 { font-size: 1.1rem; color: #1e3a6f; }
+        .modal-close { background: #f1f5f9; border: none; width: 34px; height: 34px; border-radius: 50%; cursor: pointer; color: #64748b; }
+        .modal-close:hover { background: #e2e8f0; color: #1e293b; }
+        .modal-body { padding: 20px 28px; overflow-y: auto; flex: 1; }
+        .modal-footer { padding: 16px 28px 24px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #eef2f6; }
+        .step-bar { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+        .step-item { flex: 1; min-width: 120px; text-align: center; padding: 10px 8px; border-radius: 12px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.78rem; color: #64748b; font-weight: 600; }
+        .step-item.active { background: #eff6ff; border-color: #93c5fd; color: #1e40af; }
+        .step-item.done { background: #f0fdf4; border-color: #86efac; color: #15803d; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 0.82rem; font-weight: 600; color: #1e3a6f; margin-bottom: 6px; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.85rem; font-family: inherit; background: #fafcff; }
+        .form-group textarea { min-height: 80px; resize: vertical; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .field-hint { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
+        .field-error { font-size: 0.75rem; color: #dc2626; margin-top: 4px; display: none; }
+        .required { color: #ef4444; }
+        .wizard-panel { display: none; }
+        .wizard-panel.active { display: block; }
+        .source-type-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        @media (max-width: 700px) { .source-type-grid { grid-template-columns: 1fr 1fr; } }
+        .source-type-card { border: 2px solid #e2e8f0; border-radius: 14px; padding: 14px 12px; text-align: center; cursor: pointer; transition: all 0.2s; background: #fafcff; }
+        .source-type-card:hover { border-color: #93c5fd; background: #eff6ff; }
+        .source-type-card.selected { border-color: #2563eb; background: #eff6ff; box-shadow: 0 0 0 3px rgba(37,99,235,0.12); }
+        .source-type-card.selected::after { content: '\f00c'; font-family: 'Font Awesome 6 Free'; font-weight: 900; position: absolute; top: 8px; right: 8px; font-size: 0.7rem; color: #2563eb; }
+        .source-type-card { position: relative; }
+        .source-config-block { margin-bottom: 18px; padding: 16px; background: #fafcff; border: 1px solid #eef2ff; border-radius: 14px; }
+        .source-config-block h4 { font-size: 0.85rem; color: #1e40af; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+        .source-type-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+        .source-type-card i { font-size: 1.4rem; color: #2563eb; margin-bottom: 6px; }
+        .source-type-card span { display: block; font-size: 0.78rem; font-weight: 600; color: #1e3a6f; }
+        .table-select-wrap { border: 1px solid #eef2ff; border-radius: 12px; max-height: 240px; overflow-y: auto; }
+        .ds-table-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+        .ds-table-tab { padding: 6px 12px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fafcff; font-size: 0.76rem; font-weight: 600; color: #64748b; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+        .ds-table-tab:hover { border-color: #93c5fd; background: #eff6ff; }
+        .ds-table-tab.active { background: #eff6ff; border-color: #2563eb; color: #1e40af; }
+        .ds-table-panel-title { font-size: 0.78rem; font-weight: 600; color: #1e3a6f; margin-bottom: 8px; }
+        .table-select-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #f1f5f9; font-size: 0.84rem; }
+        .table-select-item:last-child { border-bottom: none; }
+        .table-select-item:hover { background: #fafcff; }
+        .rule-check-list { display: flex; flex-direction: column; gap: 10px; }
+        .rule-check-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; background: #fafcff; border: 1px solid #eef2ff; border-radius: 12px; font-size: 0.82rem; color: #475569; line-height: 1.5; }
+        .rule-check-item input { margin-top: 3px; flex-shrink: 0; }
+        .result-tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; border-bottom: 1px solid #eef2f6; padding-bottom: 10px; }
+        .result-tab { padding: 8px 16px; border-radius: 10px 10px 0 0; font-size: 0.82rem; font-weight: 600; color: #64748b; cursor: pointer; border: none; background: transparent; font-family: inherit; }
+        .result-tab.active { color: #1e40af; background: #eff6ff; border-bottom: 2px solid #2563eb; }
+        .result-panel { display: none; }
+        .result-panel.active { display: block; }
+        #panel-graph { height: 420px; }
+        .readonly-canvas-wrap { height: 100%; position: relative; background: radial-gradient(circle at 15% 20%, #eff6ff 0%, transparent 45%), #fafcff; border: 1px solid #eef2f6; border-radius: 12px; overflow: hidden; }
+        .readonly-canvas-wrap:fullscreen { background: radial-gradient(circle at 15% 20%, #eff6ff 0%, transparent 45%), #fafcff; }
+        .readonly-badge { position: absolute; top: 10px; right: 12px; z-index: 4; font-size: 0.72rem; font-weight: 600; color: #64748b; background: rgba(255,255,255,0.92); border: 1px solid #e2e8f0; padding: 4px 10px; border-radius: 20px; }
+        .readonly-canvas-toolbar { position: absolute; top: 10px; left: 10px; z-index: 4; display: flex; gap: 6px; }
+        .readonly-canvas-toolbar .btn { padding: 5px 10px; font-size: 0.72rem; }
+        .readonly-canvas-viewport { position: absolute; inset: 0; cursor: grab; overflow: hidden; }
+        .readonly-canvas-viewport.dragging { cursor: grabbing; }
+        .readonly-canvas-inner { position: absolute; left: 50%; top: 50%; width: 620px; height: 340px; margin-left: -310px; margin-top: -170px; transform-origin: center center; transition: transform 0.05s linear; }
+        .readonly-canvas-inner .canvas-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+        .readonly-canvas-inner .canvas-svg line { stroke: #93c5fd; stroke-width: 2; }
+        .readonly-canvas-inner .canvas-svg text { fill: #64748b; font-size: 11px; font-family: Inter, sans-serif; }
+        .er-node-readonly { position: absolute; background: white; border: 2px solid #2563eb; border-radius: 14px; padding: 10px 14px; min-width: 96px; text-align: center; box-shadow: 0 4px 12px rgba(37,99,235,0.12); cursor: default; user-select: none; pointer-events: none; }
+        .er-node-readonly .name { font-size: 0.8rem; font-weight: 700; color: #1e40af; }
+        .er-node-readonly .sub { font-size: 0.65rem; color: #64748b; margin-top: 3px; }
+        .mini-table { width: 100%; font-size: 0.8rem; }
+        .mini-table th, .mini-table td { padding: 8px 10px; }
+        .toast { position: fixed; bottom: 28px; right: 28px; z-index: 2000; background: #1e293b; color: white; padding: 14px 22px; border-radius: 14px; font-size: 0.85rem; display: none; align-items: center; gap: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); }
+        .toast.show { display: flex; }
+        .toast.success { background: linear-gradient(135deg, #059669, #047857); }
+        .toast.error { background: linear-gradient(135deg, #dc2626, #b91c1c); }
+        .agent-workspace-modal { max-width: none; width: min(1200px, 96vw); height: min(720px, 88vh); max-height: 88vh; }
+        .agent-workspace { display: grid; grid-template-columns: 220px 1fr 280px; flex: 1; min-height: 0; overflow: hidden; border-top: 1px solid #eef2f6; }
+        .agent-sidebar { display: flex; flex-direction: column; border-right: 1px solid #eef2f6; background: #f8fafc; min-height: 0; }
+        .agent-sidebar-head { padding: 12px; border-bottom: 1px solid #eef2f6; }
+        .agent-sidebar-head .btn { width: 100%; justify-content: center; }
+        .agent-history-search { margin: 10px 12px 8px; padding: 7px 10px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.78rem; font-family: inherit; width: calc(100% - 24px); }
+        .agent-history-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+        .agent-history-item { padding: 8px 10px; border-radius: 8px; font-size: 0.75rem; color: #475569; cursor: pointer; margin-bottom: 4px; line-height: 1.4; }
+        .agent-history-item:hover { background: #eef2ff; }
+        .agent-history-item.active { background: #eff6ff; color: #1e40af; font-weight: 600; }
+        .agent-chat { display: flex; flex-direction: column; min-height: 0; background: #fafcff; }
+        .agent-chat-head { padding: 12px 16px; border-bottom: 1px solid #eef2f6; background: white; font-size: 0.82rem; color: #475569; }
+        .agent-chat-head strong { color: #1e40af; }
+        .agent-messages { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px; align-items: center; }
+        .agent-msg { max-width: 520px; width: 100%; }
+        .agent-msg.system { align-self: center; font-size: 0.75rem; color: #94a3b8; text-align: center; max-width: none; }
+        .agent-msg.agent { align-self: center; }
+        .agent-msg-bubble { background: white; border: 1px solid #eef2f6; border-radius: 14px; padding: 12px 14px; font-size: 0.82rem; color: #334155; line-height: 1.55; box-shadow: 0 2px 8px rgba(0,0,0,0.03); }
+        .agent-output-card { background: white; border: 1px solid #bfdbfe; border-radius: 12px; padding: 12px 14px; cursor: pointer; transition: all 0.15s; }
+        .agent-output-card:hover { border-color: #2563eb; box-shadow: 0 4px 12px rgba(37,99,235,0.12); }
+        .agent-output-card .card-title { font-size: 0.82rem; font-weight: 700; color: #1e40af; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+        .agent-output-card .card-desc { font-size: 0.75rem; color: #64748b; }
+        .agent-output-card .card-action { font-size: 0.72rem; color: #2563eb; margin-top: 6px; }
+        .agent-canvas-panel { display: flex; flex-direction: column; border-left: 1px solid #eef2f6; background: white; min-height: 0; }
+        .agent-canvas-head { padding: 12px 14px; border-bottom: 1px solid #eef2f6; font-size: 0.82rem; font-weight: 600; color: #1e3a6f; display: flex; justify-content: space-between; align-items: center; }
+        .agent-canvas-body { flex: 1; overflow-y: auto; padding: 14px; background: radial-gradient(circle at 20% 15%, #eff6ff 0%, transparent 40%), #fafcff; }
+        .agent-canvas-empty { text-align: center; color: #94a3b8; font-size: 0.78rem; padding: 40px 16px; }
+        .agent-canvas-content { font-size: 0.8rem; color: #475569; line-height: 1.6; }
+        .agent-canvas-content h4 { font-size: 0.88rem; color: #1e40af; margin-bottom: 10px; }
+        .agent-progress-bar { height: 4px; background: #e2e8f0; margin: 0 16px 12px; border-radius: 4px; overflow: hidden; }
+        .agent-progress-fill { height: 100%; width: 0; background: linear-gradient(90deg, #2563eb, #3b82f6); transition: width 0.3s; }
+        .agent-hint-bar { padding: 8px 16px; font-size: 0.72rem; color: #64748b; border-top: 1px solid #eef2f6; background: #f8fafc; }
+        @media (max-width: 900px) { .agent-workspace { grid-template-columns: 180px 1fr; } .agent-canvas-panel { display: none; } }
+        .wizard-readonly .source-type-card,
+        .wizard-readonly .table-select-item,
+        .wizard-readonly .ds-table-tab,
+        .wizard-readonly .test-conn-btn { pointer-events: none; opacity: 0.92; }
+        .wizard-readonly .wizard-panel input:not([disabled]),
+        .wizard-readonly .wizard-panel textarea,
+        .wizard-readonly .wizard-panel select { background: #f8fafc; color: #475569; }
+        .icon-btn-agent {
+            background: linear-gradient(135deg, #f97316, #ea580c);
+            color: #fff;
+            box-shadow: 0 2px 10px rgba(249,115,22,0.45);
+        }
+        .icon-btn-agent:hover {
+            background: linear-gradient(135deg, #fb923c, #f97316);
+            color: #fff;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 14px rgba(249,115,22,0.55);
+        }
+        .icon-btn-agent-running {
+            background: linear-gradient(135deg, #a855f7, #7c3aed);
+            box-shadow: 0 2px 10px rgba(124,58,237,0.45);
+            animation: agentPulse 1.6s ease-in-out infinite;
+        }
+        .icon-btn-agent-running:hover {
+            background: linear-gradient(135deg, #c084fc, #9333ea);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(124,58,237,0.55);
+        }
+        .icon-btn-agent-result {
+            background: linear-gradient(135deg, #06b6d4, #0891b2);
+            box-shadow: 0 2px 10px rgba(6,182,212,0.45);
+        }
+        .icon-btn-agent-result:hover {
+            background: linear-gradient(135deg, #22d3ee, #06b6d4);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(6,182,212,0.55);
+        }
+        @keyframes agentPulse {
+            0%, 100% { box-shadow: 0 2px 10px rgba(124,58,237,0.45); }
+            50% { box-shadow: 0 2px 16px rgba(168,85,247,0.75); }
+        }
+        .agent-input-bar {
+            display: flex;
+            gap: 8px;
+            padding: 12px 16px;
+            border-top: 1px solid #eef2f6;
+            background: white;
+            flex-shrink: 0;
+        }
+        .agent-input-bar input {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            font-size: 0.82rem;
+            font-family: inherit;
+            background: #fafcff;
+        }
+        .agent-input-bar input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+        .agent-input-bar input:disabled { background: #f1f5f9; color: #94a3b8; cursor: not-allowed; }
+        .agent-input-bar .btn { flex-shrink: 0; padding: 10px 14px; }
+        .agent-input-bar.is-readonly { opacity: 0.55; }
+        .agent-msg.user { align-self: flex-end; max-width: 520px; width: 100%; }
+        .agent-msg.user .agent-msg-bubble {
+            background: linear-gradient(135deg, #eff6ff, #dbeafe);
+            border-color: #bfdbfe;
+        }
+        .agent-confirm-box {
+            background: linear-gradient(135deg, #eff6ff, #ecfdf5);
+            border: 1px solid #bfdbfe;
+            border-radius: 14px;
+            padding: 14px 16px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(37,99,235,0.08);
+        }
+        .agent-confirm-box .btn { min-width: 96px; justify-content: center; }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+        @media (max-width: 860px) { .phase-steps { display: none; } .user-details { display: none; } .main-body { padding: 16px; } }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <div class="top-bar">
+        <div class="left-area">
+            <a class="back-link" href="智能建模任务.html"><i class="fas fa-arrow-left"></i> 返回智能建模任务</a>
+            <div class="phase-steps">
+                <span class="phase active"><i class="fas fa-cube"></i> 构建</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-layer-group"></i> 编排</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-chart-pie"></i> 分析</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-brain"></i> 决策</span>
+                <i class="fas fa-arrow-right" style="color:#b9c8f0;"></i>
+                <span class="phase"><i class="fas fa-rocket"></i> 赋能</span>
+            </div>
+            <div class="badge-close"><i class="fas fa-sync-alt"></i> 全链路闭环 v2.0</div>
+        </div>
+        <div class="user-info">
+            <div class="user-avatar">弘</div>
+            <div class="user-details">
+                <span class="user-name">弘升 <span class="login-badge"><i class="fas fa-check-circle"></i> 已认证</span></span>
+                <span class="user-role">本体构建工程师</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-body">
+        <div class="page-header">
+            <div class="page-header-inner">
+                <i class="fas fa-database"></i>
+                <h1 class="page-title">数据源建模</h1>
+            </div>
+            <p class="page-desc">面向已有成熟业务系统、结构化数据的场景，通过解析数据库、数据表、数据字段、关联关系，自动反向工程生成标准化本体模型初稿，以「真实落地数据」为基础构建本体。</p>
+            <div class="insight-tag"><i class="fas fa-brain"></i> 本体构建 · 智能建模 · 数据源建模</div>
+        </div>
+
+        <div class="rules-card">
+            <h3><i class="fas fa-info-circle"></i> 能力说明</h3>
+            <div class="rules-grid">
+                <div class="rules-block">
+                    <h4>支持数据源类型</h4>
+                    <ul>
+                        <li>主流数据库：MySQL、Oracle、PostgreSQL、GaussDB、Hive等关系型数据库</li>
+                        <li>数据结构文件：Excel/CSV 数据表、数据字典、数据库建表脚本</li>
+                    </ul>
+                </div>
+                <div class="rules-block">
+                    <h4>核心解析生成规则</h4>
+                    <ul>
+                        <li>数据表 → 逻辑实体；数据表字段 → 业务属性（类型自动同步）</li>
+                        <li>主键/外键/关联索引 → 实体关联关系（含基数识别）</li>
+                        <li>自动过滤冗余、日志、技术、审计等无效字段</li>
+                        <li>识别或补充业务主键；向上聚合提炼业务对象及关系</li>
+                        <li>支持多表批量解析，适配大规模数据建模场景</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="content-card">
+            <div class="toolbar-card">
+                <div class="search-group">
+                    <span class="field-label">任务名称</span>
+                    <input type="text" class="search-input" id="searchName" placeholder="支持模糊查询">
+                    <select class="filter-select" id="filterSource">
+                        <option value="">全部数据源</option>
+                        <option value="MySQL">MySQL</option>
+                        <option value="Oracle">Oracle</option>
+                        <option value="PostgreSQL">PostgreSQL</option>
+                        <option value="GaussDB">GaussDB</option>
+                        <option value="Hive">Hive</option>
+                        <option value="Excel/CSV">Excel/CSV</option>
+                        <option value="数据字典">数据字典</option>
+                        <option value="建表脚本">建表脚本</option>
+                        <option value="API">API</option>
+                    </select>
+                    <select class="filter-select" id="filterStatus">
+                        <option value="">全部状态</option>
+                        <option value="待执行">待执行</option>
+                        <option value="执行中">执行中</option>
+                        <option value="成功">成功</option>
+                        <option value="失败">失败</option>
+                    </select>
+                    <button class="btn btn-primary" id="btnSearch"><i class="fas fa-search"></i> 查询</button>
+                    <button class="btn btn-outline" id="btnReset"><i class="fas fa-undo"></i> 重置</button>
+                </div>
+                <div class="action-group">
+                    <button class="btn btn-danger" id="btnDelete" disabled><i class="fas fa-trash-alt"></i> 删除</button>
+                    <button class="btn btn-primary" id="btnCreate"><i class="fas fa-plus"></i> 新建任务</button>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="center" style="width:40px;"><input type="checkbox" id="checkAll" title="全选"></th>
+                            <th style="width:100px;">任务编码</th>
+                            <th>任务名称</th>
+                            <th style="width:140px;">模型名称</th>
+                            <th style="width:100px;">数据源类型</th>
+                            <th style="width:140px;">数据源</th>
+                            <th class="center" style="width:72px;">解析表数</th>
+                            <th class="center" style="width:80px;">状态</th>
+                            <th style="width:140px;">创建时间</th>
+                            <th class="center" style="width:170px;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="taskTableBody"></tbody>
+                </table>
+            </div>
+            <div class="table-footer">
+                <span id="tableInfo">共 0 条记录</span>
+                <span id="selectedInfo">已选 0 条</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 新建建模任务向导 -->
+<div class="modal-overlay" id="wizardModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 id="wizardModalTitle">新建建模任务</h3>
+            <button class="modal-close" id="wizardClose"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <div class="step-bar" id="stepBar">
+                <div class="step-item active" data-step="1">1. 基本信息</div>
+                <div class="step-item" data-step="2">2. 数据源配置</div>
+                <div class="step-item" data-step="3">3. 选择数据表</div>
+                <div class="step-item" data-step="4">4. 解析要素</div>
+            </div>
+
+            <div class="wizard-panel active" data-panel="1">
+                <div class="form-group">
+                    <label>任务名称 <span class="required">*</span></label>
+                    <input type="text" id="wizName" placeholder="如：采购订单库逆向建模">
+                    <div class="field-error" id="errWizName">任务名称不能为空</div>
+                </div>
+                <div class="form-group">
+                    <label>模型名称 <span class="required">*</span></label>
+                    <input type="text" id="wizModelName" placeholder="如：采购域本体模型">
+                    <div class="field-error" id="errWizModelName">模型名称不能为空</div>
+                </div>
+                <div class="form-group">
+                    <label>数据源类型 <span class="required">*</span></label>
+                    <div class="field-hint" style="margin-bottom:8px;">可多选，支持在同一任务中混合提交 MySQL、Oracle、PostgreSQL、GaussDB、Hive、Excel/CSV、数据字典、建表脚本等多种输入来源</div>
+                    <div class="source-type-grid" id="sourceTypeGrid">
+                        <div class="source-type-card selected" data-type="MySQL"><i class="fas fa-database"></i><span>MySQL</span></div>
+                        <div class="source-type-card" data-type="Oracle"><i class="fas fa-database"></i><span>Oracle</span></div>
+                        <div class="source-type-card" data-type="PostgreSQL"><i class="fas fa-database"></i><span>PostgreSQL</span></div>
+                        <div class="source-type-card" data-type="GaussDB"><i class="fas fa-database"></i><span>GaussDB</span></div>
+                        <div class="source-type-card" data-type="Hive"><i class="fas fa-database"></i><span>Hive</span></div>
+                        <div class="source-type-card" data-type="Excel/CSV"><i class="fas fa-file-excel"></i><span>Excel/CSV</span></div>
+                        <div class="source-type-card" data-type="数据字典"><i class="fas fa-book"></i><span>数据字典</span></div>
+                        <div class="source-type-card" data-type="建表脚本"><i class="fas fa-file-code"></i><span>建表脚本</span></div>
+                    </div>
+                    <div class="field-error" id="errSourceTypes" style="display:none;">请至少选择一种数据源类型</div>
+                </div>
+            </div>
+
+            <div class="wizard-panel" data-panel="2">
+                <div id="sourceConfigContainer">
+                    <div class="source-config-block" data-source="MySQL">
+                        <h4><i class="fas fa-database"></i> MySQL 数据源</h4>
+                        <div class="form-row">
+                            <div class="form-group"><label>主机地址</label><input type="text" id="mysqlHost" value="192.168.1.100"></div>
+                            <div class="form-group"><label>端口</label><input type="text" id="mysqlPort" value="3306"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>数据库名</label><input type="text" id="mysqlDb" value="erp_purchase"></div>
+                            <div class="form-group"><label>Schema</label><input type="text" id="mysqlSchema" placeholder="可选"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>用户名</label><input type="text" id="mysqlUser" value="readonly"></div>
+                            <div class="form-group"><label>密码</label><input type="password" id="mysqlPwd" value="******"></div>
+                        </div>
+                        <button class="btn btn-outline btn-sm test-conn-btn" type="button" data-source="MySQL"><i class="fas fa-link"></i> 测试连接</button>
+                        <span class="conn-status" id="connStatusMySQL" style="margin-left:10px;font-size:0.82rem;color:#15803d;display:none;"><i class="fas fa-check-circle"></i> 连接成功，已发现 18 张数据表</span>
+                    </div>
+                    <div class="source-config-block" data-source="Oracle" style="display:none;">
+                        <h4><i class="fas fa-database"></i> Oracle 数据源</h4>
+                        <div class="form-row">
+                            <div class="form-group"><label>主机地址</label><input type="text" id="oracleHost" value="10.0.2.15"></div>
+                            <div class="form-group"><label>端口</label><input type="text" id="oraclePort" value="1521"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>服务名/SID</label><input type="text" id="oracleService" value="ERP_MDM"></div>
+                            <div class="form-group"><label>Schema</label><input type="text" id="oracleSchema" placeholder="可选"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>用户名</label><input type="text" id="oracleUser" value="readonly"></div>
+                            <div class="form-group"><label>密码</label><input type="password" id="oraclePwd" value="******"></div>
+                        </div>
+                        <button class="btn btn-outline btn-sm test-conn-btn" type="button" data-source="Oracle"><i class="fas fa-link"></i> 测试连接</button>
+                        <span class="conn-status" id="connStatusOracle" style="margin-left:10px;font-size:0.82rem;color:#15803d;display:none;"><i class="fas fa-check-circle"></i> 连接成功，已发现 24 张数据表</span>
+                    </div>
+                    <div class="source-config-block" data-source="PostgreSQL" style="display:none;">
+                        <h4><i class="fas fa-database"></i> PostgreSQL 数据源</h4>
+                        <div class="form-row">
+                            <div class="form-group"><label>主机地址</label><input type="text" id="pgHost" value="192.168.1.120"></div>
+                            <div class="form-group"><label>端口</label><input type="text" id="pgPort" value="5432"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>数据库名</label><input type="text" id="pgDb" value="ontology_src"></div>
+                            <div class="form-group"><label>Schema</label><input type="text" id="pgSchema" value="public"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>用户名</label><input type="text" id="pgUser" value="readonly"></div>
+                            <div class="form-group"><label>密码</label><input type="password" id="pgPwd" value="******"></div>
+                        </div>
+                        <button class="btn btn-outline btn-sm test-conn-btn" type="button" data-source="PostgreSQL"><i class="fas fa-link"></i> 测试连接</button>
+                        <span class="conn-status" id="connStatusPostgreSQL" style="margin-left:10px;font-size:0.82rem;color:#15803d;display:none;"><i class="fas fa-check-circle"></i> 连接成功，已发现 12 张数据表</span>
+                    </div>
+                    <div class="source-config-block" data-source="GaussDB" style="display:none;">
+                        <h4><i class="fas fa-database"></i> GaussDB 数据源</h4>
+                        <div class="form-row">
+                            <div class="form-group"><label>主机地址</label><input type="text" id="gaussHost" value="192.168.1.130"></div>
+                            <div class="form-group"><label>端口</label><input type="text" id="gaussPort" value="5432"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>数据库名</label><input type="text" id="gaussDb" value="gauss_erp"></div>
+                            <div class="form-group"><label>Schema</label><input type="text" id="gaussSchema" value="public"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>用户名</label><input type="text" id="gaussUser" value="readonly"></div>
+                            <div class="form-group"><label>密码</label><input type="password" id="gaussPwd" value="******"></div>
+                        </div>
+                        <button class="btn btn-outline btn-sm test-conn-btn" type="button" data-source="GaussDB"><i class="fas fa-link"></i> 测试连接</button>
+                        <span class="conn-status" id="connStatusGaussDB" style="margin-left:10px;font-size:0.82rem;color:#15803d;display:none;"><i class="fas fa-check-circle"></i> 连接成功，已发现 15 张数据表</span>
+                    </div>
+                    <div class="source-config-block" data-source="Hive" style="display:none;">
+                        <h4><i class="fas fa-database"></i> Hive 数据源</h4>
+                        <div class="form-row">
+                            <div class="form-group"><label>HiveServer 地址</label><input type="text" id="hiveHost" value="192.168.1.140"></div>
+                            <div class="form-group"><label>端口</label><input type="text" id="hivePort" value="10000"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>数据库/库名</label><input type="text" id="hiveDb" value="dw_erp"></div>
+                            <div class="form-group"><label>认证方式</label><input type="text" id="hiveAuth" value="LDAP" placeholder="如 LDAP / Kerberos"></div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>用户名</label><input type="text" id="hiveUser" value="readonly"></div>
+                            <div class="form-group"><label>密码</label><input type="password" id="hivePwd" value="******"></div>
+                        </div>
+                        <button class="btn btn-outline btn-sm test-conn-btn" type="button" data-source="Hive"><i class="fas fa-link"></i> 测试连接</button>
+                        <span class="conn-status" id="connStatusHive" style="margin-left:10px;font-size:0.82rem;color:#15803d;display:none;"><i class="fas fa-check-circle"></i> 连接成功，已发现 32 张数据表</span>
+                    </div>
+                    <div class="source-config-block" data-source="Excel/CSV" style="display:none;">
+                        <h4><i class="fas fa-file-excel"></i> Excel/CSV 数据源</h4>
+                        <div class="form-group">
+                            <label>上传文件</label>
+                            <input type="file" id="excelFile" accept=".xlsx,.csv" multiple>
+                            <div class="field-hint">支持上传多个 Excel/CSV 数据表文件</div>
+                        </div>
+                    </div>
+                    <div class="source-config-block" data-source="数据字典" style="display:none;">
+                        <h4><i class="fas fa-book"></i> 数据字典</h4>
+                        <div class="form-group">
+                            <label>上传文件</label>
+                            <input type="file" id="dictFile" accept=".xlsx,.xls,.csv,.doc,.docx,.pdf" multiple>
+                            <div class="field-hint">支持上传 Excel、Word、PDF 等格式的数据字典文档</div>
+                        </div>
+                    </div>
+                    <div class="source-config-block" data-source="建表脚本" style="display:none;">
+                        <h4><i class="fas fa-file-code"></i> 建表脚本</h4>
+                        <div class="form-group">
+                            <label>上传脚本</label>
+                            <input type="file" id="sqlFile" accept=".sql" multiple>
+                            <div class="field-hint">支持上传多个数据库建表脚本（.sql）</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="wizard-panel" data-panel="3">
+                <div class="form-group">
+                    <label>选择待解析数据表 <span class="required">*</span></label>
+                    <div class="ds-table-tabs" id="dsTableTabs"></div>
+                    <div id="dsTablePanelWrap"></div>
+                    <div class="field-hint" style="margin-top:8px;">按已配置数据源分别选择 Schema 与数据表；已选 <strong id="selectedTableCount">0</strong> 张表</div>
+                </div>
+            </div>
+
+            <div class="wizard-panel" data-panel="4">
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label>解析要素 <span class="required">*</span></label>
+                    <div class="field-hint" style="margin-bottom:8px;">勾选本次任务需要解析输出的本体要素类型</div>
+                    <div class="rule-check-list" id="parseElementList">
+                        <label class="rule-check-item"><input type="checkbox" class="parse-element-check" value="逻辑实体" checked> 逻辑实体</label>
+                        <label class="rule-check-item"><input type="checkbox" class="parse-element-check" value="业务属性" checked> 业务属性</label>
+                        <label class="rule-check-item"><input type="checkbox" class="parse-element-check" value="实体关系" checked> 实体关系</label>
+                        <label class="rule-check-item"><input type="checkbox" class="parse-element-check" value="业务对象" checked> 业务对象</label>
+                    </div>
+                    <div class="field-error" id="errParseElements">请至少选择一种解析要素</div>
+                </div>
+                <div class="form-group" style="margin-top:16px;margin-bottom:0;">
+                    <label>智能体提示词（可选）</label>
+                    <textarea id="parsePrompt" rows="3" placeholder="输入解析指令，将一并提交给智能体，指导大模型执行数据源逆向建模…"></textarea>
+                    <div class="field-hint">提示词将与解析要素一并传递给智能体，用于约束字段过滤、实体命名与关系识别范围</div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="wizardCancel">取消</button>
+            <button class="btn btn-outline" id="wizardPrev" style="display:none;"><i class="fas fa-arrow-left"></i> 上一步</button>
+            <button class="btn btn-primary" id="wizardNext"><i class="fas fa-arrow-right"></i> 下一步</button>
+            <button class="btn btn-primary" id="wizardSubmit" style="display:none;"><i class="fas fa-plus"></i> 创建任务</button>
+        </div>
+    </div>
+</div>
+
+<!-- 解析结果 -->
+<div class="modal-overlay" id="resultModal">
+    <div class="modal wide">
+        <div class="modal-header">
+            <h3 id="resultTitle">生成结果阅览</h3>
+            <button class="modal-close" id="resultClose"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <div class="result-tabs">
+                <button class="result-tab active" data-tab="entity">逻辑实体 (8)</button>
+                <button class="result-tab" data-tab="attr">业务属性 (56)</button>
+                <button class="result-tab" data-tab="rel">实体关系 (7)</button>
+                <button class="result-tab" data-tab="biz">业务对象 (3)</button>
+                <button class="result-tab" data-tab="graph">可视化视图</button>
+            </div>
+            <div class="result-panel active" id="panel-entity">
+                <table class="mini-table">
+                    <thead><tr><th>逻辑实体编码</th><th>逻辑实体名称</th><th>逻辑实体定义</th><th>是否主逻辑实体</th><th>数据类别</th><th>归属业务对象</th><th>来源数据表</th></tr></thead>
+                    <tbody>
+                        <tr><td><span class="code-tag">LE000006</span></td><td>采购订单头</td><td>采购订单的汇总与控制信息，承载订单编号、供应商等头级属性</td><td>是</td><td>事务数据</td><td>采购订单</td><td>po_header</td></tr>
+                        <tr><td><span class="code-tag">LE000007</span></td><td>采购订单行</td><td>采购订单的具体明细行，记录物料、数量等行级属性</td><td>否</td><td>事务数据</td><td>采购订单</td><td>po_line</td></tr>
+                        <tr><td><span class="code-tag">LE000001</span></td><td>采购需求头</td><td>采购需求的汇总与控制信息，承载需求单号、申请人等头级属性</td><td>是</td><td>事务数据</td><td>采购需求</td><td>pr_header</td></tr>
+                        <tr><td><span class="code-tag">LE000002</span></td><td>采购需求行</td><td>采购需求的具体明细行，记录物料、数量等行级属性</td><td>否</td><td>事务数据</td><td>采购需求</td><td>pr_line</td></tr>
+                        <tr><td colspan="7" style="text-align:center;color:#94a3b8;">… 共 8 个逻辑实体</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="result-panel" id="panel-attr">
+                <table class="mini-table">
+                    <thead><tr><th>业务属性编码</th><th>属性名称</th><th>业务属性定义</th><th>所属逻辑实体</th><th>数据类型</th><th>是否主键</th><th>来源数据表</th><th>来源字段</th></tr></thead>
+                    <tbody>
+                        <tr><td><span class="code-tag">AT00000002</span></td><td>采购订单编号</td><td>唯一标识一份采购订单的业务编号</td><td>采购订单头</td><td>NVARCHAR</td><td>是</td><td>po_header</td><td>po_no</td></tr>
+                        <tr><td><span class="code-tag">AT00000015</span></td><td>供应商编码</td><td>标识采购订单对应供应商的编码</td><td>采购订单头</td><td>NVARCHAR</td><td>否</td><td>po_header</td><td>vendor_code</td></tr>
+                        <tr><td><span class="code-tag">AT00000028</span></td><td>行号</td><td>标识采购订单行在订单内的序号</td><td>采购订单行</td><td>INTEGER</td><td>否</td><td>po_line</td><td>line_no</td></tr>
+                        <tr><td colspan="8" style="text-align:center;color:#94a3b8;">已过滤 create_time、update_by 等 12 个技术字段 · 共 56 个业务属性</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="result-panel" id="panel-rel">
+                <table class="mini-table">
+                    <thead><tr><th>关系编码</th><th>关系名称</th><th>关系描述</th><th>源逻辑实体</th><th>目标逻辑实体</th><th>基数</th><th>源关联属性</th><th>目标关联属性</th></tr></thead>
+                    <tbody>
+                        <tr><td><span class="code-tag">REL000001</span></td><td>订单头含订单行</td><td>一个采购订单头包含多条采购订单行</td><td>采购订单头</td><td>采购订单行</td><td>一对多</td><td>采购订单编号</td><td>采购订单编号</td></tr>
+                        <tr><td><span class="code-tag">REL000002</span></td><td>需求头含需求行</td><td>一个采购需求头包含多条采购需求行</td><td>采购需求头</td><td>采购需求行</td><td>一对多</td><td>采购需求编号</td><td>采购需求编号</td></tr>
+                        <tr><td><span class="code-tag">REL000003</span></td><td>需求行关联订单行</td><td>采购需求行与采购订单行存在多对多关联</td><td>采购需求行</td><td>采购订单行</td><td>多对多</td><td>需求行号</td><td>订单行号</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="result-panel" id="panel-biz">
+                <table class="mini-table">
+                    <thead><tr><th>业务对象编码</th><th>业务对象名称</th><th>业务对象定义</th><th>包含逻辑实体</th><th>数据类别</th></tr></thead>
+                    <tbody>
+                        <tr><td><span class="code-tag">B00005</span></td><td>采购订单</td><td>企业向供应商下达的采购交易单据，包含订单头与订单行</td><td>采购订单头、采购订单行</td><td>事务数据</td></tr>
+                        <tr><td><span class="code-tag">B00004</span></td><td>采购需求</td><td>业务部门发起的采购物料需求，包含需求头与需求行</td><td>采购需求头、采购需求行</td><td>事务数据</td></tr>
+                        <tr><td><span class="code-tag">B00001</span></td><td>供应商</td><td>与企业发生采购业务往来的外部供应商主数据</td><td>（关联引用）</td><td>主数据</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="result-panel" id="panel-graph">
+                <div class="readonly-canvas-wrap">
+                    <span class="readonly-badge"><i class="fas fa-lock"></i> 只读视图 · 可拖拽平移，不可编辑</span>
+                    <div class="readonly-canvas-toolbar">
+                        <button class="btn btn-ghost" type="button" id="btnCanvasFullscreen" title="全屏"><i class="fas fa-expand"></i></button>
+                        <button class="btn btn-ghost" type="button" id="btnCanvasZoomIn" title="放大"><i class="fas fa-search-plus"></i></button>
+                        <button class="btn btn-ghost" type="button" id="btnCanvasZoomOut" title="缩小"><i class="fas fa-search-minus"></i></button>
+                        <button class="btn btn-ghost" type="button" id="btnCanvasReset" title="重置"><i class="fas fa-redo"></i></button>
+                    </div>
+                    <div class="readonly-canvas-viewport" id="readonlyCanvasViewport">
+                        <div class="readonly-canvas-inner" id="readonlyCanvasInner">
+                            <svg class="canvas-svg" viewBox="0 0 600 380" preserveAspectRatio="none">
+                                <line x1="130" y1="100" x2="280" y2="100"/><text x="190" y="92">1:N</text>
+                                <line x1="380" y1="100" x2="380" y2="200"/><text x="388" y="155">1:N</text>
+                                <line x1="430" y1="250" x2="500" y2="250"/><text x="455" y="242">N:1</text>
+                            </svg>
+                            <div class="er-node-readonly" style="left:8%;top:18%;"><div class="name">采购需求头</div><div class="sub">逻辑实体</div></div>
+                            <div class="er-node-readonly" style="left:38%;top:12%;"><div class="name">采购订单头</div><div class="sub">逻辑实体</div></div>
+                            <div class="er-node-readonly" style="left:58%;top:48%;"><div class="name">采购订单行</div><div class="sub">逻辑实体</div></div>
+                            <div class="er-node-readonly" style="left:72%;top:58%;"><div class="name">供应商</div><div class="sub">逻辑实体</div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="resultCancel">关闭</button>
+            <button class="btn btn-primary" id="resultMerge"><i class="fas fa-balance-scale"></i> 消歧与整合</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="agentModal">
+    <div class="modal agent-workspace-modal">
+        <div class="modal-header">
+            <h3><i class="fas fa-robot"></i> 智能体执行过程</h3>
+            <button class="modal-close" id="agentModalClose" title="关闭窗口（后台继续运行）"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="agent-progress-bar"><div class="agent-progress-fill" id="agentProgressFill"></div></div>
+        <div class="agent-workspace">
+            <aside class="agent-sidebar">
+                <div class="agent-sidebar-head">
+                    <button class="btn btn-outline btn-sm" type="button" id="agentNewChat"><i class="fas fa-plus"></i> 新对话</button>
+                </div>
+                <input type="text" class="agent-history-search" id="agentHistorySearch" placeholder="搜索历史会话…">
+                <div class="agent-history-list" id="agentHistoryList"></div>
+            </aside>
+            <section class="agent-chat">
+                <div class="agent-chat-head">任务：<strong id="agentTaskName">—</strong> · 模型：<strong id="agentModelName">—</strong></div>
+                <div class="agent-messages" id="agentMessages"></div>
+                <div class="agent-input-bar" id="agentInputBar">
+                    <input type="text" id="agentInput" placeholder="输入补充说明或解析指令，与智能体交互以提升识别效果…">
+                    <button type="button" class="btn btn-primary btn-sm" id="agentSendBtn" title="发送"><i class="fas fa-paper-plane"></i></button>
+                </div>
+            </section>
+            <aside class="agent-canvas-panel" id="agentCanvasPanel">
+                <div class="agent-canvas-head">
+                    <span id="agentCanvasTitle">Canvas 预览</span>
+                    <button class="btn btn-ghost btn-sm" type="button" id="agentCanvasClose" title="关闭预览"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="agent-canvas-body" id="agentCanvasBody">
+                    <div class="agent-canvas-empty"><i class="fas fa-hand-pointer" style="display:block;font-size:1.4rem;margin-bottom:8px;color:#cbd5e1;"></i>点击对话中的产出卡片，在右侧 Canvas 查看详情</div>
+                </div>
+            </aside>
+        </div>
+        <div class="agent-hint-bar"><i class="fas fa-info-circle"></i> 关闭本窗口不影响智能体在后台继续执行</div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="deleteModal">
+    <div class="modal" style="max-width:440px;">
+        <div class="modal-header"><h3>确认删除</h3><button class="modal-close" id="deleteModalClose"><i class="fas fa-times"></i></button></div>
+        <div class="modal-body"><p style="color:#475569;line-height:1.6;">确定删除选中的 <strong id="deleteCount" style="color:#dc2626;">0</strong> 条逆向任务吗？</p></div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" id="deleteCancel">取消</button>
+            <button class="btn btn-danger" id="deleteConfirm"><i class="fas fa-trash-alt"></i> 确定删除</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"><i class="fas fa-check-circle"></i><span id="toastMsg"></span></div>
+
+<script>
+    const SOURCE_TAG = {
+        MySQL: 'tag-mysql', Oracle: 'tag-oracle', PostgreSQL: 'tag-pg',
+        GaussDB: 'tag-pg', Hive: 'tag-mysql',
+        'Excel/CSV': 'tag-file', '数据字典': 'tag-file', '建表脚本': 'tag-file', API: 'tag-api'
+    };
+    const STATUS_TAG = { '待执行': 'tag-pending', '执行中': 'tag-running', '成功': 'tag-done', '失败': 'tag-fail' };
+
+    const SOURCE_TABLE_CATALOG = {
+        MySQL: {
+            hasSchema: true,
+            schemas: ['erp_purchase', 'erp_common'],
+            tables: {
+                erp_purchase: ['po_header', 'po_line', 'pr_header', 'pr_line', 'pr_allocation'],
+                erp_common: ['supplier', 'material', 'dept', 'cost_center']
+            }
+        },
+        Oracle: {
+            hasSchema: true,
+            schemas: ['ERP_MDM'],
+            tables: { ERP_MDM: ['MD_SUPPLIER', 'MD_MATERIAL', 'MD_UOM', 'MD_WAREHOUSE'] }
+        },
+        PostgreSQL: {
+            hasSchema: true,
+            schemas: ['public', 'staging'],
+            tables: {
+                public: ['po_header', 'po_line', 'supplier'],
+                staging: ['temp_import', 'audit_trail']
+            }
+        },
+        GaussDB: {
+            hasSchema: true,
+            schemas: ['public'],
+            tables: { public: ['po_header', 'po_line', 'employee'] }
+        },
+        Hive: {
+            hasSchema: false,
+            tables: { default: ['dw_po_fact', 'dw_pr_fact', 'dw_supplier_dim', 'sys_log'] }
+        },
+        'Excel/CSV': {
+            hasSchema: false,
+            tables: { default: ['supplier_master.csv', 'material_list.xlsx', 'price_sheet.csv'] }
+        },
+        '数据字典': {
+            hasSchema: false,
+            tables: { default: ['采购订单头', '采购订单行', '采购需求头', '采购需求行'] }
+        },
+        '建表脚本': {
+            hasSchema: false,
+            tables: { default: ['po_header', 'po_line', 'pr_header', 'pr_line', 'supplier'] }
+        }
+    };
+
+    let tasks = [
+        { id: 1, code: 'RM000001', name: '采购订单库本体建模', modelName: '采购域本体模型', sourceTypes: ['MySQL', '建表脚本'], sourceName: 'erp_purchase@192.168.1.100 + init_ddl.sql', tableCount: 8, status: '成功', createdAt: '2026-06-08 14:30', hasResult: true, config: { parsePrompt: '', sourceTypes: ['MySQL', '建表脚本'], selectedTables: { MySQL: ['po_header', 'po_line', 'pr_header', 'pr_line'], '建表脚本': ['po_header', 'po_line'] }, parseElements: ['逻辑实体', '业务属性', '实体关系', '业务对象'] } },
+        { id: 2, code: 'RM000002', name: 'ERP物料主数据逆向', modelName: '物料主数据模型', sourceTypes: ['Oracle'], sourceName: 'ERP_MDM@10.0.2.15', tableCount: 0, status: '执行中', createdAt: '2026-06-10 09:15', hasResult: false, config: { parsePrompt: '', sourceTypes: ['Oracle'], selectedTables: { Oracle: ['mdm_material', 'mdm_category'] }, parseElements: ['逻辑实体', '业务属性', '实体关系', '业务对象'] } },
+        { id: 3, code: 'RM000003', name: '供应商CSV批量导入', modelName: '供应商主数据模型', sourceTypes: ['Excel/CSV'], sourceName: 'supplier_master.csv', tableCount: 1, status: '待执行', createdAt: '2026-06-11 11:20', hasResult: false, config: { parsePrompt: '', sourceTypes: ['Excel/CSV'], selectedTables: { 'Excel/CSV': ['supplier_master.csv'] }, parseElements: ['逻辑实体', '业务属性', '实体关系', '业务对象'] } }
+    ];
+
+    let nextId = 4, nextCode = 4;
+    let queryName = '', querySource = '', queryStatus = '';
+    const selectedIds = new Set();
+    let wizardStep = 1;
+    let wizardMode = 'create';
+    let detailTaskId = null;
+    const parseTimers = {};
+    let currentAgentTaskId = null;
+    let currentAgentSessionId = null;
+    const agentSessionsByTask = {};
+    const selectedSourceTypes = new Set(['MySQL']);
+    let activeTableSourceTab = '';
+    let selectedTablesBySource = {};
+    let selectedSchemaBySource = {};
+    let tableSearchKeyword = '';
+
+    const taskTableBody = document.getElementById('taskTableBody');
+    const checkAll = document.getElementById('checkAll');
+    const btnDelete = document.getElementById('btnDelete');
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function showToast(msg, type = 'success') {
+        const toast = document.getElementById('toast');
+        document.getElementById('toastMsg').textContent = msg;
+        toast.className = 'toast show ' + type;
+        toast.querySelector('i').className = type === 'success' ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
+        setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+    function openModal(id) { document.getElementById(id).classList.add('show'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+    const FROM_HUB = new URLSearchParams(location.search).get('from') === 'hub';
+    function returnToHubIfNeeded() {
+        if (FROM_HUB) location.href = '智能建模任务.html';
+    }
+    function closeResultModal() {
+        closeModal('resultModal');
+        returnToHubIfNeeded();
+    }
+    function closeAgentModal() {
+        closeModal('agentModal');
+        returnToHubIfNeeded();
+    }
+
+    const AGENT_START_MSG = '智能体已接收任务，开始执行数据源逆向建模…';
+    const AGENT_CANVAS_EMPTY = '<div class="agent-canvas-empty"><i class="fas fa-hand-pointer" style="display:block;font-size:1.4rem;margin-bottom:8px;color:#cbd5e1;"></i>点击对话中的产出卡片，在右侧 Canvas 查看详情</div>';
+
+    function resetAgentCanvas() {
+        document.getElementById('agentCanvasTitle').textContent = 'Canvas 预览';
+        document.getElementById('agentCanvasBody').innerHTML = AGENT_CANVAS_EMPTY;
+    }
+    function ensureTaskSessions(task) {
+        if (!agentSessionsByTask[task.id]) {
+            agentSessionsByTask[task.id] = [
+                { id: 1, title: task.name, sub: task.code + ' · ' + task.status, createdAt: task.createdAt }
+            ];
+        }
+        return agentSessionsByTask[task.id];
+    }
+    function updateAgentInputState(task) {
+        const input = document.getElementById('agentInput');
+        const sendBtn = document.getElementById('agentSendBtn');
+        const bar = document.getElementById('agentInputBar');
+        const newChatBtn = document.getElementById('agentNewChat');
+        const readonly = task && (task.status === '成功' || task.status === '失败');
+        input.disabled = readonly;
+        sendBtn.disabled = readonly;
+        if (newChatBtn) newChatBtn.disabled = readonly;
+        bar.classList.toggle('is-readonly', readonly);
+        const hint = document.querySelector('.agent-hint-bar');
+        if (hint) {
+            if (readonly) {
+                hint.innerHTML = '<i class="fas fa-lock"></i> 任务已结束，执行结果为只读，不可继续对话';
+            } else if (task && task.pendingConfirm) {
+                hint.innerHTML = '<i class="fas fa-hand-pointer"></i> 请点击对话中的「确认」结束执行；未确认前可继续对话补充说明';
+            } else {
+                hint.innerHTML = '<i class="fas fa-info-circle"></i> 关闭本窗口不影响智能体在后台继续执行 · 可通过下方输入框补充说明';
+            }
+        }
+    }
+    function openAgentPanel(task, opts) {
+        currentAgentTaskId = task.id;
+        const sessions = ensureTaskSessions(task);
+        currentAgentSessionId = opts && opts.sessionId ? opts.sessionId : sessions[0].id;
+        document.getElementById('agentTaskName').textContent = task.name;
+        document.getElementById('agentModelName').textContent = task.modelName || '—';
+        if (!opts || !opts.resume) {
+            document.getElementById('agentMessages').innerHTML = '';
+            document.getElementById('agentProgressFill').style.width = (task.status === '成功' || task.status === '失败') ? '100%' : '0%';
+        }
+        resetAgentCanvas();
+        renderAgentHistoryList(task.id, currentAgentSessionId);
+        updateAgentInputState(task);
+        if (opts && opts.viewResult) showAgentExecutionResult(task);
+        else if (task.status === '待执行' && (!opts || !opts.skipIntro)) {
+            appendAgentMessage('任务待执行，可通过下方输入框补充说明，智能体将在执行过程中参考您的指令。', 'system');
+            showAgentTaskInChat(task, true);
+        } else if (opts && opts.resume && document.getElementById('agentMessages').children.length === 0) {
+            appendAgentMessage('智能体正在执行任务，请稍候…', 'system');
+        }
+        if (task.pendingConfirm && !document.getElementById('agentConfirmBar')) {
+            showAgentConfirmPrompt(task);
+        }
+        openModal('agentModal');
+    }
+    function renderAgentHistoryList(taskId, activeSessionId) {
+        const task = tasks.find(t => t.id === taskId);
+        if (!task) return;
+        const sessions = ensureTaskSessions(task);
+        const list = document.getElementById('agentHistoryList');
+        list.innerHTML = sessions.map(s => {
+            const active = activeSessionId && s.id === activeSessionId ? ' active' : '';
+            return `<div class="agent-history-item${active}" data-session-id="${s.id}">${esc(s.title)}<div style="font-size:0.68rem;color:#94a3b8;margin-top:2px;">${esc(s.sub || task.code)}</div></div>`;
+        }).join('') || '<div class="agent-history-item" style="color:#94a3b8;cursor:default;">暂无会话</div>';
+        list.querySelectorAll('.agent-history-item[data-session-id]').forEach(el => {
+            el.addEventListener('click', () => {
+                list.querySelectorAll('.agent-history-item').forEach(x => x.classList.remove('active'));
+                el.classList.add('active');
+                currentAgentSessionId = parseInt(el.dataset.sessionId, 10);
+                loadAgentSession(task, currentAgentSessionId);
+            });
+        });
+    }
+    function loadAgentSession(task, sessionId) {
+        document.getElementById('agentMessages').innerHTML = '';
+        document.getElementById('agentProgressFill').style.width = (task.status === '成功' || task.status === '失败') ? '100%' : '0%';
+        resetAgentCanvas();
+        const session = ensureTaskSessions(task).find(s => s.id === sessionId);
+        appendAgentMessage('已切换至会话「' + (session ? session.title : '') + '」', 'system');
+        if (task.status === '成功' || task.status === '失败') showAgentExecutionResult(task);
+        else showAgentTaskInChat(task, true);
+    }
+    function showAgentTaskInChat(task, skipHeader) {
+        if (!skipHeader) {
+            document.getElementById('agentTaskName').textContent = task.name;
+            document.getElementById('agentModelName').textContent = task.modelName || '—';
+            document.getElementById('agentMessages').innerHTML = '';
+            document.getElementById('agentProgressFill').style.width = '0%';
+            resetAgentCanvas();
+        }
+        if (!skipHeader) appendAgentMessage('已加载任务「' + task.name + '」', 'system');
+        appendAgentCard({
+            title: '任务基本信息',
+            desc: task.code + ' · ' + (task.modelName || '—') + ' · ' + task.status,
+            canvas: '<h4>任务基本信息</h4><p><strong>任务编码：</strong>' + esc(task.code) + '</p><p><strong>任务名称：</strong>' + esc(task.name) + '</p><p><strong>模型名称：</strong>' + esc(task.modelName || '—') + '</p><p><strong>状态：</strong>' + esc(task.status) + '</p><p><strong>创建时间：</strong>' + esc(task.createdAt) + '</p>'
+        });
+        appendAgentCard({
+            title: '数据源配置摘要',
+            desc: (task.sourceTypes || []).join('、') + ' · ' + (task.sourceName || '—'),
+            canvas: '<h4>数据源配置摘要</h4><p><strong>数据源类型：</strong>' + esc((task.sourceTypes || []).join('、')) + '</p><p><strong>数据源：</strong>' + esc(task.sourceName || '—') + '</p><p><strong>解析表数：</strong>' + (task.tableCount || '—') + '</p>'
+        });
+    }
+    function showAgentExecutionResult(task) {
+        appendAgentMessage(AGENT_START_MSG, 'system');
+        if (task.status === '成功') {
+            appendAgentMessage('建模任务已成功完成，以下为智能体执行过程摘要（只读）。', 'agent');
+            appendAgentCard({
+                title: '本体模型草案',
+                desc: '共 4 个逻辑实体 · 18 个业务属性 · 2 个业务对象',
+                canvas: '<h4>本体模型草案</h4><p>逻辑实体：采购需求头、采购需求行、采购订单头、采购订单行</p><p>业务对象：采购需求、采购订单</p><p>解析完成，可返回主界面查看模型展示。</p>'
+            });
+            setAgentProgress(100);
+        } else {
+            appendAgentMessage('建模任务执行失败。请查看错误摘要并调整任务配置后重新执行。', 'agent');
+            appendAgentCard({
+                title: '执行失败摘要',
+                desc: task.code + ' · 数据源连接或表结构解析异常',
+                canvas: '<h4>执行失败摘要</h4><p><strong>任务编码：</strong>' + esc(task.code) + '</p><p><strong>失败原因：</strong>数据源连接超时或表结构解析中断</p><p>建议检查数据源连接与所选数据表后重试。</p>'
+            });
+            setAgentProgress(100);
+        }
+    }
+    function agentNewSession() {
+        const task = tasks.find(t => t.id === currentAgentTaskId);
+        if (!task || task.status === '成功' || task.status === '失败') return;
+        const sessions = ensureTaskSessions(task);
+        const newId = Math.max(...sessions.map(s => s.id), 0) + 1;
+        sessions.unshift({ id: newId, title: task.name + ' · 补充会话', sub: '新建 · ' + task.code, createdAt: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-') });
+        currentAgentSessionId = newId;
+        renderAgentHistoryList(task.id, newId);
+        document.getElementById('agentMessages').innerHTML = '';
+        resetAgentCanvas();
+        appendAgentMessage('已开始新会话，请输入补充说明与智能体交互。', 'system');
+    }
+    function sendAgentUserMessage() {
+        const task = tasks.find(t => t.id === currentAgentTaskId);
+        if (!task || task.status === '成功' || task.status === '失败') return;
+        const input = document.getElementById('agentInput');
+        const text = input.value.trim();
+        if (!text) return;
+        appendAgentMessage(text, 'user');
+        input.value = '';
+        setTimeout(() => appendAgentMessage('已收到您的补充说明，智能体将在后续识别步骤中参考该指令。', 'agent'), 600);
+    }
+    function finishAgentJobPending(task, resultPatch) {
+        task.pendingConfirm = true;
+        task._pendingResult = resultPatch || {};
+        delete parseTimers[task.id];
+        setAgentProgress(100);
+        showAgentConfirmPrompt(task);
+        updateAgentInputState(task);
+    }
+    function showAgentConfirmPrompt(task) {
+        if (!task || task.status === '成功' || task.status === '失败') return;
+        if (document.getElementById('agentConfirmBar')) return;
+        const wrap = document.getElementById('agentMessages');
+        const bar = document.createElement('div');
+        bar.className = 'agent-msg agent';
+        bar.id = 'agentConfirmBar';
+        bar.innerHTML = '<div class="agent-confirm-box"><p style="font-size:0.82rem;color:#475569;margin-bottom:10px;line-height:1.5;">智能体已完成本轮解析，请点击「确认」结束执行；未确认前可继续输入对话。</p><button type="button" class="btn btn-primary btn-sm" id="agentConfirmBtn"><i class="fas fa-check"></i> 确认</button></div>';
+        wrap.appendChild(bar);
+        wrap.scrollTop = wrap.scrollHeight;
+        document.getElementById('agentConfirmBtn').addEventListener('click', () => confirmAgentExecution(task.id));
+    }
+    function confirmAgentExecution(taskId) {
+        const t = tasks.find(x => x.id === taskId);
+        if (!t || !t.pendingConfirm) return;
+        t.pendingConfirm = false;
+        if (t._pendingResult) {
+            Object.assign(t, t._pendingResult);
+            delete t._pendingResult;
+        }
+        t.status = '成功';
+        t.hasResult = true;
+        delete parseTimers[t.id];
+        renderTable();
+        updateAgentInputState(t);
+        const bar = document.getElementById('agentConfirmBar');
+        if (bar) bar.remove();
+        appendAgentMessage('解析完成，可返回主界面查看模型展示。', 'system');
+        setAgentProgress(100);
+        showToast('任务「' + t.name + '」解析完成');
+    }
+    function appendAgentMessage(text, type) {
+        const wrap = document.getElementById('agentMessages');
+        const msg = document.createElement('div');
+        msg.className = 'agent-msg ' + (type || 'agent');
+        if (type === 'system') msg.textContent = text;
+        else msg.innerHTML = '<div class="agent-msg-bubble">' + esc(text) + '</div>';
+        wrap.appendChild(msg);
+        wrap.scrollTop = wrap.scrollHeight;
+    }
+    function appendAgentCard(card) {
+        const wrap = document.getElementById('agentMessages');
+        const msg = document.createElement('div');
+        msg.className = 'agent-msg agent';
+        const el = document.createElement('div');
+        el.className = 'agent-output-card';
+        el.innerHTML = '<div class="card-title"><i class="fas fa-layer-group"></i> ' + esc(card.title) + '</div><div class="card-desc">' + esc(card.desc) + '</div><div class="card-action"><i class="fas fa-external-link-alt"></i> 在 Canvas 中查看</div>';
+        el.addEventListener('click', () => {
+            document.getElementById('agentCanvasTitle').textContent = card.title;
+            document.getElementById('agentCanvasBody').innerHTML = '<div class="agent-canvas-content">' + card.canvas + '</div>';
+        });
+        msg.appendChild(el);
+        wrap.appendChild(msg);
+        wrap.scrollTop = wrap.scrollHeight;
+    }
+    function setAgentProgress(pct) {
+        document.getElementById('agentProgressFill').style.width = pct + '%';
+    }
+    function runAgentJob(task, steps, onComplete) {
+        let i = 0;
+        const runStep = () => {
+            if (i >= steps.length) { onComplete(); return; }
+            const s = steps[i++];
+            if (s.type === 'card') appendAgentCard(s.card);
+            else appendAgentMessage(s.msg, s.type === 'system' ? 'system' : 'agent');
+            setAgentProgress(s.progress);
+            parseTimers[task.id] = setTimeout(runStep, s.delay);
+        };
+        appendAgentMessage(AGENT_START_MSG, 'system');
+        runStep();
+    }
+
+    function renderSourceTypeTags(types) {
+        return types.map(type => `<span class="tag ${SOURCE_TAG[type] || 'tag-file'}">${esc(type)}</span>`).join('');
+    }
+
+    function getFiltered() {
+        const nk = queryName.trim().toLowerCase();
+        return tasks.filter(t => {
+            const mn = !nk || t.name.toLowerCase().includes(nk) || t.code.toLowerCase().includes(nk) || (t.modelName && t.modelName.toLowerCase().includes(nk));
+            const ms = !querySource || (t.sourceTypes || []).includes(querySource);
+            const mst = !queryStatus || t.status === queryStatus;
+            return mn && ms && mst;
+        });
+    }
+
+    function updateSelectionUI() {
+        const sel = tasks.filter(t => selectedIds.has(t.id));
+        btnDelete.disabled = selectedIds.size === 0;
+        document.getElementById('selectedInfo').textContent = '已选 ' + selectedIds.size + ' 条';
+    }
+
+    function renderTaskOps(t) {
+        let ops = `<button class="icon-btn" title="任务详情" onclick="openTaskDetail(${t.id})"><i class="fas fa-info-circle"></i></button>`;
+        if (t.status === '成功') {
+            ops += `<button class="icon-btn icon-btn-agent icon-btn-agent-result" title="执行结果" onclick="openAgentResult(${t.id})"><i class="fas fa-robot"></i></button>`;
+            ops += `<button class="icon-btn" title="模型展示" onclick="viewResult(${t.id})"><i class="fas fa-eye"></i></button>`;
+            ops += `<button class="icon-btn" title="消歧与整合" onclick="location.href='智能消歧与整合.html'"><i class="fas fa-balance-scale"></i></button>`;
+        } else if (t.status === '失败') {
+            ops += `<button class="icon-btn icon-btn-agent icon-btn-agent-result" title="执行结果" onclick="openAgentResult(${t.id})"><i class="fas fa-robot"></i></button>`;
+        } else if (t.status === '待执行') {
+            ops += `<button class="icon-btn icon-btn-agent" title="智能体执行" onclick="runParse(${t.id})"><i class="fas fa-robot"></i></button>`;
+        } else if (t.status === '执行中') {
+            ops += `<button class="icon-btn icon-btn-agent icon-btn-agent-running" title="智能体执行中" onclick="openAgentRunning(${t.id})"><i class="fas fa-robot"></i></button>`;
+        }
+        return ops;
+    }
+
+    function setWizardEditable(editable) {
+        document.getElementById('wizardModal').classList.toggle('wizard-readonly', !editable);
+        document.querySelectorAll('#wizardModal input, #wizardModal textarea, #wizardModal select').forEach(el => {
+            el.disabled = !editable;
+        });
+    }
+
+    const DEFAULT_PARSE_ELEMENTS = ['逻辑实体', '业务属性', '实体关系', '业务对象'];
+    function getSelectedParseElements() {
+        return Array.from(document.querySelectorAll('.parse-element-check:checked')).map(el => el.value);
+    }
+    function setParseElements(elements) {
+        const set = new Set(elements && elements.length ? elements : DEFAULT_PARSE_ELEMENTS);
+        document.querySelectorAll('.parse-element-check').forEach(el => { el.checked = set.has(el.value); });
+    }
+    function resetParseElements() {
+        setParseElements(DEFAULT_PARSE_ELEMENTS);
+        document.getElementById('errParseElements').style.display = 'none';
+    }
+    function validateParseElements() {
+        const ok = getSelectedParseElements().length > 0;
+        document.getElementById('errParseElements').style.display = ok ? 'none' : 'block';
+        return ok;
+    }
+
+    function updateWizardFooter() {
+        if (wizardStep !== 4) return;
+        const submit = document.getElementById('wizardSubmit');
+        if (wizardMode === 'create') {
+            submit.innerHTML = '<i class="fas fa-plus"></i> 创建任务';
+            submit.className = 'btn btn-primary';
+        } else if (wizardMode === 'edit') {
+            submit.innerHTML = '<i class="fas fa-save"></i> 修改任务';
+            submit.className = 'btn btn-primary';
+        } else {
+            submit.innerHTML = '<i class="fas fa-times"></i> 关闭';
+            submit.className = 'btn btn-outline';
+        }
+    }
+
+    function captureTaskConfig() {
+        return {
+            parsePrompt: document.getElementById('parsePrompt').value,
+            sourceTypes: Array.from(selectedSourceTypes),
+            selectedTables: Object.fromEntries(Object.entries(selectedTablesBySource).map(([k, v]) => [k, Array.from(v || [])])),
+            selectedSchemas: { ...selectedSchemaBySource },
+            parseElements: getSelectedParseElements()
+        };
+    }
+
+    function applyTaskConfig(task) {
+        const cfg = task.config || {};
+        document.getElementById('wizName').value = task.name || '';
+        document.getElementById('wizModelName').value = task.modelName || '';
+        document.getElementById('parsePrompt').value = cfg.parsePrompt || '';
+        setParseElements(cfg.parseElements);
+        selectedSourceTypes.clear();
+        (cfg.sourceTypes || task.sourceTypes || ['MySQL']).forEach(t => selectedSourceTypes.add(t));
+        initSelectedTablesForSources();
+        if (cfg.selectedTables) {
+            Object.entries(cfg.selectedTables).forEach(([src, arr]) => {
+                selectedTablesBySource[src] = new Set(arr);
+            });
+        }
+        if (cfg.selectedSchemas) Object.assign(selectedSchemaBySource, cfg.selectedSchemas);
+        activeTableSourceTab = '';
+        tableSearchKeyword = '';
+        syncSourceTypeCards();
+        renderSourceConfigUI();
+    }
+
+    function renderTable() {
+        const filtered = getFiltered();
+        selectedIds.forEach(id => { if (!filtered.some(t => t.id === id)) selectedIds.delete(id); });
+
+        if (!filtered.length) {
+            taskTableBody.innerHTML = '<tr><td colspan="10"><div class="empty-state"><i class="fas fa-inbox" style="font-size:2rem;display:block;margin-bottom:10px;color:#cbd5e1;"></i>暂无逆向建模任务</div></td></tr>';
+        } else {
+            taskTableBody.innerHTML = filtered.map(t => {
+                const chk = selectedIds.has(t.id) ? 'checked' : '';
+                const types = t.sourceTypes || [];
+                const stCls = STATUS_TAG[t.status] || 'tag-pending';
+                const ops = renderTaskOps(t);
+                return `<tr class="${chk ? 'selected' : ''}">
+                    <td class="center"><input type="checkbox" class="row-check" data-id="${t.id}" ${chk}></td>
+                    <td><span class="code-tag">${esc(t.code)}</span></td>
+                    <td><strong style="color:#1e40af;">${esc(t.name)}</strong></td>
+                    <td style="font-size:0.8rem;">${esc(t.modelName || '—')}</td>
+                    <td><div class="source-type-tags">${renderSourceTypeTags(types)}</div></td>
+                    <td style="font-size:0.8rem;">${esc(t.sourceName)}</td>
+                    <td class="center">${t.tableCount || '—'}</td>
+                    <td class="center"><span class="tag ${stCls}">${esc(t.status)}</span></td>
+                    <td style="font-size:0.8rem;color:#64748b;">${esc(t.createdAt)}</td>
+                    <td class="center">${ops}</td>
+                </tr>`;
+            }).join('');
+        }
+        document.getElementById('tableInfo').textContent = '共 ' + filtered.length + ' 条记录';
+        checkAll.checked = filtered.length > 0 && filtered.every(t => selectedIds.has(t.id));
+        checkAll.indeterminate = !checkAll.checked && filtered.some(t => selectedIds.has(t.id));
+        updateSelectionUI();
+    }
+
+    function initSelectedTablesForSources() {
+        selectedTablesBySource = {};
+        selectedSchemaBySource = {};
+        selectedSourceTypes.forEach(type => {
+            selectedTablesBySource[type] = new Set();
+            const cat = SOURCE_TABLE_CATALOG[type];
+            if (cat && cat.hasSchema && cat.schemas.length) {
+                selectedSchemaBySource[type] = cat.schemas[0];
+            }
+        });
+        if (selectedTablesBySource.MySQL) {
+            ['po_header', 'po_line', 'pr_header', 'pr_line'].forEach(t => selectedTablesBySource.MySQL.add(t));
+        }
+    }
+
+    function getTotalSelectedTableCount() {
+        return Object.values(selectedTablesBySource).reduce((n, set) => n + (set ? set.size : 0), 0);
+    }
+
+    function updateSelectedTableCount() {
+        document.getElementById('selectedTableCount').textContent = getTotalSelectedTableCount();
+    }
+
+    function getTablesForSource(sourceType) {
+        const cat = SOURCE_TABLE_CATALOG[sourceType];
+        if (!cat) return [];
+        if (cat.hasSchema) {
+            const schema = selectedSchemaBySource[sourceType] || cat.schemas[0];
+            return cat.tables[schema] || [];
+        }
+        return cat.tables.default || [];
+    }
+
+    function renderDsTableTabs() {
+        const types = Array.from(selectedSourceTypes);
+        const tabsEl = document.getElementById('dsTableTabs');
+        const wrapEl = document.getElementById('dsTablePanelWrap');
+        if (!types.length) {
+            tabsEl.innerHTML = '';
+            wrapEl.innerHTML = '<div class="empty-state" style="padding:24px;">请先在第 2 步配置数据源</div>';
+            updateSelectedTableCount();
+            return;
+        }
+        if (!activeTableSourceTab || !selectedSourceTypes.has(activeTableSourceTab)) {
+            activeTableSourceTab = types[0];
+        }
+        tabsEl.innerHTML = types.map(type => {
+            const count = (selectedTablesBySource[type] && selectedTablesBySource[type].size) || 0;
+            const badge = count ? ` (${count})` : '';
+            return `<button type="button" class="ds-table-tab ${type === activeTableSourceTab ? 'active' : ''}" data-source="${esc(type)}">${esc(type)}${badge}</button>`;
+        }).join('');
+        renderDsTablePanel(activeTableSourceTab);
+    }
+
+    function renderDsTablePanel(sourceType) {
+        const cat = SOURCE_TABLE_CATALOG[sourceType];
+        const wrap = document.getElementById('dsTablePanelWrap');
+        if (!cat) {
+            wrap.innerHTML = '<div class="empty-state" style="padding:24px;">暂无该数据源的数据表</div>';
+            updateSelectedTableCount();
+            return;
+        }
+        const selected = selectedTablesBySource[sourceType] || new Set();
+        let schemaBlock = '';
+        if (cat.hasSchema) {
+            const cur = selectedSchemaBySource[sourceType] || cat.schemas[0];
+            schemaBlock = `<div class="form-group"><label>Schema</label><select class="filter-select ds-schema-select" data-source="${esc(sourceType)}" style="width:100%;">${cat.schemas.map(s =>
+                `<option value="${esc(s)}" ${s === cur ? 'selected' : ''}>${esc(s)}</option>`
+            ).join('')}</select></div>`;
+        }
+        const tables = getTablesForSource(sourceType);
+        const kw = tableSearchKeyword.trim().toLowerCase();
+        const list = tables.filter(tb => !kw || tb.toLowerCase().includes(kw));
+        const tableListHtml = list.map(tb => {
+            const checked = selected.has(tb) ? 'checked' : '';
+            return `<label class="table-select-item"><input type="checkbox" class="table-check" data-source="${esc(sourceType)}" data-table="${esc(tb)}" ${checked}> <span class="code-tag">${esc(tb)}</span></label>`;
+        }).join('') || '<div class="empty-state" style="padding:24px;">未找到匹配的数据表</div>';
+        wrap.innerHTML = `
+            <div class="ds-table-panel-title">${esc(sourceType)} · 选择 Schema 与数据表</div>
+            ${schemaBlock}
+            <input type="text" class="search-input ds-table-search" placeholder="输入表名搜索…" style="width:100%;margin-bottom:10px;" value="${esc(tableSearchKeyword)}">
+            <div class="table-select-wrap">${tableListHtml}</div>
+        `;
+        updateSelectedTableCount();
+    }
+
+    function setWizardStep(step) {
+        wizardStep = step;
+        document.querySelectorAll('.step-item').forEach(el => {
+            const s = parseInt(el.dataset.step, 10);
+            el.classList.remove('active', 'done');
+            if (s < step) el.classList.add('done');
+            if (s === step) el.classList.add('active');
+        });
+        document.querySelectorAll('.wizard-panel').forEach(p => p.classList.toggle('active', parseInt(p.dataset.panel, 10) === step));
+        document.getElementById('wizardPrev').style.display = step > 1 ? '' : 'none';
+        document.getElementById('wizardNext').style.display = step < 4 ? '' : 'none';
+        document.getElementById('wizardSubmit').style.display = step === 4 ? '' : 'none';
+        if (step === 3) renderDsTableTabs();
+        updateWizardFooter();
+    }
+
+    function syncSourceTypeCards() {
+        document.querySelectorAll('#sourceTypeGrid .source-type-card').forEach(c => {
+            c.classList.toggle('selected', selectedSourceTypes.has(c.dataset.type));
+        });
+    }
+
+    function renderSourceConfigUI() {
+        document.querySelectorAll('.source-config-block').forEach(block => {
+            block.style.display = selectedSourceTypes.has(block.dataset.source) ? '' : 'none';
+        });
+    }
+
+    function buildSourceName() {
+        const parts = [];
+        if (selectedSourceTypes.has('MySQL')) {
+            parts.push(document.getElementById('mysqlDb').value + '@' + document.getElementById('mysqlHost').value);
+        }
+        if (selectedSourceTypes.has('Oracle')) {
+            parts.push(document.getElementById('oracleService').value + '@' + document.getElementById('oracleHost').value);
+        }
+        if (selectedSourceTypes.has('PostgreSQL')) {
+            parts.push(document.getElementById('pgDb').value + '@' + document.getElementById('pgHost').value);
+        }
+        if (selectedSourceTypes.has('GaussDB')) {
+            parts.push(document.getElementById('gaussDb').value + '@' + document.getElementById('gaussHost').value);
+        }
+        if (selectedSourceTypes.has('Hive')) {
+            parts.push(document.getElementById('hiveDb').value + '@' + document.getElementById('hiveHost').value);
+        }
+        if (selectedSourceTypes.has('Excel/CSV')) {
+            const files = document.getElementById('excelFile').files;
+            parts.push(files.length ? Array.from(files).map(f => f.name).join('、') : 'excel/csv_files');
+        }
+        if (selectedSourceTypes.has('数据字典')) {
+            const files = document.getElementById('dictFile').files;
+            parts.push(files.length ? Array.from(files).map(f => f.name).join('、') : 'data_dictionary');
+        }
+        if (selectedSourceTypes.has('建表脚本')) {
+            const files = document.getElementById('sqlFile').files;
+            parts.push(files.length ? Array.from(files).map(f => f.name).join('、') : 'ddl_scripts');
+        }
+        return parts.join(' + ');
+    }
+
+    function openWizard() {
+        wizardMode = 'create';
+        detailTaskId = null;
+        document.getElementById('wizardModalTitle').textContent = '新建建模任务';
+        setWizardEditable(true);
+        document.getElementById('wizName').value = '';
+        document.getElementById('wizModelName').value = '';
+        document.getElementById('errWizName').style.display = 'none';
+        document.getElementById('errWizModelName').style.display = 'none';
+        document.getElementById('errSourceTypes').style.display = 'none';
+        selectedSourceTypes.clear();
+        selectedSourceTypes.add('MySQL');
+        activeTableSourceTab = '';
+        tableSearchKeyword = '';
+        initSelectedTablesForSources();
+        document.querySelectorAll('.conn-status').forEach(el => el.style.display = 'none');
+        syncSourceTypeCards();
+        document.getElementById('parsePrompt').value = '';
+        resetParseElements();
+        setWizardStep(1);
+        renderSourceConfigUI();
+        updateWizardFooter();
+        openModal('wizardModal');
+    }
+
+    window.openTaskDetail = function(id) {
+        const t = tasks.find(x => x.id === id);
+        if (!t) return;
+        detailTaskId = id;
+        wizardMode = t.status === '待执行' ? 'edit' : 'view';
+        document.getElementById('wizardModalTitle').textContent = '任务详情';
+        document.getElementById('errWizName').style.display = 'none';
+        document.getElementById('errWizModelName').style.display = 'none';
+        document.getElementById('errSourceTypes').style.display = 'none';
+        document.getElementById('errParseElements').style.display = 'none';
+        applyTaskConfig(t);
+        setWizardEditable(wizardMode === 'edit');
+        setWizardStep(1);
+        openModal('wizardModal');
+    };
+
+    function validateWizardStep() {
+        if (wizardStep === 1) {
+            const name = document.getElementById('wizName').value.trim();
+            const modelName = document.getElementById('wizModelName').value.trim();
+            let valid = true;
+            if (!name) { document.getElementById('errWizName').style.display = 'block'; valid = false; }
+            else document.getElementById('errWizName').style.display = 'none';
+            if (!modelName) { document.getElementById('errWizModelName').style.display = 'block'; valid = false; }
+            else document.getElementById('errWizModelName').style.display = 'none';
+            if (selectedSourceTypes.size === 0) {
+                document.getElementById('errSourceTypes').style.display = 'block';
+                valid = false;
+            } else document.getElementById('errSourceTypes').style.display = 'none';
+            if (!valid) return false;
+        }
+        if (wizardStep === 3 && getTotalSelectedTableCount() === 0) {
+            showToast('请至少选择一张数据表', 'error'); return false;
+        }
+        return true;
+    }
+
+    window.openAgentResult = function(id) {
+        const t = tasks.find(x => x.id === id);
+        if (!t) return;
+        openAgentPanel(t, { viewResult: true });
+    };
+    window.openAgentRunning = function(id) {
+        const t = tasks.find(x => x.id === id);
+        if (!t || t.status !== '执行中') return;
+        openAgentPanel(t, { resume: true });
+    };
+
+    window.viewResult = function(id) {
+        const t = tasks.find(x => x.id === id);
+        if (!t) return;
+        document.getElementById('resultTitle').textContent = '生成结果阅览 · ' + t.name;
+        openModal('resultModal');
+    };
+
+    window.runParse = function(id) {
+        const t = tasks.find(x => x.id === id);
+        if (!t || t.status !== '待执行') return;
+        t.status = '执行中';
+        renderTable();
+        openAgentPanel(t);
+        const steps = [
+            { delay: 800, type: 'msg', msg: '正在连接数据源并读取表结构…', progress: 15 },
+            { delay: 900, type: 'msg', msg: '识别逻辑实体与业务属性映射…', progress: 32 },
+            { delay: 800, type: 'card', card: { title: '表结构映射预览', desc: '已识别 4 张业务表，映射为 4 个逻辑实体', canvas: '<h4>表结构映射预览</h4><ul style="padding-left:18px;"><li>po_header → 采购订单头</li><li>po_line → 采购订单行</li><li>pr_header → 采购需求头</li><li>pr_line → 采购需求行</li></ul>' }, progress: 48 },
+            { delay: 900, type: 'msg', msg: '分析主键、外键与实体关联关系…', progress: 62 },
+            { delay: 800, type: 'card', card: { title: '实体关系草图', desc: '提炼 3 组实体关系，补充关联业务属性', canvas: '<h4>实体关系草图</h4><p>采购需求头 1:N 采购需求行</p><p>采购需求头 1:N 采购订单头</p><p>采购订单头 1:N 采购订单行</p>' }, progress: 78 },
+            { delay: 900, type: 'msg', msg: '聚合提炼业务对象，生成本体模型草案…', progress: 92 },
+            { delay: 700, type: 'card', card: { title: '本体模型草案', desc: '共 4 个逻辑实体 · 18 个业务属性 · 2 个业务对象', canvas: '<h4>本体模型草案</h4><p>逻辑实体：采购需求头、采购需求行、采购订单头、采购订单行</p><p>业务对象：采购需求、采购订单</p><p>解析完成，可返回主界面查看模型展示。</p>' }, progress: 98 }
+        ];
+        runAgentJob(t, steps, () => {
+            finishAgentJobPending(t, { tableCount: t.tableCount || 4 });
+        });
+    };
+
+    document.getElementById('btnCreate').addEventListener('click', openWizard);
+    document.getElementById('wizardClose').addEventListener('click', () => closeModal('wizardModal'));
+    document.getElementById('wizardCancel').addEventListener('click', () => closeModal('wizardModal'));
+    document.getElementById('wizardPrev').addEventListener('click', () => { if (wizardStep > 1) setWizardStep(wizardStep - 1); });
+    document.getElementById('wizardNext').addEventListener('click', () => {
+        if (!validateWizardStep()) return;
+        if (wizardStep === 1) renderSourceConfigUI();
+        if (wizardStep === 2) { initSelectedTablesForSources(); activeTableSourceTab = ''; tableSearchKeyword = ''; }
+        if (wizardStep < 4) setWizardStep(wizardStep + 1);
+    });
+    document.getElementById('wizardSubmit').addEventListener('click', () => {
+        if (wizardMode === 'view') { closeModal('wizardModal'); return; }
+        if (wizardMode === 'edit') {
+            const t = tasks.find(x => x.id === detailTaskId);
+            if (!t) return;
+            if (!validateParseElements()) { showToast('请至少选择一种解析要素', 'error'); return; }
+            const name = document.getElementById('wizName').value.trim();
+            const modelName = document.getElementById('wizModelName').value.trim();
+            if (!name || !modelName || selectedSourceTypes.size === 0 || getTotalSelectedTableCount() === 0) {
+                showToast('请完善任务配置', 'error'); return;
+            }
+            t.name = name;
+            t.modelName = modelName;
+            t.sourceTypes = Array.from(selectedSourceTypes);
+            t.sourceName = buildSourceName();
+            t.tableCount = getTotalSelectedTableCount();
+            t.config = captureTaskConfig();
+            closeModal('wizardModal');
+            renderTable();
+            showToast('任务配置已更新');
+            return;
+        }
+        if (!validateParseElements()) { showToast('请至少选择一种解析要素', 'error'); return; }
+        const name = document.getElementById('wizName').value.trim();
+        const modelName = document.getElementById('wizModelName').value.trim();
+        const code = 'RM' + String(nextCode++).padStart(6, '0');
+        tasks.unshift({
+            id: nextId++, code, name, modelName,
+            sourceTypes: Array.from(selectedSourceTypes),
+            sourceName: buildSourceName(),
+            tableCount: getTotalSelectedTableCount(),
+            status: '待执行',
+            createdAt: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'),
+            hasResult: false,
+            config: captureTaskConfig()
+        });
+        closeModal('wizardModal');
+        renderTable();
+        showToast('任务已创建，状态为待执行');
+    });
+
+    document.getElementById('agentModalClose').addEventListener('click', closeAgentModal);
+    document.getElementById('agentCanvasClose').addEventListener('click', resetAgentCanvas);
+    document.getElementById('agentNewChat').addEventListener('click', agentNewSession);
+    document.getElementById('agentSendBtn').addEventListener('click', sendAgentUserMessage);
+    document.getElementById('agentInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendAgentUserMessage(); });
+    document.getElementById('agentHistorySearch').addEventListener('input', e => {
+        const kw = e.target.value.trim().toLowerCase();
+        document.querySelectorAll('#agentHistoryList .agent-history-item').forEach(el => {
+            el.style.display = !kw || el.textContent.toLowerCase().includes(kw) ? '' : 'none';
+        });
+    });
+
+    document.getElementById('sourceTypeGrid').addEventListener('click', e => {
+        if (wizardMode === 'view') return;
+        const card = e.target.closest('.source-type-card');
+        if (!card) return;
+        const type = card.dataset.type;
+        if (selectedSourceTypes.has(type)) selectedSourceTypes.delete(type);
+        else selectedSourceTypes.add(type);
+        syncSourceTypeCards();
+        renderSourceConfigUI();
+    });
+
+    document.getElementById('sourceConfigContainer').addEventListener('click', e => {
+        const btn = e.target.closest('.test-conn-btn');
+        if (!btn) return;
+        const source = btn.dataset.source;
+        const statusEl = document.getElementById('connStatus' + source);
+        if (statusEl) statusEl.style.display = '';
+        showToast(source + ' 连接测试成功');
+    });
+
+    document.getElementById('wizardModal').addEventListener('click', e => {
+        const tab = e.target.closest('.ds-table-tab');
+        if (tab) {
+            activeTableSourceTab = tab.dataset.source;
+            tableSearchKeyword = '';
+            renderDsTableTabs();
+        }
+    });
+    document.getElementById('wizardModal').addEventListener('change', e => {
+        if (e.target.classList.contains('ds-schema-select')) {
+            const src = e.target.dataset.source;
+            selectedSchemaBySource[src] = e.target.value;
+            if (selectedTablesBySource[src]) selectedTablesBySource[src].clear();
+            renderDsTablePanel(activeTableSourceTab);
+            renderDsTableTabs();
+        }
+        if (e.target.classList.contains('table-check')) {
+            const src = e.target.dataset.source;
+            const tb = e.target.dataset.table;
+            if (!selectedTablesBySource[src]) selectedTablesBySource[src] = new Set();
+            e.target.checked ? selectedTablesBySource[src].add(tb) : selectedTablesBySource[src].delete(tb);
+            updateSelectedTableCount();
+            document.querySelectorAll('.ds-table-tab').forEach(el => {
+                if (el.dataset.source === src) {
+                    const count = selectedTablesBySource[src].size;
+                    el.textContent = src + (count ? ` (${count})` : '');
+                }
+            });
+        }
+    });
+    document.getElementById('wizardModal').addEventListener('input', e => {
+        if (e.target.classList.contains('ds-table-search')) {
+            tableSearchKeyword = e.target.value;
+            renderDsTablePanel(activeTableSourceTab);
+        }
+    });
+
+    function initReadonlyCanvas() {
+        const viewport = document.getElementById('readonlyCanvasViewport');
+        const inner = document.getElementById('readonlyCanvasInner');
+        if (!viewport || !inner || viewport.dataset.inited) return;
+        viewport.dataset.inited = '1';
+        let scale = 1, tx = 0, ty = 0, dragging = false, startX, startY;
+        function applyTransform() {
+            inner.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+        }
+        viewport.addEventListener('mousedown', e => {
+            if (e.button !== 0) return;
+            dragging = true;
+            startX = e.clientX - tx;
+            startY = e.clientY - ty;
+            viewport.classList.add('dragging');
+            e.preventDefault();
+        });
+        window.addEventListener('mousemove', e => {
+            if (!dragging) return;
+            tx = e.clientX - startX;
+            ty = e.clientY - startY;
+            applyTransform();
+        });
+        window.addEventListener('mouseup', () => {
+            dragging = false;
+            viewport.classList.remove('dragging');
+        });
+        document.getElementById('btnCanvasZoomIn')?.addEventListener('click', () => { scale = Math.min(scale + 0.1, 2); applyTransform(); });
+        document.getElementById('btnCanvasZoomOut')?.addEventListener('click', () => { scale = Math.max(scale - 0.1, 0.5); applyTransform(); });
+        document.getElementById('btnCanvasReset')?.addEventListener('click', () => { scale = 1; tx = 0; ty = 0; applyTransform(); });
+        const wrap = viewport.closest('.readonly-canvas-wrap');
+        const fsBtn = document.getElementById('btnCanvasFullscreen');
+        fsBtn?.addEventListener('click', () => {
+            if (!wrap) return;
+            if (!document.fullscreenElement) wrap.requestFullscreen?.();
+            else document.exitFullscreen?.();
+        });
+        document.addEventListener('fullscreenchange', () => {
+            if (!fsBtn || !wrap) return;
+            const icon = fsBtn.querySelector('i');
+            if (document.fullscreenElement === wrap) {
+                icon.className = 'fas fa-compress';
+                fsBtn.title = '退出全屏';
+            } else {
+                icon.className = 'fas fa-expand';
+                fsBtn.title = '全屏';
+            }
+        });
+    }
+
+    document.querySelectorAll('.result-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.result-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.result-panel').forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+            if (tab.dataset.tab === 'graph') initReadonlyCanvas();
+        });
+    });
+
+    document.getElementById('resultClose').addEventListener('click', closeResultModal);
+    document.getElementById('resultCancel').addEventListener('click', closeResultModal);
+    document.getElementById('resultMerge').addEventListener('click', () => { closeModal('resultModal'); location.href = '智能消歧与整合.html'; });
+
+    document.getElementById('btnSearch').addEventListener('click', () => {
+        queryName = document.getElementById('searchName').value;
+        querySource = document.getElementById('filterSource').value;
+        queryStatus = document.getElementById('filterStatus').value;
+        renderTable();
+    });
+    document.getElementById('btnReset').addEventListener('click', () => {
+        document.getElementById('searchName').value = '';
+        document.getElementById('filterSource').value = '';
+        document.getElementById('filterStatus').value = '';
+        queryName = querySource = queryStatus = '';
+        renderTable();
+    });
+    document.getElementById('searchName').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('btnSearch').click(); });
+
+    document.getElementById('btnDelete').addEventListener('click', () => {
+        document.getElementById('deleteCount').textContent = selectedIds.size;
+        openModal('deleteModal');
+    });
+    document.getElementById('deleteModalClose').addEventListener('click', () => closeModal('deleteModal'));
+    document.getElementById('deleteCancel').addEventListener('click', () => closeModal('deleteModal'));
+    document.getElementById('deleteConfirm').addEventListener('click', () => {
+        tasks = tasks.filter(t => !selectedIds.has(t.id));
+        selectedIds.clear();
+        closeModal('deleteModal');
+        showToast('已删除选中任务');
+        renderTable();
+    });
+
+    checkAll.addEventListener('change', () => {
+        getFiltered().forEach(t => checkAll.checked ? selectedIds.add(t.id) : selectedIds.delete(t.id));
+        renderTable();
+    });
+    taskTableBody.addEventListener('change', e => {
+        if (!e.target.classList.contains('row-check')) return;
+        const id = parseInt(e.target.dataset.id, 10);
+        e.target.checked ? selectedIds.add(id) : selectedIds.delete(id);
+        renderTable();
+    });
+
+    (function initHubDeepLink() {
+        const params = new URLSearchParams(location.search);
+        if (params.get('create') === '1') {
+            history.replaceState(null, '', location.pathname);
+            setTimeout(() => openWizard(), 150);
+            return;
+        }
+        const taskId = parseInt(params.get('taskId'), 10);
+        const action = params.get('action');
+        if (!taskId || !action) return;
+        history.replaceState(null, '', location.pathname);
+        setTimeout(() => {
+            if (action === 'detail') openTaskDetail(taskId);
+            else if (action === 'run') runParse(taskId);
+            else if (action === 'running') openAgentRunning(taskId);
+            else if (action === 'result') openAgentResult(taskId);
+            else if (action === 'view') viewResult(taskId);
+        }, 200);
+    })();
+
+    renderTable();
+</script>
+</body>
+</html>

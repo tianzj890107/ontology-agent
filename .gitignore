@@ -1,0 +1,44 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+
+# ---- open-claude 运行时产物 / 历史记录 ----
+# 沙箱内运行时生成的项目
+open-claude/sandbox/
+# 会话录制 / 历史对话记录
+*.jsonl
+.open-claude/
+
+# ---- 本项目临时 / 输出目录 ----
+output/
+tmp/
+
+# ---- 本地配置 / 密钥 ----
+.claude/
+.env
+.env.*
+credentials.json
+CLAUDE.local.md
+
+# ---- IDE / 编辑器 ----
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+
+# ---- Node ----
+node_modules/
