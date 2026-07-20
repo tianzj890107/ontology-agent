@@ -33,9 +33,11 @@ import sys
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from open_claude.repl import Conversation
 from open_claude.profile import AgentProfile
@@ -47,6 +49,7 @@ from open_claude.config import (
     get_max_tokens,
     get_model,
     get_model_provider,
+    load_config,
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +58,21 @@ SANDBOX_DIR = os.path.join(SCRIPT_DIR, "sandbox")
 
 # Project names: letters/digits/CJK plus - _ . (no separators, no traversal).
 _PROJECT_NAME_RE = re.compile(r"^[\w\-.一-鿿]{1,64}$")
+
+# taskCode: 字母数字与 - _(用于路径拼接前的白名单校验,防注入/穿越)。
+_TASK_CODE_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+def ontology_api_base() -> str:
+    """Ontology 后端基地址:环境变量 ONTOLOGY_API_BASE 优先,其次
+    ~/.claude/config.json 的 ontology_api_base,默认本机 8080。"""
+    base = os.environ.get("ONTOLOGY_API_BASE")
+    if not base:
+        try:
+            base = load_config().get("ontology_api_base")
+        except Exception:
+            base = None
+    return (base or "http://127.0.0.1:8080").rstrip("/")
 
 # Inference-parameter defaults applied to every new task (patched via /api/params).
 PARAM_DEFAULTS = {"temperature": None, "max_tokens": None,
@@ -454,6 +472,14 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
         if path in ("/", "/index.html"):
             self._serve_html()
+        elif path == "/mission":
+            # 专属任务处理模式:GET 便捷入口(等价于 POST /mission)
+            self._serve_html(mission=self._mission_from(
+                (qs.get("repositoryId") or [""])[0],
+                (qs.get("taskCode") or [""])[0],
+                (qs.get("taskType") or [""])[0]))
+        elif path == "/api/mission/task":
+            self._handle_mission_task(qs)
         elif path == "/api/files":
             base = project_path((qs.get("project") or [""])[0])
             if not base:
@@ -489,6 +515,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/mission":
+            # 专属任务处理模式入口:POST repositoryId + taskCode(JSON 或表单),
+            # 返回注入了 mission 上下文的页面。
+            data = self._read_mission_post()
+            self._serve_html(mission=self._mission_from(
+                data.get("repositoryId", ""),
+                data.get("taskCode", ""),
+                data.get("taskType", "")))
+            return
         if path == "/api/projects":
             data = self._read_body()
             ok, msg = create_project(data.get("name", ""))
@@ -600,13 +635,109 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_json({"ok": True, "name": name, "replaced": replaced})
 
-    def _serve_html(self):
+    # -- 专属任务处理模式 ------------------------------------------------------
+
+    def _mission_from(self, repository_id, task_code, task_type=""):
+        """把入参规整为 mission 上下文;缺 repositoryId/taskCode 则返回 None
+        (退化为普通模式)。"""
+        repo = str(repository_id or "").strip()
+        code = str(task_code or "").strip()
+        if not repo or not code:
+            return None
+        m = {"repositoryId": repo, "taskCode": code}
+        ttype = str(task_type or "").strip().lower()
+        if ttype in ("modeling", "integration"):
+            m["taskType"] = ttype
+        return m
+
+    def _read_mission_post(self) -> dict:
+        """读取 POST /mission 的 body:支持 JSON 与表单编码两种。"""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if not length:
+            return {}
+        raw = self.rfile.read(length)
+        ctype = (self.headers.get("Content-Type") or "").lower()
+        if "application/json" in ctype:
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+                return obj if isinstance(obj, dict) else {}
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return {}
+        # application/x-www-form-urlencoded(或未声明):按表单解析
+        try:
+            form = parse_qs(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            return {}
+        return {k: (v[0] if v else "") for k, v in form.items()}
+
+    def _handle_mission_task(self, qs):
+        """GET /api/mission/task?repositoryId=&taskCode=[&taskType=]
+        —— 服务端代理调用 Ontology 后端的 execution-context 接口取任务信息。"""
+        repo = (qs.get("repositoryId") or [""])[0].strip()
+        code = (qs.get("taskCode") or [""])[0].strip()
+        ttype = (qs.get("taskType") or [""])[0].strip().lower()
+        if not repo or not code:
+            self._send_json({"error": "缺少 repositoryId 或 taskCode"}, status=400)
+            return
+        if not _TASK_CODE_RE.match(code):
+            self._send_json({"error": "taskCode 格式非法"}, status=400)
+            return
+        # 文档中唯一按 taskCode 取任务信息的接口是 execution-context;智能建模与
+        # 消歧整合各一份。按 taskType 或 taskCode 前缀(MI=整合)推断,失败再试另一类。
+        if ttype in ("modeling", "integration"):
+            kinds = [ttype]
+        elif code.upper().startswith("MI"):
+            kinds = ["integration", "modeling"]
+        else:
+            kinds = ["modeling", "integration"]
+        base = ontology_api_base()
+        last_err = None
+        for kind in kinds:
+            url = f"{base}/intelligent/{kind}/tasks/{quote(code)}/execution-context"
+            try:
+                req = urllib.request.Request(url, headers={
+                    "X-Ontology-Repository-Id": repo,
+                    "Accept": "application/json",
+                })
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                try:
+                    last_err = e.read().decode("utf-8") or f"HTTP {e.code}"
+                except Exception:
+                    last_err = f"HTTP {e.code}"
+                continue
+            except Exception as e:
+                last_err = str(e)
+                continue
+            # 解包 ApiResponse<T>
+            if isinstance(payload, dict) and "data" in payload and (
+                    "success" in payload or "code" in payload):
+                if payload.get("success") is False:
+                    last_err = payload.get("msg") or "任务查询失败"
+                    continue
+                self._send_json({"ok": True, "kind": kind, "task": payload.get("data")})
+                return
+            self._send_json({"ok": True, "kind": kind, "task": payload})
+            return
+        self._send_json({"error": f"获取任务信息失败: {last_err}", "base": base},
+                        status=502)
+
+    def _serve_html(self, mission=None):
         try:
             with open(HTML_PATH, "rb") as fh:
                 body = fh.read()
         except OSError:
             self.send_error(500, "frontend html not found")
             return
+        if mission:
+            inject = ("<script>window.__MISSION__ = "
+                      + json.dumps(mission, ensure_ascii=False)
+                      + ";</script>").encode("utf-8")
+            marker = b"<body>"
+            idx = body.find(marker)
+            body = (body[:idx + len(marker)] + inject + body[idx + len(marker):]
+                    if idx >= 0 else inject + body)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

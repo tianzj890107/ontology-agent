@@ -198,6 +198,17 @@ input,textarea,select{font-family:inherit;color:inherit}
 /* modal */
 #mask{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;display:none;align-items:center;justify-content:center}
 #mask.open{display:flex}
+#missionmask{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;display:none;align-items:center;justify-content:center}
+#missionmask.open{display:flex}
+/* 任务信息键值表 */
+.mi-grid{display:grid;grid-template-columns:120px 1fr;gap:6px 14px;align-items:start}
+.mi-grid .k{color:var(--dimmer);font-size:12px;padding-top:2px}
+.mi-grid .v{color:var(--fg);word-break:break-word;white-space:pre-wrap}
+.mi-grid .v .tag{display:inline-block;background:#26262c;border:1px solid var(--border);border-radius:6px;padding:1px 8px;margin:0 4px 4px 0;font-size:12px}
+.mi-sec{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
+.mi-sec h4{font-size:12px;color:var(--dimmer);margin-bottom:8px;font-weight:600}
+.mi-loading{color:var(--dimmer);padding:16px 0;text-align:center}
+.mi-err{color:var(--red);padding:12px 0}
 .modal{width:380px;background:#1c1c20;border:1px solid var(--border);border-radius:14px;padding:20px}
 .modal h3{font-size:15px;margin-bottom:6px}
 .modal .hint{font-size:12px;color:var(--dimmer);margin-bottom:14px}
@@ -240,6 +251,11 @@ input,textarea,select{font-family:inherit;color:inherit}
         <button class="cbtn" id="parambtn">⚗ 参数</button>
         <button id="sendbtn" title="开始任务">↑</button>
       </div>
+    </div>
+    <!-- 专属任务处理模式:仅在 window.__MISSION__ 存在时显示 -->
+    <div id="missionbar" style="display:none;margin-top:16px;align-items:center;gap:10px">
+      <button class="cbtn" id="missioninfo">📋 当前任务信息</button>
+      <span id="missionmeta" style="color:var(--dimmer);font-size:12px"></span>
     </div>
   </div>
 
@@ -306,6 +322,18 @@ input,textarea,select{font-family:inherit;color:inherit}
     <div class="btns">
       <button class="btn-ghost" id="projcancel">取消</button>
       <button class="btn-pri" id="projcreate">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- 当前任务信息弹窗(专属任务处理模式) -->
+<div id="missionmask">
+  <div class="modal" style="width:560px;max-width:92vw">
+    <h3>当前任务信息</h3>
+    <div class="hint" id="missiontip"></div>
+    <div id="missionbody" style="max-height:60vh;overflow:auto;font-size:13px"></div>
+    <div class="btns" style="margin-top:14px">
+      <button class="btn-ghost" id="missionclose">关闭</button>
     </div>
   </div>
 </div>
@@ -1083,10 +1111,92 @@ $("modelbtn2").onclick = e => { e.stopPropagation(); closePops(); openModelPop($
 $("parambtn").onclick = e => { e.stopPropagation(); closePops(); fillParamPanel(); placePop($("pop-param"), $("parambtn")); };
 $("parambtn2").onclick = e => { e.stopPropagation(); closePops(); fillParamPanel(); placePop($("pop-param"), $("parambtn2")); };
 
+/* ---------------- 专属任务处理模式(当前任务信息) ---------------- */
+const MISSION = (window.__MISSION__ && window.__MISSION__.taskCode) ? window.__MISSION__ : null;
+
+const MI_LABELS = {
+  repositoryId:"本体库 ID", taskCode:"任务编码", taskName:"任务名称",
+  modelName:"模型名称", taskType:"任务类型", prompt:"提示词",
+  parseElements:"解析要素", expectedFiles:"期望输出文件", outputPrefix:"输出路径前缀",
+  sourceMode:"来源模式", checkTypes:"校验类型",
+  dbType:"数据库类型", host:"主机", port:"端口", database:"数据库",
+  username:"用户名", password:"密码", sourceSchema:"Schema",
+  selectedTables:"选中数据表", databaseSourceId:"数据源 ID",
+  fileSourceId:"文件源 ID", fileType:"文件类型", objectKey:"对象存储 Key",
+  semanticSimilarityThreshold:"语义相似度阈值", items:"条目", mode:"模式",
+};
+const MI_SECTION_LABELS = {
+  database:"数据源", document:"文档", sourceModels:"来源模型",
+  integrationStrategy:"整合策略", validationRules:"校验规则",
+};
+const miLabel = k => MI_LABELS[k] || k;
+
+function isPlainObj(v){ return v && typeof v === "object" && !Array.isArray(v); }
+
+/* 把一个对象渲染成:标量/数组的键值表 + 每个嵌套对象一个小节 */
+function renderObj(obj){
+  let rows = "", sections = "";
+  for (const [k, v] of Object.entries(obj)){
+    if (v === null || v === undefined || v === "") continue;
+    if (isPlainObj(v)){
+      const title = MI_SECTION_LABELS[k] || miLabel(k);
+      sections += `<div class="mi-sec"><h4>${esc(title)}</h4>${renderObj(v)}</div>`;
+    } else if (Array.isArray(v)){
+      const tags = v.map(x => isPlainObj(x)
+        ? `<span class="tag">${esc(Object.values(x).join(" · "))}</span>`
+        : `<span class="tag">${esc(x)}</span>`).join("");
+      rows += `<div class="k">${esc(miLabel(k))}</div><div class="v">${tags || "—"}</div>`;
+    } else {
+      const shown = k === "password" ? "••••••••" : String(v);
+      rows += `<div class="k">${esc(miLabel(k))}</div><div class="v">${esc(shown)}</div>`;
+    }
+  }
+  return (rows ? `<div class="mi-grid">${rows}</div>` : "") + sections;
+}
+
+function renderMissionInfo(task){
+  if (!isPlainObj(task))
+    return '<div class="mi-err">未返回任务数据。</div>';
+  return renderObj(task) || '<div class="mi-loading">(任务无可展示字段)</div>';
+}
+
+async function openMissionInfo(){
+  if (!MISSION) return;
+  $("missiontip").textContent =
+    `taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
+  $("missionbody").innerHTML = '<div class="mi-loading">正在获取任务信息…</div>';
+  $("missionmask").classList.add("open");
+  const q = new URLSearchParams({
+    repositoryId: MISSION.repositoryId, taskCode: MISSION.taskCode,
+  });
+  if (MISSION.taskType) q.set("taskType", MISSION.taskType);
+  try{
+    const j = await api("/api/mission/task?" + q.toString());
+    if (j.error){ $("missionbody").innerHTML = `<div class="mi-err">${esc(j.error)}</div>`; return; }
+    $("missionbody").innerHTML = renderMissionInfo(j.task);
+  }catch(e){
+    $("missionbody").innerHTML = `<div class="mi-err">请求失败:${esc(e.message)}</div>`;
+  }
+}
+
+$("missioninfo").onclick = openMissionInfo;
+$("missionclose").onclick = () => $("missionmask").classList.remove("open");
+$("missionmask").addEventListener("click", e => {
+  if (e.target === $("missionmask")) $("missionmask").classList.remove("open");
+});
+
+function initMission(){
+  if (!MISSION) return;
+  $("missionbar").style.display = "flex";
+  $("missionmeta").textContent =
+    `taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
+}
+
 (async function init(){
   await loadMeta();
   await loadTasks();
   showHome();
+  initMission();
   setInterval(async () => { if (!BUSY) { await loadTasks(); } }, 20000);
 })();
 </script>
