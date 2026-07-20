@@ -64,16 +64,33 @@ _PROJECT_NAME_RE = re.compile(r"^[\w\-.一-鿿]{1,64}$")
 _TASK_CODE_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 
+# Ontology 网关默认地址与应用标识(可用环境变量 / config.json 覆盖)。
+_DEFAULT_ONTOLOGY_BASE = "http://pdt-dev.eimos.com/api/gateway2/ontology"
+_DEFAULT_ONTOLOGY_APP_ID = "ApTH1EHKdRk58WhDQB"
+
+
 def ontology_api_base() -> str:
-    """Ontology 后端基地址:环境变量 ONTOLOGY_API_BASE 优先,其次
-    ~/.claude/config.json 的 ontology_api_base,默认本机 8080。"""
+    """Ontology 网关基地址:环境变量 ONTOLOGY_API_BASE 优先,其次
+    ~/.claude/config.json 的 ontology_api_base,默认联调网关。"""
     base = os.environ.get("ONTOLOGY_API_BASE")
     if not base:
         try:
             base = load_config().get("ontology_api_base")
         except Exception:
             base = None
-    return (base or "http://127.0.0.1:8080").rstrip("/")
+    return (base or _DEFAULT_ONTOLOGY_BASE).rstrip("/")
+
+
+def ontology_app_id() -> str:
+    """Ontology 网关的 X-App-Id:环境变量 ONTOLOGY_APP_ID 优先,其次
+    config.json 的 ontology_app_id,默认联调应用标识。"""
+    app = os.environ.get("ONTOLOGY_APP_ID")
+    if not app:
+        try:
+            app = load_config().get("ontology_app_id")
+        except Exception:
+            app = None
+    return app or _DEFAULT_ONTOLOGY_APP_ID
 
 # Inference-parameter defaults applied to every new task (patched via /api/params).
 PARAM_DEFAULTS = {"temperature": None, "max_tokens": None,
@@ -700,12 +717,15 @@ class Handler(BaseHTTPRequestHandler):
         else:
             kinds = ["modeling", "integration"]
         base = ontology_api_base()
+        app_id = ontology_app_id()
         last_err = None
         for kind in kinds:
             url = f"{base}/intelligent/{kind}/tasks/{quote(code)}/execution-context"
             try:
-                req = urllib.request.Request(url, headers={
+                # 网关要求 GET + X-App-Id + X-Ontology-Repository-Id。
+                req = urllib.request.Request(url, method="GET", headers={
                     "X-Ontology-Repository-Id": repo,
+                    "X-App-Id": app_id,
                     "Accept": "application/json",
                 })
                 with urllib.request.urlopen(req, timeout=15) as resp:
