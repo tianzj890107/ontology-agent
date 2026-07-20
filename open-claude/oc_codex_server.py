@@ -65,7 +65,7 @@ _TASK_CODE_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 
 # Ontology 网关默认地址与应用标识(可用环境变量 / config.json 覆盖)。
-_DEFAULT_ONTOLOGY_BASE = "http://pdt-dev.eimos.com/api/gateway2/ontology"
+_DEFAULT_ONTOLOGY_BASE = "http://pdt-dev.eimos.com/api/gateway2"
 _DEFAULT_ONTOLOGY_APP_ID = "ApTH1EHKdRk58WhDQB"
 
 
