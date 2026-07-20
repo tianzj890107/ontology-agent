@@ -46,6 +46,7 @@ from open_claude.config import (
     AVAILABLE_MODELS,
     PROVIDERS,
     get_api_key_for,
+    get_config_path,
     get_max_tokens,
     get_model,
     get_model_provider,
@@ -491,7 +492,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/meta":
             self._send_json({
                 "model": get_model(),
-                "models": [{"id": m["id"], "label": m["label"]} for m in AVAILABLE_MODELS],
+                "provider": get_model_provider(get_model()),
+                "models": [{"id": m["id"], "label": m["label"],
+                            "provider": m.get("provider", "anthropic")}
+                           for m in AVAILABLE_MODELS],
+                "providers": [{"id": pid, "label": spec.get("label", pid),
+                               "hasKey": bool(get_api_key_for(pid))}
+                              for pid, spec in PROVIDERS.items()],
                 "params": current_params(),
                 "sandbox": SANDBOX_DIR,
                 "projects": list_projects(),
@@ -544,6 +551,8 @@ class Handler(BaseHTTPRequestHandler):
             if mid:
                 set_model(mid)
             self._send_json({"ok": True, "model": get_model()})
+        elif path == "/api/apikey":
+            self._handle_set_apikey()
         elif path == "/api/params":
             try:
                 self._send_json(set_params(self._read_body()))
@@ -723,6 +732,38 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"error": f"获取任务信息失败: {last_err}", "base": base},
                         status=502)
 
+    def _handle_set_apikey(self):
+        """POST /api/apikey {provider, key} —— 保存/清除某个模型提供方的密钥。
+        写入 ~/.claude/config.json 的 api_keys,并同步进程环境变量,立即生效。"""
+        data = self._read_body()
+        provider = str(data.get("provider") or "").strip().lower()
+        key = str(data.get("key") or "").strip()
+        if provider not in PROVIDERS:
+            self._send_json({"error": "未知的模型提供方"}, status=400)
+            return
+        try:
+            cfg = load_config()
+            keys = cfg.get("api_keys")
+            if not isinstance(keys, dict):
+                keys = {}
+            if key:
+                keys[provider] = key
+            else:
+                keys.pop(provider, None)
+            cfg["api_keys"] = keys
+            get_config_path().write_text(
+                json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            # env 优先级最高,同步写入以便本进程内所有客户端立即读到
+            for env in PROVIDERS[provider].get("env", []):
+                if key:
+                    os.environ[env] = key
+                else:
+                    os.environ.pop(env, None)
+        except Exception as e:
+            self._send_json({"error": f"保存失败: {e}"}, status=500)
+            return
+        self._send_json({"ok": True, "provider": provider, "hasKey": bool(key)})
+
     def _serve_html(self, mission=None):
         try:
             with open(HTML_PATH, "rb") as fh:
@@ -787,19 +828,21 @@ def main():
     # can only touch sandbox/ (see execute_tool in open_claude/tools.py).
     os.environ["OC_SANDBOX_ROOT"] = SANDBOX_DIR
 
+    # 不再强制要求启动前配置密钥:未配置时仅给出提示,服务照常启动,
+    # 用户可在页面「参数」面板里填入对应模型的 Key(立即生效)。
     provider = get_model_provider(get_model())
     if not get_api_key_for(provider):
         spec = PROVIDERS.get(provider, {})
-        envs = " or ".join(spec.get("env", [])) or "the provider API key"
-        print(f"Error: no API key for {spec.get('label', provider)}. "
-              f"Set {envs} or add it to ~/.claude/config.json", file=sys.stderr)
-        sys.exit(1)
+        envs = " / ".join(spec.get("env", [])) or "the provider API key"
+        print(f"[codex] 提示:当前模型提供方 {spec.get('label', provider)} 尚未配置密钥,"
+              f"可在页面「参数」面板中填入,或设置环境变量 {envs}。", file=sys.stderr)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    url = f"http://{args.host}:{args.port}/"
+    shown_host = "127.0.0.1" if args.host in ("0.0.0.0", "") else args.host
+    url = f"http://{shown_host}:{args.port}/"
     print(f"[codex] sandbox: {SANDBOX_DIR}")
     print(f"[codex] model={get_model()}")
-    print(f"[codex] open {url}  (Ctrl+C to stop)")
+    print(f"[codex] listening on {args.host}:{args.port}  ->  {url}  (Ctrl+C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

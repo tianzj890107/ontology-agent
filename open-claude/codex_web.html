@@ -209,6 +209,16 @@ input,textarea,select{font-family:inherit;color:inherit}
 .mi-sec h4{font-size:12px;color:var(--dimmer);margin-bottom:8px;font-weight:600}
 .mi-loading{color:var(--dimmer);padding:16px 0;text-align:center}
 .mi-err{color:var(--red);padding:12px 0}
+/* 参数面板内的模型密钥 */
+.pkey{border-top:1px solid var(--border);margin-top:10px;padding-top:10px}
+.pkey-h{font-size:12px;color:var(--dimmer);margin-bottom:7px}
+.pkey-h #p-key-prov{color:var(--fg)}
+.pkey-h .set{color:#59d98e}.pkey-h .unset{color:var(--red)}
+.pkey-row{display:flex;gap:6px}
+.pkey-row input{flex:1;background:#141416;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:12.5px;color:var(--fg);outline:none}
+.pkey-row input:focus{border-color:#4a4a52}
+.pkey-row button{background:var(--accent);color:#111;font-weight:600;border-radius:8px;padding:0 14px;font-size:12.5px}
+.pkey-msg{font-size:11.5px;margin-top:6px;min-height:14px;color:var(--dimmer)}
 .modal{width:380px;background:#1c1c20;border:1px solid var(--border);border-radius:14px;padding:20px}
 .modal h3{font-size:15px;margin-bottom:6px}
 .modal .hint{font-size:12px;color:var(--dimmer);margin-bottom:14px}
@@ -310,6 +320,14 @@ input,textarea,select{font-family:inherit;color:inherit}
     <span style="display:flex;align-items:center;gap:7px"><input type="range" id="p-temp" min="0" max="2" step="0.1"><span class="val" id="p-temp-val">–</span></span></div>
   <div class="prow"><label>扩展思考</label><span class="sw" id="p-think"></span></div>
   <div class="prow" id="p-budget-row"><label>思考预算 token</label><input type="number" id="p-budget" min="1024" step="512"></div>
+  <div class="pkey">
+    <div class="pkey-h">模型密钥 · <span id="p-key-prov">—</span> <span id="p-key-status"></span></div>
+    <div class="pkey-row">
+      <input type="password" id="p-apikey" placeholder="粘贴该模型对应的 API Key">
+      <button id="p-key-save">保存</button>
+    </div>
+    <div class="pkey-msg" id="p-key-msg"></div>
+  </div>
 </div>
 
 <!-- new project modal -->
@@ -832,7 +850,11 @@ function openModelPop(anchor){
   pop.querySelectorAll(".item[data-m]").forEach(el => el.onclick = async () => {
     const j = await api("/api/model", {method:"POST", headers:{"Content-Type":"application/json"},
                                        body: JSON.stringify({model: el.dataset.m})});
-    if (j.model) META.model = j.model;
+    if (j.model){
+      META.model = j.model;
+      const mm = (META.models || []).find(x => x.id === j.model);
+      if (mm) META.provider = mm.provider;   // 让密钥面板跟随新模型的提供方
+    }
     updateModelLabels(); closePops();
   });
   placePop(pop, anchor);
@@ -848,6 +870,35 @@ function fillParamPanel(){
   $("p-think").classList.toggle("on", !!p.thinking);
   $("p-budget").value = p.thinking_budget || 8000;
   syncThink();
+  fillKeyPanel();
+}
+function fillKeyPanel(){
+  const prov = (META.providers || []).find(x => x.id === META.provider);
+  $("p-key-prov").textContent = prov ? prov.label : (META.provider || "—");
+  $("p-apikey").value = "";
+  $("p-key-msg").textContent = "";
+  const st = $("p-key-status");
+  if (prov && prov.hasKey){ st.className = "set"; st.textContent = "✓ 已配置"; }
+  else { st.className = "unset"; st.textContent = "✕ 未配置"; }
+}
+async function saveApiKey(){
+  const provider = META.provider;
+  const key = $("p-apikey").value.trim();
+  if (!provider){ $("p-key-msg").textContent = "无法确定当前模型的提供方"; return; }
+  $("p-key-msg").textContent = "保存中…";
+  const j = await api("/api/apikey", {method:"POST", headers:{"Content-Type":"application/json"},
+                                      body: JSON.stringify({provider, key})});
+  if (j && j.ok){
+    const p = (META.providers || []).find(x => x.id === provider);
+    if (p) p.hasKey = j.hasKey;
+    $("p-apikey").value = "";
+    $("p-key-msg").textContent = j.hasKey ? "已保存,立即生效。" : "已清除该密钥。";
+    const st = $("p-key-status");
+    if (j.hasKey){ st.className = "set"; st.textContent = "✓ 已配置"; }
+    else { st.className = "unset"; st.textContent = "✕ 未配置"; }
+  } else {
+    $("p-key-msg").textContent = (j && j.error) || "保存失败";
+  }
 }
 function syncThink(){
   const on = $("p-think").classList.contains("on");
@@ -859,6 +910,8 @@ async function saveParams(patch){
                                       body: JSON.stringify(patch)});
   if (j && !j.error) META.params = j;
 }
+$("p-key-save").onclick = e => { e.stopPropagation(); saveApiKey(); };
+$("p-apikey").addEventListener("keydown", e => { if (e.key === "Enter"){ e.preventDefault(); saveApiKey(); } });
 $("p-maxtok").onchange = e => saveParams({max_tokens: e.target.value});
 $("p-temp").oninput = e => { $("p-temp-val").textContent = e.target.value; };
 $("p-temp").onchange = e => saveParams({temperature: parseFloat(e.target.value)});
