@@ -132,11 +132,10 @@ def minio_config() -> dict:
     # 浏览器可达的预览基址(拼 /file/preview 用);未配则回落到 server-url 本身。
     cfg["preview_base"] = pick("FILESERVER_PREVIEW_BASE", "fileserver_preview_base",
                                cfg["url"]).rstrip("/")
-    # FileServer 出站代理:172.16.5.190 这类内网 IP 只能经代理访问(直连会被拒),
-    # 而 eimos 网关走直连,故只给上传单独挂代理,不动其它调用。优先级:
-    # 配置 fileserver_proxy → 环境 FILESERVER_PROXY → 环境 http_proxy;都没有则不用代理。
-    cfg["proxy"] = pick("FILESERVER_PROXY", "fileserver_proxy",
-                        os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY") or "")
+    # FileServer 出站代理:仅在显式配置 fileserver_proxy / FILESERVER_PROXY 时才启用。
+    # 默认不走代理(公网 eimos 网关本就该直连)。刻意不回落 http_proxy——否则会把
+    # 本应直连的 eimos 网关也错误地经代理转发。
+    cfg["proxy"] = pick("FILESERVER_PROXY", "fileserver_proxy", "")
     return cfg
 
 
