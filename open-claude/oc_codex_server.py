@@ -112,15 +112,35 @@ _DEFAULT_MINIO = {
 }
 
 
+def _load_project_fileserver() -> dict:
+    """读取项目内、纳入 git 的 fileserver.json(与本脚本同目录)。
+    作用:让上传目标随代码一起版本化,git push/pull 即可下发到服务器,
+    不再依赖各机器的 ~/.claude/config.json 手动同步。缺失或损坏则返回 {}。
+    键名与 config.json 一致(minio_url / minio_bucket / ...)。"""
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fileserver.json")
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def minio_config() -> dict:
-    """读取 FileServer 连接配置:环境变量优先,其次 config.json 的 minio_* 键,再回落默认。"""
+    """读取 FileServer 连接配置。优先级:环境变量 → 项目内 fileserver.json(随 git 下发)
+    → 用户 ~/.claude/config.json 的 minio_* 键 → 内置默认。
+    项目文件排在用户 config 之前,确保 git 里的部署配置在服务器上说了算,
+    不会被某台机器上过期的 config.json 覆盖。"""
     cfg = {}
     try:
         c = load_config()
     except Exception:
         c = {}
+    proj = _load_project_fileserver()
     def pick(env, key, default):
         v = os.environ.get(env)
+        if not v:
+            v = proj.get(key)
         if not v:
             v = c.get(key)
         return v if v else default
