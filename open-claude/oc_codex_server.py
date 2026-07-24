@@ -132,6 +132,11 @@ def minio_config() -> dict:
     # 浏览器可达的预览基址(拼 /file/preview 用);未配则回落到 server-url 本身。
     cfg["preview_base"] = pick("FILESERVER_PREVIEW_BASE", "fileserver_preview_base",
                                cfg["url"]).rstrip("/")
+    # FileServer 出站代理:172.16.5.190 这类内网 IP 只能经代理访问(直连会被拒),
+    # 而 eimos 网关走直连,故只给上传单独挂代理,不动其它调用。优先级:
+    # 配置 fileserver_proxy → 环境 FILESERVER_PROXY → 环境 http_proxy;都没有则不用代理。
+    cfg["proxy"] = pick("FILESERVER_PROXY", "fileserver_proxy",
+                        os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY") or "")
     return cfg
 
 
@@ -233,13 +238,22 @@ def fileserver_put_object(cfg, object_key, content, filename, file_ctype="text/c
         "Accept": "application/json",
     }
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-    ctx = None
+    handlers = []
     if url.lower().startswith("https"):
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    proxy = (cfg.get("proxy") or "").strip()
+    if proxy:
+        # 只给本次上传走代理;不安装为全局 opener,避免影响 eimos 网关直连调用。
+        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    else:
+        # 无代理配置时显式禁用代理,避免误读进程环境导致行为不一致。
+        handlers.append(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(*handlers)
     try:
-        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+        with opener.open(req, timeout=60) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         raise RuntimeError(
