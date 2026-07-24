@@ -188,9 +188,17 @@ input,textarea,select{font-family:inherit;color:inherit}
 #pvbody img{max-width:92%;display:block;margin:20px auto}
 .tree{padding:10px 8px;font-size:12.5px}
 .tree .dir{color:var(--dim);padding:5px 8px 2px;font-weight:600}
-.tree .fil{display:flex;justify-content:space-between;gap:8px;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:var(--mono);font-size:12px}
+.tree .fil{display:flex;align-items:center;gap:8px;padding:3px 8px;border-radius:6px;font-family:var(--mono);font-size:12px}
 .tree .fil:hover{background:#232327}
+.tree .fil .fname{flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree .fil .fchk{flex:none;cursor:pointer;margin:0}
 .tree .fil .sz{color:var(--dimmer);flex:none}
+.tree-tools{display:flex;align-items:center;gap:10px;padding:8px 10px 2px;font-size:12px;color:var(--dim)}
+.tree-tools label{display:flex;align-items:center;gap:5px;cursor:pointer}
+.tree-tools .tree-count{color:var(--dimmer)}
+.tree-tools .tree-act{margin-left:auto;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+.tree-tools .tree-act:hover{background:#2b7bf5}
+.tree-tools .tree-act:disabled{opacity:.6;cursor:default}
 .pv-empty{color:var(--dimmer);text-align:center;padding:40px 20px;font-size:13px;line-height:1.7}
 .path.link{cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
 .path.link:hover{color:var(--text)}
@@ -302,6 +310,7 @@ input,textarea,select{font-family:inherit;color:inherit}
     <span id="pvtitle">项目文件</span>
     <button class="pvbtn" id="pvsrc" style="display:none">源码</button>
     <button class="pvbtn" id="pvopen" style="display:none" title="新标签页打开">↗</button>
+    <button class="pvbtn" id="pvdl" style="display:none" title="下载">⬇</button>
     <button class="pvbtn" id="pvrefresh" title="刷新">⟳</button>
     <button class="pvbtn" id="pvclose" title="关闭">✕</button>
   </div>
@@ -1043,11 +1052,14 @@ async function showTree(){
   $("pvback").style.display = "none";
   $("pvsrc").style.display = "none";
   $("pvopen").style.display = "none";
+  $("pvdl").style.display = "";
+  $("pvdl").onclick = downloadSelected;
   $("pvtitle").textContent = proj + " / 项目文件";
   const j = await api("/api/files?project=" + encodeURIComponent(proj));
   const files = j.files || [];
   const body = $("pvbody");
   if (!files.length){
+    $("pvdl").style.display = "none";
     body.innerHTML = '<div class="pv-empty">项目还是空的。<br>让智能体生成一些文件,或用 📎 上传。</div>';
     return;
   }
@@ -1056,7 +1068,11 @@ async function showTree(){
     const db = b.path.slice(0, b.path.lastIndexOf("/") + 1);
     return da.localeCompare(db) || a.path.localeCompare(b.path);
   });
-  let html = '<div class="tree">', lastDir = null;
+  let html = '<div class="tree-tools"><label><input type="checkbox" id="chkall"> 全选</label>' +
+             '<span id="chkcount" class="tree-count"></span>' +
+             (MISSION ? '<button class="tree-act" id="btnminio">上传到 MinIO</button>' : '') +
+             '</div><div class="tree">';
+  let lastDir = null;
   for (const f of files){
     const i = f.path.lastIndexOf("/");
     const dir = i < 0 ? "" : f.path.slice(0, i);
@@ -1065,10 +1081,65 @@ async function showTree(){
       lastDir = dir;
       if (dir) html += `<div class="dir">📁 ${esc(dir)}/</div>`;
     }
-    html += `<div class="fil" data-p="${esc(f.path)}"><span style="${dir ? "padding-left:14px" : ""}">${esc(name)}</span><span class="sz">${fmtSize(f.size)}</span></div>`;
+    html += `<div class="fil" data-p="${esc(f.path)}"><input type="checkbox" class="fchk" data-p="${esc(f.path)}"><span class="fname" style="${dir ? "padding-left:14px" : ""}">${esc(name)}</span><span class="sz">${fmtSize(f.size)}</span></div>`;
   }
   body.innerHTML = html + "</div>";
-  body.querySelectorAll(".fil").forEach(el => el.onclick = () => openFile(el.dataset.p));
+  body.querySelectorAll(".fname").forEach(el =>
+    el.onclick = () => openFile(el.parentElement.dataset.p));
+  const chks = [...body.querySelectorAll(".fchk")];
+  const updateCount = () => {
+    const n = chks.filter(c => c.checked).length;
+    $("chkcount").textContent = n ? n + " 个已选" : "";
+    $("chkall").checked = n === chks.length;
+  };
+  chks.forEach(c => c.onclick = e => { e.stopPropagation(); updateCount(); });
+  $("chkall").onclick = () => { chks.forEach(c => c.checked = $("chkall").checked); updateCount(); };
+  if ($("btnminio")) $("btnminio").onclick = uploadSelectedToMinio;
+}
+
+async function uploadSelectedToMinio(){
+  const proj = pvProject();
+  if (!proj) return;
+  const picked = [...document.querySelectorAll("#pvbody .fchk:checked")].map(c => c.dataset.p);
+  if (!picked.length){ alert("请先勾选要上传的文件"); return; }
+  const btn = $("btnminio");
+  const old = btn ? btn.textContent : "";
+  if (btn){ btn.disabled = true; btn.textContent = "上传中…"; }
+  try{
+    const prefix = await getMissionPrefix();
+    if (!prefix){ alert("未获取到任务的输出路径前缀(outputPrefix)"); return; }
+    const body = {project: proj, paths: picked, prefix,
+      taskCode: MISSION.taskCode, repositoryId: MISSION.repositoryId};
+    if (MISSION.taskType) body.taskType = MISSION.taskType;
+    const j = await api("/api/minio/upload", {method:"POST", body: JSON.stringify(body)});
+    if (j.error){ alert("上传失败:" + j.error); return; }
+    const fails = (j.results || []).filter(r => !r.ok);
+    let msg = `已上传 ${j.uploaded}/${j.total} 个文件到\n${j.bucket}/${j.prefix}/`;
+    if (fails.length) msg += "\n\n失败:\n" + fails.map(r => `· ${r.name}: ${r.error}`).join("\n");
+    if (j.callback){
+      if (j.callback.ok) msg += `\n\n✅ 已回写报告(callback):上报 ${j.callback.reported} 个文件,类型 ${j.callback.kind}`;
+      else if (j.callback.skipped) msg += `\n\n⚠️ 未回写报告:${j.callback.error}`;
+      else msg += `\n\n❌ 回写报告失败:${j.callback.error}`;
+    }
+    alert(msg);
+  }catch(e){ alert("上传失败:" + e.message); }
+  finally{ if (btn){ btn.disabled = false; btn.textContent = old; } }
+}
+
+function downloadSelected(){
+  const proj = pvProject();
+  if (!proj) return;
+  const picked = [...document.querySelectorAll("#pvbody .fchk:checked")].map(c => c.dataset.p);
+  if (!picked.length){ alert("请先勾选要下载的文件"); return; }
+  downloadFiles(proj, picked);
+}
+
+function downloadFiles(proj, rels){
+  let url = "/api/download?project=" + encodeURIComponent(proj);
+  for (const r of rels) url += "&path=" + encodeURIComponent(r);
+  const a = document.createElement("a");
+  a.href = url; a.download = "";
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
 async function openFile(rel){
@@ -1089,6 +1160,8 @@ async function openFile(rel){
   const openable = ext === "html" || ext === "htm" || ext === "pdf" || IMG_EXT.has(ext);
   $("pvopen").style.display = openable ? "" : "none";
   $("pvopen").onclick = () => window.open(url, "_blank");
+  $("pvdl").style.display = "";
+  $("pvdl").onclick = () => downloadFiles(proj, [rel]);
   if (!canSrc) PV.showSrc = false;
 
   if (IMG_EXT.has(ext)){ body.innerHTML = `<img src="${url}" alt="">`; return; }
@@ -1166,6 +1239,20 @@ $("parambtn2").onclick = e => { e.stopPropagation(); closePops(); fillParamPanel
 
 /* ---------------- 专属任务处理模式(当前任务信息) ---------------- */
 const MISSION = (window.__MISSION__ && window.__MISSION__.taskCode) ? window.__MISSION__ : null;
+let MISSION_PREFIX = null;   // 任务执行上下文里的 outputPrefix,上传 MinIO 用
+
+/* 取任务的 outputPrefix:已缓存直接返回,否则拉一次任务信息。*/
+async function getMissionPrefix(){
+  if (MISSION_PREFIX) return MISSION_PREFIX;
+  if (!MISSION) return null;
+  const q = new URLSearchParams({
+    repositoryId: MISSION.repositoryId, taskCode: MISSION.taskCode,
+  });
+  if (MISSION.taskType) q.set("taskType", MISSION.taskType);
+  const j = await api("/api/mission/task?" + q.toString());
+  if (j && j.task && j.task.outputPrefix) MISSION_PREFIX = j.task.outputPrefix;
+  return MISSION_PREFIX;
+}
 
 const MI_LABELS = {
   repositoryId:"本体库 ID", taskCode:"任务编码", taskName:"任务名称",
@@ -1226,6 +1313,7 @@ async function openMissionInfo(){
   try{
     const j = await api("/api/mission/task?" + q.toString());
     if (j.error){ $("missionbody").innerHTML = `<div class="mi-err">${esc(j.error)}</div>`; return; }
+    if (j.task && j.task.outputPrefix) MISSION_PREFIX = j.task.outputPrefix;
     $("missionbody").innerHTML = renderMissionInfo(j.task);
   }catch(e){
     $("missionbody").innerHTML = `<div class="mi-err">请求失败:${esc(e.message)}</div>`;

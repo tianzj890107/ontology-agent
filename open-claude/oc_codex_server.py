@@ -25,10 +25,14 @@ then open http://127.0.0.1:47313/ in a browser.
 
 import argparse
 import base64
+import hashlib
+import hmac
+import io
 import json
 import mimetypes
 import os
 import re
+import ssl
 import sys
 import threading
 import time
@@ -36,6 +40,8 @@ import traceback
 import urllib.error
 import urllib.request
 import uuid
+import zipfile
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
@@ -65,7 +71,7 @@ _TASK_CODE_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 
 # Ontology 网关默认地址与应用标识(可用环境变量 / config.json 覆盖)。
-_DEFAULT_ONTOLOGY_BASE = "http://pdt-dev.eimos.com/api/gateway2"
+_DEFAULT_ONTOLOGY_BASE = "http://pdt-dev.eimos.com/api/gateway2/ontology"
 _DEFAULT_ONTOLOGY_APP_ID = "ApTH1EHKdRk58WhDQB"
 
 
@@ -91,6 +97,158 @@ def ontology_app_id() -> str:
         except Exception:
             app = None
     return app or _DEFAULT_ONTOLOGY_APP_ID
+
+# ---------------------------------------------------------------------------
+# FileServer 对象存储 —— 走 Eimos FileServer 的 /sdk/object/put(multipart+HMAC)。
+# 连接参数对齐后端 DataIoFileServiceUtils:server-url / access-key / secret-key /
+# bucket-name。沿用 minio_* 配置键名(值即 fileserver.*),不必改现有 config.json。
+# ---------------------------------------------------------------------------
+_DEFAULT_MINIO = {
+    "url": "http://localhost:9000",
+    "access_key": "minioadmin",
+    "secret_key": "minioadmin",
+    "bucket": "static",
+    "region": "us-east-1",
+}
+
+
+def minio_config() -> dict:
+    """读取 FileServer 连接配置:环境变量优先,其次 config.json 的 minio_* 键,再回落默认。"""
+    cfg = {}
+    try:
+        c = load_config()
+    except Exception:
+        c = {}
+    def pick(env, key, default):
+        v = os.environ.get(env)
+        if not v:
+            v = c.get(key)
+        return v if v else default
+    cfg["url"] = pick("MINIO_URL", "minio_url", _DEFAULT_MINIO["url"]).rstrip("/")
+    cfg["access_key"] = pick("MINIO_ACCESS_KEY", "minio_access_key", _DEFAULT_MINIO["access_key"])
+    cfg["secret_key"] = pick("MINIO_SECRET_KEY", "minio_secret_key", _DEFAULT_MINIO["secret_key"])
+    cfg["bucket"] = pick("MINIO_BUCKET", "minio_bucket", _DEFAULT_MINIO["bucket"])
+    cfg["region"] = pick("MINIO_REGION", "minio_region", _DEFAULT_MINIO["region"])
+    # 浏览器可达的预览基址(拼 /file/preview 用);未配则回落到 server-url 本身。
+    cfg["preview_base"] = pick("FILESERVER_PREVIEW_BASE", "fileserver_preview_base",
+                               cfg["url"]).rstrip("/")
+    return cfg
+
+
+# 结果文件名 -> 解析要素(智能建模回调 files[].parseElement 用,对齐 API 文档 §4)。
+_PARSE_ELEMENT_BY_FILE = {
+    "business_objects.csv": "BUSINESS_OBJECT",
+    "logical_entities.csv": "LOGICAL_ENTITY",
+    "business_attributes.csv": "BUSINESS_ATTRIBUTE",
+    "entity_relations.csv": "ENTITY_RELATION",
+    "business_rules.csv": "RULE",
+}
+
+
+def fileserver_preview_url(cfg, file_url, object_key):
+    """回调用的 previewUrl:优先 put 返回的 fileUrl(本身即 /file/preview/...),
+    否则按 {preview_base}/file/preview/{bucket}/{objectKey} 拼。"""
+    if file_url and "/file/preview/" in file_url:
+        return file_url
+    return f"{cfg['preview_base']}/file/preview/{cfg['bucket']}/{object_key.lstrip('/')}"
+
+
+def ontology_task_callback(kind, task_code, repo_id, payload):
+    """POST /intelligent/{kind}/tasks/{taskCode}/callback,回写 Agent 状态与文件。
+    返回 {ok, error?, resp?}。走与 execution-context 同一网关(带 X-App-Id)。"""
+    base = ontology_api_base()
+    url = f"{base}/intelligent/{kind}/tasks/{quote(task_code)}/callback"
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-App-Id": ontology_app_id(),
+    }
+    if repo_id:
+        headers["X-Ontology-Repository-Id"] = str(repo_id)
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload_resp = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return {"ok": False,
+                "error": f"HTTP {e.code} @ {url} :: {_http_err_body(e) or '(空响应体)'}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if isinstance(payload_resp, dict) and payload_resp.get("success") is False:
+        return {"ok": False,
+                "error": payload_resp.get("msg") or payload_resp.get("message") or "回调失败",
+                "resp": payload_resp}
+    return {"ok": True, "resp": payload_resp}
+
+
+def _http_err_body(e):
+    try:
+        return e.read().decode("utf-8", "replace")[:400].strip()
+    except Exception:
+        return ""
+
+
+def _fileserver_auth(method, path, secret, access, query="", body=""):
+    """FileServer 自定义签名:HMAC-SHA256(secret, "METHOD\\nPATH\\nQUERY\\nBODY") 的
+    base64,放进 Authorization: Bearer {access}:{signature}。对齐 Eimos FileServerClient。"""
+    string_to_sign = f"{method}\n{path}\n{query or ''}\n{body or ''}"
+    digest = hmac.new(secret.encode("utf-8"), string_to_sign.encode("utf-8"),
+                      hashlib.sha256).digest()
+    signature = base64.b64encode(digest).decode()
+    return f"Bearer {access}:{signature}"
+
+
+def _multipart(fields, file_field, filename, content, file_ctype):
+    """手搓 multipart/form-data(免装 requests)。返回 (content_type_header, body_bytes)。"""
+    boundary = "----ocFileServer" + uuid.uuid4().hex
+    buf = io.BytesIO()
+    for name, value in fields.items():
+        buf.write(f"--{boundary}\r\n".encode("utf-8"))
+        buf.write(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        buf.write(f"{value}\r\n".encode("utf-8"))
+    buf.write(f"--{boundary}\r\n".encode("utf-8"))
+    buf.write((f'Content-Disposition: form-data; name="{file_field}"; '
+               f'filename="{filename}"\r\n').encode("utf-8"))
+    buf.write(f"Content-Type: {file_ctype}\r\n\r\n".encode("utf-8"))
+    buf.write(content)
+    buf.write(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    return f"multipart/form-data; boundary={boundary}", buf.getvalue()
+
+
+def fileserver_put_object(cfg, object_key, content, filename, file_ctype="text/csv"):
+    """上传对象到 FileServer:POST /sdk/object/put(multipart,字段 bucketName/objectKey/file)。
+    成功返回 data(dict,含 fileUrl);失败抛 RuntimeError。"""
+    path = "/sdk/object/put"
+    url = cfg["url"].rstrip("/") + path
+    ctype, body = _multipart(
+        {"bucketName": cfg["bucket"], "objectKey": object_key},
+        "file", filename, content, file_ctype)
+    # 参考实现里签名的 body 传空串,故此处 body="" 与之一致。
+    headers = {
+        "Authorization": _fileserver_auth("POST", path, cfg["secret_key"],
+                                          cfg["access_key"]),
+        "Content-Type": ctype,
+        "Content-Length": str(len(body)),
+        "Accept": "application/json",
+    }
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    ctx = None
+    if url.lower().startswith("https"):
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(
+            f"HTTP {e.code} @ {url} :: {_http_err_body(e) or '(空响应体)'}")
+    if not (isinstance(payload, dict) and payload.get("success")):
+        msg = payload.get("message") if isinstance(payload, dict) else str(payload)
+        raise RuntimeError(f"上传失败: {msg or payload}")
+    return payload.get("data") or {}
+
 
 # Inference-parameter defaults applied to every new task (patched via /api/params).
 PARAM_DEFAULTS = {"temperature": None, "max_tokens": None,
@@ -504,6 +662,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "项目不存在"}, status=404)
             else:
                 self._send_json({"files": list_project_files(base)})
+        elif path == "/api/download":
+            self._handle_download(qs)
         elif path.startswith("/p/"):
             self._serve_project_file(path)
         elif path == "/api/meta":
@@ -577,6 +737,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e)}, status=400)
         elif path == "/api/upload":
             self._handle_upload()
+        elif path == "/api/minio/upload":
+            self._handle_minio_upload()
         else:
             m = re.match(r"^/api/tasks/([0-9a-f]+)/send$", path)
             if m:
@@ -622,6 +784,159 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
+
+    def _handle_download(self, qs):
+        """GET /api/download?project=X&path=a[&path=b...] — 下载选中的文件。
+
+        单个文件按原文件名附件下载;多个文件打包成 <project>.zip 下载。
+        每个路径都经 resolve_project_file 校验,确保限定在项目目录内。
+        """
+        proj = (qs.get("project") or [""])[0]
+        if not project_path(proj):
+            self.send_error(404)
+            return
+        picked = []
+        for rel in (qs.get("path") or []):
+            f = resolve_project_file(proj, rel)
+            if f and os.path.isfile(f):
+                picked.append((str(rel).replace("\\", "/").lstrip("/"), f))
+        if not picked:
+            self.send_error(404)
+            return
+        if len(picked) == 1:
+            rel, f = picked[0]
+            name = os.path.basename(f) or "download"
+            try:
+                with open(f, "rb") as fh:
+                    body = fh.read()
+            except OSError:
+                self.send_error(500)
+                return
+            self._send_attachment(body, name, "application/octet-stream")
+            return
+        # 多文件 -> 内存打包 zip
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for arc, f in picked:
+                try:
+                    z.write(f, arcname=arc)
+                except OSError:
+                    continue
+        self._send_attachment(buf.getvalue(), (proj or "download") + ".zip",
+                              "application/zip")
+
+    def _send_attachment(self, body: bytes, filename: str, ctype: str):
+        """带 Content-Disposition: attachment 发送二进制,文件名做 RFC5987 编码。"""
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Disposition",
+                         "attachment; filename*=UTF-8''" + quote(filename))
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_minio_upload(self):
+        """POST /api/minio/upload {project, paths:[...], prefix, taskCode, repositoryId, taskType?}
+        —— 把项目里选中的文件上传到 FileServer 的 <bucket>/<prefix>/<文件名>,
+        随后调用 Ontology 后端的 callback 回写报告(COMPLETED + files)。
+
+        prefix 即任务执行上下文里的 outputPrefix,例如
+        ontology/1/modeling-tasks/RM.../agent-output。走 FileServer 的 /sdk/object/put。"""
+        data = self._read_body()
+        proj = str(data.get("project") or "")
+        prefix = str(data.get("prefix") or "").strip().strip("/")
+        paths = data.get("paths") or []
+        task_code = str(data.get("taskCode") or "").strip()
+        repo_id = str(data.get("repositoryId") or "").strip()
+        ttype = str(data.get("taskType") or "").strip().lower()
+        if not project_path(proj):
+            self._send_json({"error": "项目不存在"}, status=400)
+            return
+        if not prefix:
+            self._send_json({"error": "缺少输出路径前缀(outputPrefix)"}, status=400)
+            return
+        if not isinstance(paths, list) or not paths:
+            self._send_json({"error": "未选择文件"}, status=400)
+            return
+        cfg = minio_config()
+        results = []
+        for rel in paths:
+            f = resolve_project_file(proj, str(rel))
+            name = os.path.basename(f) if f else os.path.basename(str(rel))
+            if not f or not os.path.isfile(f):
+                results.append({"name": name, "ok": False, "error": "文件不存在"})
+                continue
+            try:
+                with open(f, "rb") as fh:
+                    blob = fh.read()
+            except OSError as e:
+                results.append({"name": name, "ok": False, "error": f"读取失败: {e}"})
+                continue
+            key = prefix + "/" + name
+            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            try:
+                info = fileserver_put_object(cfg, key, blob, name, ctype)
+                # objectKey / previewUrl 以 FileServer 返回为准,取不到再回退。
+                # 真实响应:previewUrl 取 preSignedUrl,objectKey 取 objectKey。
+                results.append({
+                    "name": name, "ok": True, "key": key,
+                    "fileUrl": info.get("fileUrl"),
+                    "objectKey": info.get("objectKey") or info.get("object_key") or key,
+                    "previewUrl": (info.get("preSignedUrl") or info.get("previewUrl")
+                                   or info.get("preview_url") or info.get("fileUrl")),
+                })
+            except Exception as e:
+                results.append({"name": name, "ok": False, "error": str(e)})
+        ok_n = sum(1 for r in results if r.get("ok"))
+        resp = {"ok": ok_n > 0, "uploaded": ok_n, "total": len(results),
+                "prefix": prefix, "bucket": cfg["bucket"], "results": results}
+        # 上传成功后回写报告(callback)。有 taskCode 且至少上传成功一个文件才回调。
+        if ok_n and task_code:
+            resp["callback"] = self._callback_after_upload(
+                cfg, task_code, repo_id, ttype, results)
+        self._send_json(resp)
+
+    def _callback_after_upload(self, cfg, task_code, repo_id, ttype, results):
+        """按上传结果构造 COMPLETED 回调:智能建模带 files[](按文件名映射 parseElement),
+        消歧整合按文档 §5.2 不带 files。"""
+        if ttype in ("modeling", "integration"):
+            kind = ttype
+        elif task_code.upper().startswith("MI"):
+            kind = "integration"
+        else:
+            kind = "modeling"
+        occurred = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+        payload = {"agentStatus": "COMPLETED", "occurredAt": occurred,
+                   "errorCode": None, "errorMessage": None}
+        if kind == "modeling":
+            files = []
+            for r in results:
+                if not r.get("ok"):
+                    continue
+                elem = _PARSE_ELEMENT_BY_FILE.get(r["name"])
+                if not elem:
+                    continue   # 非标准解析要素文件(如 ok.csv)不进 files
+                # objectKey / previewUrl 优先用 FileServer 上传返回值,缺失才回退。
+                object_key = r.get("objectKey") or r["key"]
+                preview = r.get("previewUrl") or fileserver_preview_url(
+                    cfg, r.get("fileUrl"), object_key)
+                files.append({
+                    "parseElement": elem,
+                    "filename": r["name"],
+                    "objectKey": object_key,
+                    "previewUrl": preview,
+                })
+            if not files:
+                return {"ok": False, "skipped": True,
+                        "error": "没有可回写的解析要素文件(文件名需为 business_objects.csv 等)"}
+            payload["files"] = files
+        else:
+            payload["files"] = None
+        out = ontology_task_callback(kind, task_code, repo_id, payload)
+        out["kind"] = kind
+        out["reported"] = len(payload.get("files") or [])
+        return out
 
     def _handle_upload(self):
         """POST /api/upload {project, name, data(base64)} — save into project root."""
@@ -702,8 +1017,8 @@ class Handler(BaseHTTPRequestHandler):
         repo = (qs.get("repositoryId") or [""])[0].strip()
         code = (qs.get("taskCode") or [""])[0].strip()
         ttype = (qs.get("taskType") or [""])[0].strip().lower()
-        if not repo or not code:
-            self._send_json({"error": "缺少 repositoryId 或 taskCode"}, status=400)
+        if not code:
+            self._send_json({"error": "缺少 taskCode"}, status=400)
             return
         if not _TASK_CODE_RE.match(code):
             self._send_json({"error": "taskCode 格式非法"}, status=400)
@@ -722,12 +1037,11 @@ class Handler(BaseHTTPRequestHandler):
         for kind in kinds:
             url = f"{base}/intelligent/{kind}/tasks/{quote(code)}/execution-context"
             try:
-                # 网关要求 GET + X-App-Id + X-Ontology-Repository-Id。
-                req = urllib.request.Request(url, method="GET", headers={
-                    "X-Ontology-Repository-Id": repo,
-                    "X-App-Id": app_id,
-                    "Accept": "application/json",
-                })
+                # 网关要求 GET + X-App-Id;repositoryId 不再必填,有才带上。
+                headers = {"X-App-Id": app_id, "Accept": "application/json"}
+                if repo:
+                    headers["X-Ontology-Repository-Id"] = repo
+                req = urllib.request.Request(url, method="GET", headers=headers)
                 with urllib.request.urlopen(req, timeout=15) as resp:
                     payload = json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
