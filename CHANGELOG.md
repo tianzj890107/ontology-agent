@@ -37,6 +37,12 @@
 - 页面：`open-claude/codex_web.html`。
 - 类型：HTML/CSS/JS 静态资源变更，刷新浏览器即可；服务器已同步。
 
+### 9. 自动确认按钮颜色调整
+
+- 自动确认开启状态改为低饱和浅绿色背景与深绿色文字，降低视觉刺激并保持状态辨识度。
+- 页面：`open-claude/codex_web.html`。
+- 类型：HTML/CSS 静态资源变更，刷新浏览器即可；服务器已同步。
+
 ### 1. Qwen 模型配置与动态模型目录
 
 - 默认 Provider 改为读取 `LLM_PROVIDER`；当前服务器使用 Qwen，不再要求 Anthropic API Key。
