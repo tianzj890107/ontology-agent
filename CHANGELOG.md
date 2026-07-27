@@ -1,0 +1,70 @@
+# 20260727 分支变更记录
+
+> 本文档记录 `20260727` 分支对 Ontology Agent 的功能、接口、页面和部署改动。
+> 页面路径以仓库根目录/`open-claude/` 为基准；Agent 服务入口为 `open-claude/oc_codex_server.py`。
+
+## 维护规则
+
+- 每次功能、接口、模型、配置、页面或部署修改后，在对应日期下追加记录，不覆盖历史记录。
+- 每条记录至少说明：用户可见变化、涉及页面或接口、主要文件、是否需要重启后端。
+- 仅 HTML/CSS/JS 变更：同步源码后刷新浏览器即可；Python、模型、接口、环境变量或依赖变更：需要重启本地和服务器服务。
+- 服务器当前目录：`/home/wugefei/ontology/ontology-agent`。
+- 当前分支：`20260727`；服务端口：`47313`。
+- 真实密钥只能放在未提交的 `.env` 或服务器密钥配置中；`.env.example` 只放配置模板。
+
+## 2026-07-27
+
+### 1. Qwen 模型配置与动态模型目录
+
+- 默认 Provider 改为读取 `LLM_PROVIDER`；当前服务器使用 Qwen，不再要求 Anthropic API Key。
+- 支持读取 `QWEN_API_KEY`、`QWEN_BASE_URL`、`QWEN_MODEL`、`QWEN_ENABLE_THINKING` 等配置。
+- 自动读取项目 `.env`，Shell 环境变量优先于文件配置。
+- 根据 `QWEN_VISION_MODELS` 和 `QWEN_TEXT_MODELS` 动态注册模型，保留原有 Anthropic、OpenAI、GLM、Kimi、DeepSeek 模型。
+- Qwen OpenAI 兼容适配器支持图片消息和 Qwen thinking 参数。
+- 主要文件：`open-claude/open_claude/config.py`、`open-claude/open_claude/openai_compat.py`、`.env.example`、`.gitignore`。
+- 类型：Python、模型和环境配置变更，需要重启后端；已部署到服务器。
+
+### 2. 浅色页面主题
+
+- Agent 工作台从深色主题改为白色/浅色主题。
+- 侧栏、任务区、文件预览区、弹窗、代码区、表格和审批卡统一使用浅色样式。
+- 页面：`open-claude/codex_web.html`。
+- 类型：HTML/CSS 静态资源变更，刷新浏览器即可；服务器已同步。
+
+### 3. 任务执行中的自动确认开关
+
+- 任务开始后，在任务顶部增加“自动确认：开/关”按钮。
+- 原首页和任务输入区按钮保留，三个按钮共享同一开关状态。
+- 状态保存在浏览器 `localStorage` 的 `oc_auto_approve` 中。
+- 执行任务期间打开开关，会立即自动放行当前已挂起的审批卡；关闭后后续危险操作恢复人工确认。
+- 主要文件：`open-claude/codex_web.html`。
+- 类型：HTML/JS 静态资源变更，刷新浏览器即可；服务器已同步。
+
+### 4. 文件列表按目录折叠
+
+- 文件预览区改为按目录分组显示。
+- 项目根目录默认折叠，避免工作区杂项文件一打开占满列表。
+- 任务目录、ID 目录等子目录默认展开；目录标题可手动展开/收起。
+- 全选、下载、MinIO 上传和文件预览逻辑保持不变。
+- 主要文件：`open-claude/codex_web.html`。
+- 类型：HTML/JS 静态资源变更，刷新浏览器即可；服务器已同步。
+
+### 5. 20260727 分支与服务器部署
+
+- 创建并使用 Git 分支 `20260727`。
+- 服务器已从 `origin/20260727` 拉取代码并运行：`python oc_codex_server.py --host 0.0.0.0 --port 47313`。
+- 当前部署版本：`ef8d7b7`；当前服务进程由 `nohup` 持续运行。
+- 当前服务器 `.env` 已配置 Qwen，真实密钥未提交到 Git。
+- 类型：部署变更；Python/模型配置变更已重启服务器服务。
+
+## 后续记录模板
+
+### N. 功能名称
+
+- 用户可见变化：
+- 涉及页面/接口：
+- 主要文件：
+- 类型：前端静态资源 / Python 后端 / 模型配置 / 接口 / 部署。
+- 是否需要重启后端：是/否。
+- 部署状态：本地已验证 / 已推送 / 已部署 / 待部署。
+
