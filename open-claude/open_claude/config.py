@@ -8,6 +8,45 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+def _load_dotenv() -> None:
+    """Load a small, dependency-free .env file before provider resolution.
+
+    Shell variables always win.  This keeps the server launch command simple
+    while allowing deployment-specific keys and model lists to stay out of
+    source control.  Files are checked from an explicit env path, cwd, the
+    open-claude directory, then the repository root.
+    """
+    candidates = []
+    explicit = os.environ.get("ONTOLOGY_AGENT_ENV_FILE")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    here = Path(__file__).resolve()
+    candidates.extend([Path.cwd() / ".env", here.parents[1] / ".env", here.parents[2] / ".env"])
+    seen = set()
+    for path in candidates:
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        try:
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key, value = key.strip(), value.strip()
+                if not key or key.startswith("export "):
+                    continue
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                os.environ.setdefault(key, value)
+        except OSError:
+            continue
+        break
+
+
+_load_dotenv()
+
+
 def get_home_dir() -> Path:
     return Path.home()
 
@@ -127,6 +166,20 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
      "aliases": ["deepseek-flash", "v4-flash"]},
 ]
 
+
+def _env_csv(name: str) -> list[str]:
+    return [x.strip() for x in os.environ.get(name, "").split(",") if x.strip()]
+
+
+# Qwen's compatible endpoint exposes a large, changing catalogue.  Register
+# every model supplied in .env without replacing the built-in cross-provider
+# catalogue.  The explicit set also makes models such as deepseek/glm names in
+# QWEN_TEXT_MODELS use the configured Qwen endpoint when selected from the UI.
+_QWEN_MODEL_IDS = set(_env_csv("QWEN_VISION_MODELS") + _env_csv("QWEN_TEXT_MODELS"))
+for _mid in _QWEN_MODEL_IDS:
+    if not any(m["id"] == _mid for m in AVAILABLE_MODELS):
+        AVAILABLE_MODELS.append({"id": _mid, "label": _mid, "provider": "qwen", "aliases": []})
+
 DEFAULT_MODEL = AVAILABLE_MODELS[0]["id"]
 
 # Build the alias lookup: alias/id (lowercased) -> canonical id
@@ -145,6 +198,8 @@ def get_model_provider(model_id: Optional[str]) -> str:
     if not model_id:
         return "anthropic"
     mid = model_id.strip()
+    if mid in _QWEN_MODEL_IDS and os.environ.get("LLM_PROVIDER", "").lower() == "qwen":
+        return "qwen"
     if mid in _MODEL_PROVIDERS:
         return _MODEL_PROVIDERS[mid]
     low = mid.lower()
@@ -216,7 +271,10 @@ def resolve_model(name: Optional[str]) -> Optional[str]:
 
 def get_model() -> str:
     """Get the canonical model ID from env var or config, else the default."""
-    model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
+    provider = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    provider_model = os.environ.get(provider.upper() + "_MODEL") if provider else None
+    model = (provider_model or os.environ.get("CLAUDE_MODEL") or
+             os.environ.get("ANTHROPIC_MODEL"))
     if not model:
         model = load_config().get("model")
     return resolve_model(model) or DEFAULT_MODEL

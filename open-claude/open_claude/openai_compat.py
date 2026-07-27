@@ -14,6 +14,7 @@ only use Anthropic models never need it.
 """
 
 import json
+import os
 from typing import Any, Generator, Optional
 
 from .config import PROVIDERS, get_api_key_for, get_provider_base_url
@@ -93,9 +94,24 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]]) -> li
                         "content": str(c),
                     })
             else:
-                text_parts = [b.get("text", "") for b in content
-                              if isinstance(b, dict) and b.get("type") == "text"]
-                out.append({"role": "user", "content": "".join(text_parts)})
+                # Preserve Anthropic-style base64 images for Qwen-VL and other
+                # OpenAI-compatible multimodal endpoints.
+                parts = []
+                for blk in content:
+                    if not isinstance(blk, dict):
+                        continue
+                    if blk.get("type") == "text":
+                        parts.append({"type": "text", "text": blk.get("text", "")})
+                    elif blk.get("type") == "image":
+                        source = blk.get("source") or {}
+                        if source.get("type") == "base64" and source.get("data"):
+                            media = source.get("media_type", "image/png")
+                            parts.append({"type": "image_url", "image_url": {
+                                "url": f"data:{media};base64,{source['data']}"
+                            }})
+                        elif blk.get("image_url"):
+                            parts.append({"type": "image_url", "image_url": blk["image_url"]})
+                out.append({"role": "user", "content": parts or ""})
 
     return out
 
@@ -148,6 +164,13 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
             kwargs["max_tokens"] = max_tokens
         if temperature is not None:
             kwargs["temperature"] = temperature
+        if provider == "qwen":
+            # DashScope's OpenAI-compatible API accepts this provider-specific
+            # switch through extra_body.  False is explicit so a thinking model
+            # does not unexpectedly consume the user's quota.
+            thinking = os.environ.get("QWEN_ENABLE_THINKING", "").strip().lower()
+            if thinking:
+                kwargs["extra_body"] = {"enable_thinking": thinking in ("1", "true", "yes", "on")}
 
         tool_acc: dict[int, dict[str, str]] = {}
         order: list[int] = []
@@ -223,6 +246,10 @@ def send(provider: str, model: str, messages: list[dict[str, Any]], system_promp
         kwargs["max_tokens"] = max_tokens
     if temperature is not None:
         kwargs["temperature"] = temperature
+    if provider == "qwen":
+        thinking = os.environ.get("QWEN_ENABLE_THINKING", "").strip().lower()
+        if thinking:
+            kwargs["extra_body"] = {"enable_thinking": thinking in ("1", "true", "yes", "on")}
 
     resp = client.chat.completions.create(**kwargs)
     msg = resp.choices[0].message

@@ -27,6 +27,7 @@ tmp/
 .claude/
 .env
 .env.*
+!.env.example
 credentials.json
 CLAUDE.local.md
 
