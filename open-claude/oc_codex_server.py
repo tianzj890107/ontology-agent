@@ -587,13 +587,20 @@ def project_path(name: str) -> str | None:
 _SKIP_DIRS = {".git", ".open-claude", "node_modules", "__pycache__", ".venv", "venv"}
 
 
-def list_project_files(base: str) -> list[dict]:
-    """Flat file listing of a project (for the preview panel's tree)."""
+_TASK_PATH_RE = re.compile(r"(?:RM|MI)\d{10,}")
+
+def list_project_files(base: str, task_code: str = "") -> list[dict]:
+    """Flat file listing; when bound to a mission, hide outputs of other task IDs."""
     out = []
     for root, dirs, files in os.walk(base):
         dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
         for fn in files:
             fp = os.path.join(root, fn)
+            if task_code:
+                rel = os.path.relpath(fp, base).replace("\\", "/")
+                task_ids = _TASK_PATH_RE.findall(rel)
+                if task_ids and task_code not in task_ids:
+                    continue
             try:
                 st = os.stat(fp)
             except OSError:
@@ -1064,10 +1071,11 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_mission_task(qs)
         elif path == "/api/files":
             base = project_path((qs.get("project") or [""])[0])
+            task_code = (qs.get("taskCode") or [""])[0].strip()
             if not base:
                 self._send_json({"error": "项目不存在"}, status=404)
             else:
-                self._send_json({"files": list_project_files(base)})
+                self._send_json({"files": list_project_files(base, task_code)})
         elif path == "/api/download":
             self._handle_download(qs)
         elif path.startswith("/p/"):

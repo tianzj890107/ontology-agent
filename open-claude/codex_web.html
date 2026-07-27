@@ -952,7 +952,7 @@ async function sendToActive(text){
       const proj = pvProject();
       if (proj){
         try{
-          const j = await api("/api/files?project=" + encodeURIComponent(proj));
+          const j = await api(filesAPIPath(proj));
           if ((j.files || []).length) showTree();
         }catch(e){}
       }
@@ -1164,13 +1164,19 @@ function fileURL(proj, rel){
   return "/p/" + encodeURIComponent(proj) + "/" +
          String(rel).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
 }
+function filesAPIPath(proj){
+  let url = "/api/files?project=" + encodeURIComponent(proj);
+  if (typeof MISSION !== "undefined" && MISSION && MISSION.taskCode)
+    url += "&taskCode=" + encodeURIComponent(MISSION.taskCode);
+  return url;
+}
 
 /* Agent 消息里经常只返回输出文件名,而实际文件位于任务输出目录。
  * 预览首次 404 时,在当前项目文件清单中按完整路径/后缀/唯一文件名兜底定位。 */
 async function findPreviewPath(proj, rel){
   const wanted = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
   try{
-    const j = await api("/api/files?project=" + encodeURIComponent(proj));
+    const j = await api(filesAPIPath(proj));
     const files = (j.files || []).map(f => f.path).filter(Boolean);
     if (files.includes(wanted)) return wanted;
     const suffix = files.filter(p => p.endsWith("/" + wanted));
@@ -1228,7 +1234,7 @@ async function showTree(){
   $("pvdl").style.display = "";
   $("pvdl").onclick = downloadSelected;
   $("pvtitle").textContent = proj + " / 项目文件";
-  const j = await api("/api/files?project=" + encodeURIComponent(proj));
+  const j = await api(filesAPIPath(proj));
   const files = j.files || [];
   const body = $("pvbody");
   if (!files.length){
