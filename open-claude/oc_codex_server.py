@@ -682,11 +682,18 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             self._serve_html()
         elif path == "/mission":
-            # 专属任务处理模式:GET 便捷入口(等价于 POST /mission)
+            # 专属任务处理模式:GET 便捷入口(等价于 POST /mission)。默认智能建模。
             self._serve_html(mission=self._mission_from(
                 (qs.get("repositoryId") or [""])[0],
                 (qs.get("taskCode") or [""])[0],
                 (qs.get("taskType") or [""])[0]))
+        elif path == "/merge":
+            # 整合与消歧模式:同 /mission,但强制 taskType=integration。
+            # 注意 taskCode 可能是 RM 前缀,不能靠前缀推断,必须显式指定 integration。
+            self._serve_html(mission=self._mission_from(
+                (qs.get("repositoryId") or [""])[0],
+                (qs.get("taskCode") or [""])[0],
+                "integration"))
         elif path == "/api/mission/task":
             self._handle_mission_task(qs)
         elif path == "/api/files":
@@ -740,6 +747,14 @@ class Handler(BaseHTTPRequestHandler):
                 data.get("repositoryId", ""),
                 data.get("taskCode", ""),
                 data.get("taskType", "")))
+            return
+        if path == "/merge":
+            # 整合与消歧入口:同 /mission,强制 taskType=integration。
+            data = self._read_mission_post()
+            self._serve_html(mission=self._mission_from(
+                data.get("repositoryId", ""),
+                data.get("taskCode", ""),
+                "integration"))
             return
         if path == "/api/projects":
             data = self._read_body()

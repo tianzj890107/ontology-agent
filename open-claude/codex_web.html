@@ -173,6 +173,10 @@ input,textarea,select{font-family:inherit;color:inherit}
 #pvtitle{font-family:var(--mono);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
 .pvbtn{border:1px solid var(--border);border-radius:6px;padding:3px 9px;font-size:12px;color:var(--dim);background:transparent;flex:none}
 .pvbtn:hover{color:var(--text);background:#26262b}
+.pvbtn.on{color:#0b0b0c;background:var(--amber);border-color:var(--amber);font-weight:600}
+.pvbtn.on:hover{background:var(--amber)}
+.cbtn.auto-btn.on{color:#0b0b0c;background:var(--amber);border-color:var(--amber);font-weight:600}
+.cbtn.auto-btn.on:hover{background:var(--amber);color:#0b0b0c}
 #pvbody{flex:1;overflow:auto;min-height:0;display:flex;flex-direction:column}
 .pv-code{font-family:var(--mono);font-size:12px;line-height:1.55;padding:12px 14px;white-space:pre;color:#c8c8cf}
 .pv-code .no{color:var(--dimmer);user-select:none;display:inline-block;width:3.2em;text-align:right;margin-right:12px}
@@ -267,6 +271,7 @@ input,textarea,select{font-family:inherit;color:inherit}
         <button class="cbtn" id="filesbtn0" title="浏览项目文件">📂 文件</button>
         <button class="cbtn" id="modelbtn">⚙ <span id="modellabel">模型</span> <span class="caret">▼</span></button>
         <button class="cbtn" id="parambtn">⚗ 参数</button>
+        <button class="cbtn auto-btn" id="autook" title="打开后自动跳过“需要确认”,直接允许执行">⚡ 自动确认:关</button>
         <button id="sendbtn" title="开始任务">↑</button>
       </div>
     </div>
@@ -295,6 +300,7 @@ input,textarea,select{font-family:inherit;color:inherit}
           <button class="cbtn" id="attach2" title="上传文件到项目">📎</button>
           <button class="cbtn" id="modelbtn2">⚙ <span id="modellabel2">模型</span> <span class="caret">▼</span></button>
           <button class="cbtn" id="parambtn2">⚗ 参数</button>
+          <button class="cbtn auto-btn" id="autook2" title="打开后自动跳过“需要确认”,直接允许执行">⚡ 自动确认:关</button>
           <button id="sendbtn2" title="发送">↑</button>
         </div>
       </div>
@@ -687,6 +693,10 @@ function appendEvent(ev, col){
     approvalCards[ev.id] = card;
     col.appendChild(card);
     scrollFeed(true);
+    if (AUTO_APPROVE){           // 开关打开:自动允许,跳过人工确认
+      st.textContent = "⚡ 自动确认已开,自动允许…";
+      send(true);
+    }
   }
   else if (ev.type === "approval_result"){
     const card = approvalCards[ev.id];
@@ -1212,6 +1222,28 @@ function toggleFiles(){
 $("filesbtn").onclick = toggleFiles;
 $("filesbtn0").onclick = toggleFiles;
 
+/* 自动确认开关:打开后收到“需要确认”自动允许执行,跳过人工点按。
+   首页与任务视图各一个按钮(autook / autook2),共享同一状态。*/
+let AUTO_APPROVE = localStorage.getItem("oc_auto_approve") === "1";
+function renderAutoBtn(){
+  for (const id of ["autook", "autook2"]){
+    const b = $(id);
+    if (!b) continue;
+    b.classList.toggle("on", AUTO_APPROVE);
+    b.textContent = AUTO_APPROVE ? "⚡ 自动确认:开" : "⚡ 自动确认:关";
+  }
+}
+function toggleAuto(){
+  AUTO_APPROVE = !AUTO_APPROVE;
+  localStorage.setItem("oc_auto_approve", AUTO_APPROVE ? "1" : "0");
+  renderAutoBtn();
+}
+for (const id of ["autook", "autook2"]){
+  const b = $(id);
+  if (b) b.onclick = toggleAuto;
+}
+renderAutoBtn();
+
 /* ---------------- wiring ---------------- */
 function autosize(el){
   el.style.height = "auto";
@@ -1303,7 +1335,7 @@ function renderMissionInfo(task){
 async function openMissionInfo(){
   if (!MISSION) return;
   $("missiontip").textContent =
-    `taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
+    `${MISSION_MODE_LABEL} · taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
   $("missionbody").innerHTML = '<div class="mi-loading">正在获取任务信息…</div>';
   $("missionmask").classList.add("open");
   const q = new URLSearchParams({
@@ -1326,9 +1358,13 @@ $("missionmask").addEventListener("click", e => {
   if (e.target === $("missionmask")) $("missionmask").classList.remove("open");
 });
 
+const MISSION_MODE_LABEL =
+  MISSION && MISSION.taskType === "integration" ? "整合与消歧" : "本体元素生成";
+
 function initMission(){
   if (!MISSION) return;
   $("missionbar").style.display = "flex";
+  $("missioninfo").textContent = `📋 ${MISSION_MODE_LABEL} · 当前任务信息`;
   $("missionmeta").textContent =
     `taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
 }
