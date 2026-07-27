@@ -713,6 +713,7 @@ function appendEvent(ev, col){
     closeStream();
     const card = document.createElement("div");
     card.className = "appr";
+    card.dataset.approvalId = ev.id || "";
     card.innerHTML =
       `<div class="ahead">⚠ 需要确认:${esc(ev.summary || ev.tool)}</div>` +
       (ev.detail ? `<pre class="adetail">${esc(ev.detail)}</pre>` : "") +
@@ -1280,6 +1281,13 @@ function toggleAuto(){
   AUTO_APPROVE = !AUTO_APPROVE;
   localStorage.setItem("oc_auto_approve", AUTO_APPROVE ? "1" : "0");
   renderAutoBtn();
+  if (AUTO_APPROVE){
+    // 开关在任务执行中打开时,立即放行尚未提交的挂起审批卡。
+    for (const card of Object.values(approvalCards)){
+      const btn = card.querySelector(".aok");
+      if (btn && !btn.disabled && !card.classList.contains("done")) btn.click();
+    }
+  }
 }
 for (const id of ["autook", "autook2", "autook3"]){
   const b = $(id);
