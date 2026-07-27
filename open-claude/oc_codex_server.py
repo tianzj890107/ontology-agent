@@ -32,6 +32,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import ssl
 import sys
 import threading
@@ -342,6 +343,28 @@ def write_mission_database_config(context, cwd):
     return os.path.relpath(path, cwd).replace("\\", "/")
 
 
+def ensure_mission_reference_files(cwd):
+    """为每个本体任务准备元模型和模板参考文件,避免重复手动上传。"""
+    candidates = [
+        ("本体元模型.xlsx", os.path.join(SANDBOX_DIR, "本体元模型.xlsx")),
+        ("本体元模型模板.xlsx", os.path.join(SANDBOX_DIR, "本体元模型模板.xlsx")),
+    ]
+    reference_dir = os.path.join(cwd, "mission-input")
+    os.makedirs(reference_dir, exist_ok=True)
+    result = []
+    for name, source in candidates:
+        if not os.path.isfile(source):
+            nested = os.path.join(SANDBOX_DIR, "本体建模", name)
+            source = nested if os.path.isfile(nested) else source
+        if not os.path.isfile(source):
+            continue
+        target = os.path.join(reference_dir, name)
+        if not os.path.isfile(target) or os.path.getsize(target) != os.path.getsize(source):
+            shutil.copy2(source, target)
+        result.append(os.path.relpath(target, cwd).replace("\\", "/"))
+    return result
+
+
 def download_mission_files(cfg, context, cwd):
     """把任务上下文引用的对象存储输入文件下载到项目 mission-input 目录。"""
     refs = _mission_object_refs(context)
@@ -526,6 +549,13 @@ class Task:
         self.mission_context = context
         self._mission_context_fingerprint = fingerprint
         safe = _mask_mission_secrets(json.loads(json.dumps(context, ensure_ascii=False, default=str)))
+        reference_files = ensure_mission_reference_files(self.cwd)
+        if reference_files:
+            safe["agentReferenceFiles"] = reference_files
+            safe["agentReferenceInstructions"] = (
+                "本体元模型和本体元模型模板已自动放入任务项目,直接使用这些本地文件;"
+                "不要要求用户再次上传。"
+            )
         db_config_path = write_mission_database_config(context, self.cwd)
         if db_config_path:
             safe["agentDatabaseConfigPath"] = db_config_path
