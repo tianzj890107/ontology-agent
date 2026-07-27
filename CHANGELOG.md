@@ -22,6 +22,9 @@
 - 主要文件：`open-claude/codex_web.html`、`open-claude/oc_codex_server.py`。
 - 类型：前端与 Python 后端变更，需要重启后端服务。
 
+- 智能建模主页面的小机器人入口改为携带当前任务的 `repositoryId`、`taskCode` 和任务类型进入 Agent，不再打开无任务上下文的通用首页。
+- 主要文件补充：`智能建模任务.html`。
+
 ### 15. 输出文件预览路径兜底
 
 - `logical_entities.csv`、`entity_relations.csv` 等文件在消息中只有文件名、实际位于任务输出目录时，点击预览会自动在当前项目文件清单中定位真实路径。

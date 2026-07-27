@@ -1999,7 +1999,18 @@
     document.getElementById('resultCancel').addEventListener('click', closeResultModal);
     document.getElementById('resultMerge').addEventListener('click', () => { closeModal('resultModal'); location.href = '智能消歧与整合.html'; });
     // ---- 右下角 Codex Agent（open-claude codex agent，独立本地服务） ----
-    const CODEX_AGENT_URL = 'http://127.0.0.1:47313/';
+    const CODEX_AGENT_BASE = 'http://127.0.0.1:47313/';
+    function getCodexAgentUrl() {
+        const task = tasks.find(t => t.id === currentAgentTaskId)
+            || tasks.find(t => t.status === '执行中') || tasks[0];
+        if (!task || !task.code) return CODEX_AGENT_BASE;
+        const q = new URLSearchParams({
+            repositoryId: String(task.refId || task.repositoryId || 1),
+            taskCode: task.code,
+            taskType: 'modeling'
+        });
+        return CODEX_AGENT_BASE + 'mission?' + q.toString();
+    }
     const codexOverlay = document.getElementById('codexOverlay');
     const codexFrame = document.getElementById('codexFrame');
     const codexFallback = document.getElementById('codexFallback');
@@ -2011,7 +2022,7 @@
               + '<div><strong style="color:#374151;">无法连接本体智能体服务</strong><br>'
               + '请先在本机启动硕磐智能本体智能体服务：<br>'
               + '<code>python C:\\shuopan\\open-claude\\open-claude\\oc_codex_server.py</code><br>'
-              + '默认地址 <code>' + CODEX_AGENT_URL + '</code></div>'
+              + '默认地址 <code>' + CODEX_AGENT_BASE + '</code></div>'
               + '<button class="btn btn-primary btn-sm" type="button" id="codexRetry"><i class="fas fa-redo"></i> 重试连接</button>'
             : '<i class="fas fa-plug big"></i><div>正在连接本体智能体服务…</div>';
         const retry = document.getElementById('codexRetry');
@@ -2021,8 +2032,9 @@
     function connectCodexAgent() {
         showCodexFallback(false);
         // no-cors 探测：服务在线时 resolve（opaque），未启动时 reject
-        fetch(CODEX_AGENT_URL, { mode: 'no-cors', cache: 'no-store' }).then(() => {
-            if (codexFrame.getAttribute('src') !== CODEX_AGENT_URL) codexFrame.src = CODEX_AGENT_URL;
+        const agentUrl = getCodexAgentUrl();
+        fetch(agentUrl, { mode: 'no-cors', cache: 'no-store' }).then(() => {
+            if (codexFrame.getAttribute('src') !== agentUrl) codexFrame.src = agentUrl;
             codexFallback.style.display = 'none';
         }).catch(() => showCodexFallback(true));
     }
@@ -2032,7 +2044,7 @@
         connectCodexAgent();
     });
     document.getElementById('codexClose').addEventListener('click', () => codexOverlay.classList.remove('show'));
-    document.getElementById('codexOpenNew').addEventListener('click', () => window.open(CODEX_AGENT_URL, '_blank'));
+    document.getElementById('codexOpenNew').addEventListener('click', () => window.open(getCodexAgentUrl(), '_blank'));
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape' && codexOverlay.classList.contains('show')) codexOverlay.classList.remove('show');
     });
