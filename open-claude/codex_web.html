@@ -829,6 +829,14 @@ function appendEvent(ev, col){
       card.classList.add("done");
     }
   }
+  else if (ev.type === "model_switch"){
+    closeStream();
+    if (META && ev.to){ META.model = ev.to; updateModelLabels(); }
+    const d = document.createElement("div");
+    d.className = "done-note";
+    d.textContent = `当前模型额度不足,已自动切换到 ${ev.to || "同类模型"}`;
+    col.appendChild(d);
+  }
   else if (ev.type === "error"){
     closeStream();
     const d = document.createElement("div");

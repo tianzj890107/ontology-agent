@@ -674,6 +674,10 @@ class Task:
                     cache_read=u.get("cache_read_input_tokens", 0),
                     cache_creation=u.get("cache_creation_input_tokens", 0),
                 )
+            elif t == "model_switch":
+                conv.model = ev.get("to") or conv.model
+                self.log.append(ev)
+                emit(ev)
             elif t == "error":
                 flush_text()
                 self.log.append({"type": "error", "error": ev["error"]})

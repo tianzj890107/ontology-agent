@@ -38,6 +38,23 @@ def _client(provider: str):
     return OpenAI(api_key=key, base_url=get_provider_base_url(provider))
 
 
+def _qwen_fallback_models(model: str) -> list[str]:
+    """Return same-capability Qwen models, preserving the configured .env order."""
+    vision = [x.strip() for x in os.environ.get("QWEN_VISION_MODELS", "").split(",") if x.strip()]
+    text = [x.strip() for x in os.environ.get("QWEN_TEXT_MODELS", "").split(",") if x.strip()]
+    category = vision if model in vision or model.startswith("qwen3-vl") or model.startswith("qwen-vl") else text
+    if not category:
+        category = ["qwen3.6-flash", "qwen-plus", "qwen-turbo"] if not vision else vision
+    return [m for m in category if m and m != model][:8]
+
+
+def _is_quota_error(error: Exception) -> bool:
+    msg = str(error).lower()
+    markers = ("quota", "rate limit", "ratelimit", "too many requests", "insufficient_quota",
+               "billing", "余额", "限额", "配额", "429")
+    return any(x in msg for x in markers)
+
+
 # ---------------------------------------------------------------------------
 # Format conversion: Anthropic blocks <-> OpenAI messages
 # ---------------------------------------------------------------------------
@@ -147,7 +164,7 @@ def _usage_dict(u) -> dict[str, int]:
 
 def stream(provider: str, model: str, messages: list[dict[str, Any]], system_prompt: str,
            tools: Optional[list[dict[str, Any]]], max_tokens: Optional[int],
-           temperature: Optional[float]) -> Generator[dict[str, Any], None, None]:
+           temperature: Optional[float], _allow_fallback: bool = True) -> Generator[dict[str, Any], None, None]:
     """Yield the same normalized events as api.stream_message, for OpenAI-style APIs."""
     try:
         client = _client(provider)
@@ -223,6 +240,19 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
         yield {"type": "message_end", "stop_reason": stop_reason, "usage": usage}
 
     except Exception as e:
+        # Qwen 配额/限流错误时，在同一能力类别中自动换模型。
+        # fallback 调用只收集单次结果用于判断失败，成功后再按统一事件格式输出。
+        if _allow_fallback and provider == "qwen" and _is_quota_error(e):
+            for fallback in _qwen_fallback_models(model):
+                events = list(stream(provider, fallback, messages, system_prompt, tools,
+                                     max_tokens, temperature, _allow_fallback=False))
+                failed = next((x for x in events if x.get("type") == "error"), None)
+                if failed and not any(x.get("type") == "message_end" for x in events):
+                    continue
+                yield {"type": "model_switch", "from": model, "to": fallback,
+                       "reason": "当前模型额度不足,已自动切换同类模型"}
+                yield from events
+                return
         yield {"type": "error", "error": str(e)}
 
 
