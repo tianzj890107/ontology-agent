@@ -169,6 +169,38 @@ _PARSE_ELEMENT_BY_FILE = {
     "business_rules.csv": "RULE",
 }
 
+_PARSE_ELEMENT_ALIASES = {
+    "业务对象": "BUSINESS_OBJECT", "逻辑实体": "LOGICAL_ENTITY",
+    "业务属性": "BUSINESS_ATTRIBUTE", "实体关系": "ENTITY_RELATION",
+    "业务规则": "RULE", "RULES": "RULE",
+}
+
+def normalize_parse_elements(value):
+    """将 execution-context 的解析要素统一为回调枚举名。"""
+    if value is None:
+        return set()
+    values = value if isinstance(value, list) else re.split(r"[,，、;；\s]+", str(value))
+    out = set()
+    for item in values:
+        key = str(item).strip()
+        if not key:
+            continue
+        upper = key.upper().replace("-", "_")
+        out.add(_PARSE_ELEMENT_ALIASES.get(key, _PARSE_ELEMENT_ALIASES.get(upper, upper)))
+    return out
+
+def normalize_expected_files(value):
+    if value is None:
+        return set()
+    values = value if isinstance(value, list) else re.split(r"[,，、;；\s]+", str(value))
+    return {os.path.basename(str(x).strip()) for x in values if str(x).strip()}
+
+def allowed_output_files(parse_elements, expected_files=None):
+    elements = normalize_parse_elements(parse_elements)
+    expected = normalize_expected_files(expected_files)
+    allowed = {name for name, elem in _PARSE_ELEMENT_BY_FILE.items() if elem in elements}
+    return allowed & expected if expected else allowed
+
 
 def fileserver_preview_url(cfg, file_url, object_key):
     """回调用的 previewUrl:优先 put 返回的 fileUrl(本身即 /file/preview/...),
@@ -205,6 +237,30 @@ def ontology_task_callback(kind, task_code, repo_id, payload):
                 "error": payload_resp.get("msg") or payload_resp.get("message") or "回调失败",
                 "resp": payload_resp}
     return {"ok": True, "resp": payload_resp}
+
+
+def fetch_execution_context(task_code, repo_id="", task_type=""):
+    """上传前从平台重新读取 execution-context，确保许可范围是最新且可信的。"""
+    code = str(task_code or "").strip()
+    if not code:
+        return None
+    kinds = [task_type] if task_type in ("modeling", "integration") else (
+        ["integration", "modeling"] if code.upper().startswith("MI") else ["modeling", "integration"])
+    for kind in kinds:
+        url = f"{ontology_api_base()}/intelligent/{kind}/tasks/{quote(code)}/execution-context"
+        headers = {"X-App-Id": ontology_app_id(), "Accept": "application/json"}
+        if repo_id:
+            headers["X-Ontology-Repository-Id"] = str(repo_id)
+        try:
+            req = urllib.request.Request(url, method="GET", headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            if isinstance(payload, dict) and payload.get("success") is False:
+                continue
+            return payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+        except Exception:
+            continue
+    return None
 
 
 def _http_err_body(e):
@@ -423,9 +479,13 @@ def build_mission_output_instructions(context):
                        for i, name in enumerate(expected)])
     rows = "\n".join([f"- {labels.get(name, name)}：实际记录数（必须读取文件统计）"
                        for name in expected])
+    allowed_elements = sorted(normalize_parse_elements(context.get("parseElements")))
+    allowed_text = ", ".join(allowed_elements) or "（execution-context 未提供，必须先获取后再生成）"
     return (
         "最终回复格式是任务交接协议，必须遵守：完成任务后，最终回复的最后一段必须严格包含以下结构；"
         "先确认文件确实存在，再统计 CSV 去掉表头后的实际数据行数，禁止使用预计数量或编造数量。\n\n"
+        f"本任务 execution-context 允许的解析要素仅为：{allowed_text}。只能生成、上传和回写这些要素对应的文件；"
+        "未选中的解析类型严禁创建或上传（例如未包含 RULE 时绝对不能生成 business_rules.csv），不能根据文件名自行扩大范围。\n\n"
         "所有输出文件已生成并按要求存储至指定路径：\n"
         f"{prefix or '（填写实际 outputPrefix）'}/\n"
         f"{tree or '└── （填写实际生成文件名）'}\n"
@@ -1219,6 +1279,18 @@ class Handler(BaseHTTPRequestHandler):
         task_code = str(data.get("taskCode") or "").strip()
         repo_id = str(data.get("repositoryId") or "").strip()
         ttype = str(data.get("taskType") or "").strip().lower()
+        # execution-context 是唯一许可来源；浏览器字段只作缓存，上传前强制刷新。
+        context = fetch_execution_context(task_code, repo_id, ttype) if task_code else None
+        modeling_upload = ttype == "modeling" or (not ttype and not task_code.upper().startswith("MI"))
+        if modeling_upload and task_code and not isinstance(context, dict):
+            self._send_json({"error": "无法读取当前任务 execution-context，已拒绝上传和回写结果文件"}, status=502)
+            return
+        parse_elements = normalize_parse_elements(context.get("parseElements")) if isinstance(context, dict) else set()
+        expected_files = normalize_expected_files(context.get("expectedFiles")) if isinstance(context, dict) else set()
+        allowed_files = allowed_output_files(parse_elements, expected_files) if modeling_upload else None
+        if modeling_upload and task_code and not allowed_files:
+            self._send_json({"error": "无法确认当前任务 execution-context 的解析要素，已拒绝上传和回写结果文件"}, status=422)
+            return
         if not project_path(proj):
             self._send_json({"error": "项目不存在"}, status=400)
             return
@@ -1233,6 +1305,11 @@ class Handler(BaseHTTPRequestHandler):
         for rel in paths:
             f = resolve_project_file(proj, str(rel))
             name = os.path.basename(f) if f else os.path.basename(str(rel))
+            elem = _PARSE_ELEMENT_BY_FILE.get(name)
+            if elem and (name not in allowed_files):
+                results.append({"name": name, "ok": False,
+                                "error": "该解析类型未在当前任务 execution-context 中选中，已跳过"})
+                continue
             if not f or not os.path.isfile(f):
                 results.append({"name": name, "ok": False, "error": "文件不存在"})
                 continue
@@ -1263,10 +1340,10 @@ class Handler(BaseHTTPRequestHandler):
         # 上传成功后回写报告(callback)。有 taskCode 且至少上传成功一个文件才回调。
         if ok_n and task_code:
             resp["callback"] = self._callback_after_upload(
-                cfg, task_code, repo_id, ttype, results)
+                cfg, task_code, repo_id, ttype, results, allowed_files)
         self._send_json(resp)
 
-    def _callback_after_upload(self, cfg, task_code, repo_id, ttype, results):
+    def _callback_after_upload(self, cfg, task_code, repo_id, ttype, results, allowed_files=None):
         """按上传结果构造 COMPLETED 回调:智能建模带 files[](按文件名映射 parseElement),
         消歧整合按文档 §5.2 不带 files。"""
         if ttype in ("modeling", "integration"):
@@ -1286,6 +1363,8 @@ class Handler(BaseHTTPRequestHandler):
                 elem = _PARSE_ELEMENT_BY_FILE.get(r["name"])
                 if not elem:
                     continue   # 非标准解析要素文件(如 ok.csv)不进 files
+                if allowed_files is not None and r["name"] not in allowed_files:
+                    continue
                 # objectKey / previewUrl 优先用 FileServer 上传返回值,缺失才回退。
                 object_key = r.get("objectKey") or r["key"]
                 preview = r.get("previewUrl") or fileserver_preview_url(

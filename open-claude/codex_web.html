@@ -1300,7 +1300,9 @@ async function uploadSelectedToMinio(){
     const prefix = await getMissionPrefix();
     if (!prefix){ alert("未获取到任务的输出路径前缀(outputPrefix)"); return; }
     const body = {project: proj, paths: picked, prefix,
-      taskCode: MISSION.taskCode, repositoryId: MISSION.repositoryId};
+      taskCode: MISSION.taskCode, repositoryId: MISSION.repositoryId,
+      parseElements: MISSION_CONTEXT && MISSION_CONTEXT.parseElements || [],
+      expectedFiles: MISSION_CONTEXT && MISSION_CONTEXT.expectedFiles || []};
     if (MISSION.taskType) body.taskType = MISSION.taskType;
     const j = await api("/api/minio/upload", {method:"POST", body: JSON.stringify(body)});
     if (j.error){ alert("上传失败:" + j.error); return; }
