@@ -365,6 +365,36 @@ def ensure_mission_reference_files(cwd):
     return result
 
 
+def build_mission_output_instructions(context):
+    """生成固定的最终输出格式约束,让 Agent 最后一段可交接、可核对。"""
+    prefix = str(context.get("outputPrefix") or "").strip().rstrip("/")
+    expected = context.get("expectedFiles") or []
+    if isinstance(expected, str):
+        expected = [x.strip() for x in re.split(r"[,，\s]+", expected) if x.strip()]
+    expected = [str(x) for x in expected if str(x).strip()]
+    labels = {
+        "business_objects.csv": "业务对象数据",
+        "logical_entities.csv": "逻辑实体数据",
+        "business_attributes.csv": "业务属性数据",
+        "entity_relations.csv": "实体关系数据",
+        "business_rules.csv": "业务规则数据",
+    }
+    tree = "\n".join([f"{'├──' if i < len(expected)-1 else '└──'} {name}"
+                       for i, name in enumerate(expected)])
+    rows = "\n".join([f"- {labels.get(name, name)}：实际记录数（必须读取文件统计）"
+                       for name in expected])
+    return (
+        "最终回复格式是任务交接协议，必须遵守：完成任务后，最终回复的最后一段必须严格包含以下结构；"
+        "先确认文件确实存在，再统计 CSV 去掉表头后的实际数据行数，禁止使用预计数量或编造数量。\n\n"
+        "所有输出文件已生成并按要求存储至指定路径：\n"
+        f"{prefix or '（填写实际 outputPrefix）'}/\n"
+        f"{tree or '└── （填写实际生成文件名）'}\n"
+        "其中：\n"
+        f"{rows or '- 各输出文件：实际记录数（必须读取文件统计）'}\n"
+        "如果某个文件未生成或读取失败，必须明确写“未生成/读取失败”及原因，不能宣称全部完成。"
+    )
+
+
 def download_mission_files(cfg, context, cwd):
     """把任务上下文引用的对象存储输入文件下载到项目 mission-input 目录。"""
     refs = _mission_object_refs(context)
@@ -556,6 +586,7 @@ class Task:
                 "本体元模型和本体元模型模板已自动放入任务项目,直接使用这些本地文件;"
                 "不要要求用户再次上传。"
             )
+        safe["agentOutputInstructions"] = build_mission_output_instructions(safe)
         db_config_path = write_mission_database_config(context, self.cwd)
         if db_config_path:
             safe["agentDatabaseConfigPath"] = db_config_path
