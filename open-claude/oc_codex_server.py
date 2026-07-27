@@ -336,6 +336,9 @@ def write_mission_database_config(context, cwd):
     target_dir = os.path.join(cwd, "mission-input")
     os.makedirs(target_dir, exist_ok=True)
     path = os.path.join(target_dir, ".db_connection.json")
+    # 服务重启时从持久化任务恢复的是脱敏上下文,绝不能用 ******** 覆盖已有真实配置。
+    if str(cfg.get("password")) in {"********", "***"}:
+        return os.path.relpath(path, cwd).replace("\\", "/") if os.path.isfile(path) else None
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh, ensure_ascii=False, indent=2)
     try: os.chmod(path, 0o600)
@@ -628,7 +631,7 @@ class Task:
         if db_config_path:
             verify_path = ensure_database_helpers(self.cwd, db_config_path)
             safe["agentDatabaseConfigPath"] = db_config_path
-            safe["agentDatabaseVerifyCommand"] = f"python3 {verify_path}"
+            safe["agentDatabaseVerifyCommand"] = f"{sys.executable} {verify_path}"
             safe["agentDatabaseInstructions"] = (
                 "先由 Agent 自己执行 agentDatabaseVerifyCommand 验证连接,不要要求用户手动执行 psql;"
                 "数据库脚本必须复用 mission-input/db_connection.py 的 create_db_engine;"
