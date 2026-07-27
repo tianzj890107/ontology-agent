@@ -291,7 +291,7 @@ body{background:var(--bg);color:var(--text)}
 .auto-task-btn{font-size:12px;white-space:nowrap}
 #sidebar{width:264px;min-width:180px;max-width:420px;flex:none}
 #main{min-width:360px}
-#preview{min-width:380px;max-width:70%;flex:none}
+#preview{width:23%;min-width:300px;max-width:70%;flex:none}
 .column-resizer{width:6px;flex:none;cursor:col-resize;background:transparent;position:relative;z-index:20}
 .column-resizer::after{content:"";position:absolute;top:0;bottom:0;left:2px;width:2px;background:transparent}
 .column-resizer:hover::after,.column-resizer.dragging::after{background:#93c5fd}
@@ -1498,7 +1498,7 @@ function setupColumnResizers(){
     sidebar.style.width = "264px"; sidebar.style.minWidth = "264px";
   });
   drag(previewHandle, preview, -1, 300, Math.floor(window.innerWidth * .7), () => {
-    preview.style.width = "46%"; preview.style.minWidth = "380px";
+    preview.style.width = "23%"; preview.style.minWidth = "300px";
   });
 }
 
