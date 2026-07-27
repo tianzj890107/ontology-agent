@@ -438,8 +438,9 @@ def resolve_project_file(project: str, rel: str) -> str | None:
 
 class Task:
     def __init__(self, project: str, cwd: str, repository_id: str = "",
-                 task_code: str = "", task_type: str = "", mission_context: dict | None = None):
-        self.id = uuid.uuid4().hex[:12]
+                 task_code: str = "", task_type: str = "", mission_context: dict | None = None,
+                 resume_session_id: str | None = None, task_id: str | None = None):
+        self.id = task_id or uuid.uuid4().hex[:12]
         self.project = project
         self.cwd = cwd
         self.repository_id = repository_id
@@ -464,6 +465,7 @@ class Task:
         # Pin the model via profile (highest precedence) so a Claude Code-only id
         # in ~/.claude/settings.json (e.g. "claude-fable-5[1m]") can't leak in.
         self.conv = Conversation(cwd, permission_mode="default",
+                                 resume_session_id=resume_session_id,
                                  profile=AgentProfile(
                                      model=get_model(),
                                      style="始终使用简体中文回复用户;代码、命令、文件名等技术标识除外。"))
@@ -559,6 +561,8 @@ class Task:
         """Run one turn; emit(dict) per event. Also records events for replay."""
         def rec(ev):
             self.log.append(ev)
+            try: persist_tasks()
+            except Exception: pass
             try:
                 emit(ev)                    # 客户端断开时继续后台执行,不中断回合
             except OSError:
@@ -611,6 +615,8 @@ class Task:
                 self._rec = None
                 flush_text()
                 self.updated = time.time()
+                try: persist_tasks()
+                except Exception: pass
                 cost = getattr(conv.cost_tracker, "total_cost_usd", 0.0)
                 try:
                     emit({"type": "done", "model": conv.model, "cost": round(cost, 5),
@@ -678,6 +684,49 @@ class Task:
 
 TASKS: dict[str, Task] = {}
 TASKS_LOCK = threading.Lock()
+TASKS_STATE_PATH = os.path.join(SANDBOX_DIR, ".web_tasks.json")
+
+
+def persist_tasks():
+    """Persist web task metadata/logs; Conversation messages live in SessionStore."""
+    with TASKS_LOCK:
+        rows = []
+        for t in TASKS.values():
+            rows.append({**t.summary(), "log": t.log[-10000:],
+                         "missionContext": t.mission_context,
+                         "sessionId": getattr(t.conv.session, "session_id", "")})
+    tmp = TASKS_STATE_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(rows, fh, ensure_ascii=False)
+    os.replace(tmp, TASKS_STATE_PATH)
+
+
+def restore_tasks():
+    """Rebuild tasks after server restart, resuming the persisted Conversation session."""
+    try:
+        with open(TASKS_STATE_PATH, encoding="utf-8") as fh: rows = json.load(fh)
+    except (OSError, ValueError, TypeError):
+        return
+    if not isinstance(rows, list): return
+    for row in rows:
+        if not isinstance(row, dict): continue
+        project = str(row.get("project") or "")
+        cwd = project_path(project)
+        if not cwd: continue
+        try:
+            t = Task(project, cwd, str(row.get("repositoryId") or ""),
+                     str(row.get("taskCode") or ""), str(row.get("taskType") or ""),
+                     row.get("missionContext") if isinstance(row.get("missionContext"), dict) else None,
+                     resume_session_id=str(row.get("sessionId") or "") or None,
+                     task_id=str(row.get("id") or "") or None)
+            t.title = str(row.get("title") or "新任务")
+            t.created = float(row.get("created") or time.time())
+            t.updated = float(row.get("updated") or t.created)
+            t.status = "idle" if row.get("status") == "working" else str(row.get("status") or "idle")
+            t.log = row.get("log") if isinstance(row.get("log"), list) else []
+            TASKS[t.id] = t
+        except Exception:
+            traceback.print_exc()
 
 
 def mission_project_name(repository_id: str, task_code: str) -> str:
@@ -696,6 +745,7 @@ def create_task(project: str, repository_id: str = "", task_code: str = "",
     task = Task(project, cwd, repository_id, task_code, task_type)
     with TASKS_LOCK:
         TASKS[task.id] = task
+    persist_tasks()
     return task
 
 
@@ -1280,6 +1330,7 @@ class Handler(BaseHTTPRequestHandler):
         text = (data.get("message") or "").strip()
         if task and isinstance(data.get("missionContext"), dict):
             task.set_mission_context(data["missionContext"])
+            persist_tasks()
 
         self.close_connection = True
         self.send_response(200)
@@ -1314,6 +1365,7 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(SANDBOX_DIR, exist_ok=True)
+    restore_tasks()
     # Confine every tool call in this process to the sandbox tree. The pure-chat
     # bridge uses OC_READONLY_FS instead; here the agent keeps full tools but
     # can only touch sandbox/ (see execute_tool in open_claude/tools.py).

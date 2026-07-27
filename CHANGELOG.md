@@ -14,6 +14,15 @@
 
 ## 2026-07-27
 
+### 19. 网页任务跨重启恢复
+
+- Web Agent 任务不再只保存在内存；服务会保存任务 ID、当前项目、任务归属、对话回放日志和 SessionStore session ID。
+- 重新部署或重启服务后，会自动恢复历史任务；进入带当前任务 ID 的机器人页面时，优先打开上一次正在进行的任务，并继续原有对话上下文。
+- 正在执行中的任务在服务重启后恢复为可继续状态，不会伪造为已完成。
+- 状态文件：`open-claude/sandbox/.web_tasks.json`（运行时生成，不纳入 Git）。
+- 主要文件：`open-claude/oc_codex_server.py`。
+- 类型：Python 后端持久化变更，需要重启后端服务。
+
 ### 18. 任务对象存储输入文件自动下载
 
 - Agent 首次接收当前任务上下文时，自动解析 execution-context 中的 `objectKey`/文件 Key。
