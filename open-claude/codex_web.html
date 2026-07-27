@@ -224,6 +224,13 @@ input,textarea,select{font-family:inherit;color:inherit}
 #side-missioninfo:hover{background:#dbeafe}
 #side-mission-label{font-size:12px;font-weight:600;line-height:1.4}
 #side-mission-meta{font-size:10.5px;color:#64748b;line-height:1.4;word-break:break-all}
+#side-missionbody{margin-top:8px;max-height:52vh;overflow:auto;padding:0 4px 2px}
+#side-missionbody .mi-grid{grid-template-columns:86px 1fr;gap:5px 8px}
+#side-missionbody .mi-grid .k{font-size:10.5px}
+#side-missionbody .mi-grid .v{font-size:10.5px;line-height:1.45}
+#side-missionbody .mi-grid .v .tag{font-size:10px;padding:1px 5px;margin-right:2px}
+#side-missionbody .mi-sec{margin-top:9px;padding-top:8px}
+#side-missionbody .mi-sec h4{font-size:10.5px;margin-bottom:5px}
 .mi-grid .v{color:var(--text)}
 .mi-grid .v .tag{background:#fff;border-color:#bfdbfe;color:#334155}
 .mi-sec{background:transparent}
@@ -338,6 +345,7 @@ body{background:var(--bg);color:var(--text)}
       <span id="side-mission-label">📋 当前任务信息</span>
       <span id="side-mission-meta"></span>
     </button>
+    <div id="side-missionbody"><div class="mi-loading">正在获取任务信息…</div></div>
   </div>
   <div id="sandboxnote">沙箱模式:智能体拥有完整工具(命令、读写、搜索),但只能操作 <b id="sbpath">sandbox/</b> 下的项目文件夹。</div>
 </div>
@@ -1453,21 +1461,27 @@ function renderMissionInfo(task){
   return renderObj(task) || '<div class="mi-loading">(任务无可展示字段)</div>';
 }
 
+async function loadMissionContext(){
+  if (!MISSION) return null;
+  const q = new URLSearchParams({
+    repositoryId: MISSION.repositoryId, taskCode: MISSION.taskCode,
+  });
+  if (MISSION.taskType) q.set("taskType", MISSION.taskType);
+  const j = await api("/api/mission/task?" + q.toString());
+  if (j.error) throw new Error(j.error);
+  if (j.task && j.task.outputPrefix) MISSION_PREFIX = j.task.outputPrefix;
+  return j.task;
+}
+
 async function openMissionInfo(){
   if (!MISSION) return;
   $("missiontip").textContent =
     `${MISSION_MODE_LABEL} · taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
   $("missionbody").innerHTML = '<div class="mi-loading">正在获取任务信息…</div>';
   $("missionmask").classList.add("open");
-  const q = new URLSearchParams({
-    repositoryId: MISSION.repositoryId, taskCode: MISSION.taskCode,
-  });
-  if (MISSION.taskType) q.set("taskType", MISSION.taskType);
   try{
-    const j = await api("/api/mission/task?" + q.toString());
-    if (j.error){ $("missionbody").innerHTML = `<div class="mi-err">${esc(j.error)}</div>`; return; }
-    if (j.task && j.task.outputPrefix) MISSION_PREFIX = j.task.outputPrefix;
-    $("missionbody").innerHTML = renderMissionInfo(j.task);
+    const task = await loadMissionContext();
+    $("missionbody").innerHTML = renderMissionInfo(task);
   }catch(e){
     $("missionbody").innerHTML = `<div class="mi-err">请求失败:${esc(e.message)}</div>`;
   }
@@ -1491,6 +1505,12 @@ function initMission(){
   $("side-current-mission").style.display = "block";
   $("side-mission-label").textContent = label;
   $("side-mission-meta").textContent = meta;
+  $("side-missionbody").innerHTML = '<div class="mi-loading">正在获取任务信息…</div>';
+  loadMissionContext().then(task => {
+    $("side-missionbody").innerHTML = renderMissionInfo(task);
+  }).catch(e => {
+    $("side-missionbody").innerHTML = `<div class="mi-err">请求失败:${esc(e.message)}</div>`;
+  });
 }
 
 /* 可拖拽的三栏布局：默认尺寸沿用原页面，双击分隔条恢复默认值。 */

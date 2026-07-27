@@ -65,6 +65,14 @@
 - 页面：`open-claude/codex_web.html`。
 - 类型：HTML/CSS 静态资源变更，刷新浏览器即可；服务器已同步。
 
+### 13. 侧边栏自动展开完整任务上下文
+
+- 当前任务信息卡下方自动加载并展开 execution-context 的完整内容。
+- 展示本体库 ID、任务编码/名称、模型名称、任务类型、解析要素、期望输出文件、输出路径前缀，以及数据源、选中数据表等嵌套信息。
+- 点击当前任务信息卡仍然可以打开原有大弹窗；密码字段继续脱敏。
+- 页面：`open-claude/codex_web.html`。
+- 类型：HTML/CSS/JS 静态资源变更，刷新浏览器即可；服务器已同步。
+
 ### 1. Qwen 模型配置与动态模型目录
 
 - 默认 Provider 改为读取 `LLM_PROVIDER`；当前服务器使用 Qwen，不再要求 Anthropic API Key。
