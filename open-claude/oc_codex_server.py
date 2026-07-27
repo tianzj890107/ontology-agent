@@ -310,6 +310,38 @@ def _mask_mission_secrets(value):
     return value
 
 
+def _find_database_config(value):
+    """从 execution-context 找到数据库连接配置，不把密码放入 system prompt。"""
+    if isinstance(value, dict):
+        keys = {str(k).lower() for k in value}
+        if {"host", "username", "password"}.issubset(keys) and ("database" in keys or "dbtype" in keys):
+            return {str(k): v for k, v in value.items()
+                    if str(k).lower() in {"host", "port", "database", "username", "password", "sourceschema", "dbtype"}}
+        for v in value.values():
+            found = _find_database_config(v)
+            if found: return found
+    elif isinstance(value, list):
+        for v in value:
+            found = _find_database_config(v)
+            if found: return found
+    return None
+
+
+def write_mission_database_config(context, cwd):
+    """写入仅当前任务可见的数据库配置文件,避免密码进入 URL 或模型上下文。"""
+    cfg = _find_database_config(context)
+    if not cfg or not cfg.get("password"):
+        return None
+    target_dir = os.path.join(cwd, "mission-input")
+    os.makedirs(target_dir, exist_ok=True)
+    path = os.path.join(target_dir, ".db_connection.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, ensure_ascii=False, indent=2)
+    try: os.chmod(path, 0o600)
+    except OSError: pass
+    return os.path.relpath(path, cwd).replace("\\", "/")
+
+
 def download_mission_files(cfg, context, cwd):
     """把任务上下文引用的对象存储输入文件下载到项目 mission-input 目录。"""
     refs = _mission_object_refs(context)
@@ -494,6 +526,13 @@ class Task:
         self.mission_context = context
         self._mission_context_fingerprint = fingerprint
         safe = _mask_mission_secrets(json.loads(json.dumps(context, ensure_ascii=False, default=str)))
+        db_config_path = write_mission_database_config(context, self.cwd)
+        if db_config_path:
+            safe["agentDatabaseConfigPath"] = db_config_path
+            safe["agentDatabaseInstructions"] = (
+                "数据库脚本必须读取 agentDatabaseConfigPath,使用 sqlalchemy.engine.URL.create 构造连接;"
+                "禁止把密码直接拼进 postgresql:// URL,因为密码可能包含 @、! 等特殊字符。"
+            )
         try:
             downloaded, errors = download_mission_files(minio_config(), safe, self.cwd)
         except Exception as e:
@@ -710,13 +749,15 @@ def persist_tasks():
         rows = []
         for t in TASKS.values():
             rows.append({**t.summary(), "log": t.log[-10000:],
-                         "missionContext": t.mission_context,
+                         "missionContext": _mask_mission_secrets(t.mission_context),
                          "sessionId": getattr(t.conv.session, "session_id", "")})
     with TASKS_STATE_LOCK:
         tmp = TASKS_STATE_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(rows, fh, ensure_ascii=False)
-        os.replace(tmp, TASKS_STATE_PATH)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(rows, fh, ensure_ascii=False)
+    os.replace(tmp, TASKS_STATE_PATH)
+    try: os.chmod(TASKS_STATE_PATH, 0o600)
+    except OSError: pass
 
 
 def restore_tasks():

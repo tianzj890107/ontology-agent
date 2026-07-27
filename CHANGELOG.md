@@ -44,6 +44,7 @@
 - 进入当前任务后自动展示该任务项目文件，不要求重复上传已经存在的文件。
 - execution-context 中的任务名称、提示词、解析要素、目标输出文件、数据源/文档信息和项目文件清单，会写入 Agent system prompt。
 - 任务上下文中的 `objectKey`/文件 Key 会通过 FileServer 下载到项目的 `mission-input/` 目录，Agent 可以直接读取。
+- 数据库任务会把真实连接配置写入当前项目受保护的 `mission-input/.db_connection.json`；system prompt 只提供路径和 `URL.create()` 使用规则，避免密码脱敏成 `********` 或被特殊字符 `@` 破坏连接 URL。
 - 同一上下文不重复下载；同名远程文件按对象 Key 区分；`agent-output` 结果文件不会被当作输入文件下载。
 - 主要接口：`GET /api/mission/task`、`POST /api/tasks/{id}/send`、FileServer `/file/preview/{bucket}/{objectKey}`。
 
