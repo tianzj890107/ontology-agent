@@ -192,6 +192,12 @@ input,textarea,select{font-family:inherit;color:inherit}
 #pvbody img{max-width:92%;display:block;margin:20px auto}
 .tree{padding:10px 8px;font-size:12.5px}
 .tree .dir{color:var(--dim);padding:5px 8px 2px;font-weight:600}
+.tree-folder{margin:2px 0 6px}
+.tree-folder-head{width:100%;display:flex;align-items:center;gap:6px;padding:7px 8px;border:0;border-radius:6px;background:transparent;color:var(--dim);font:600 12px var(--sans);text-align:left;cursor:pointer}
+.tree-folder-head:hover{background:#f1f5f9;color:var(--text)}
+.tree-folder-head .arrow{width:14px;color:var(--dimmer);transition:transform .15s}
+.tree-folder-head[aria-expanded="true"] .arrow{transform:rotate(90deg)}
+.tree-folder-body.collapsed{display:none}
 .tree .fil{display:flex;align-items:center;gap:8px;padding:3px 8px;border-radius:6px;font-family:var(--mono);font-size:12px}
 .tree .fil:hover{background:#232327}
 .tree .fil .fname{flex:1;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1126,18 +1132,36 @@ async function showTree(){
              '<span id="chkcount" class="tree-count"></span>' +
              (MISSION ? '<button class="tree-act" id="btnminio">上传到 MinIO</button>' : '') +
              '</div><div class="tree">';
-  let lastDir = null;
+  const groups = new Map();
   for (const f of files){
     const i = f.path.lastIndexOf("/");
     const dir = i < 0 ? "" : f.path.slice(0, i);
-    const name = i < 0 ? f.path : f.path.slice(i + 1);
-    if (dir !== lastDir){
-      lastDir = dir;
-      if (dir) html += `<div class="dir">📁 ${esc(dir)}/</div>`;
+    if (!groups.has(dir)) groups.set(dir, []);
+    groups.get(dir).push(f);
+  }
+  const dirs = [...groups.keys()].sort((a, b) => {
+    if (!a) return -1;
+    if (!b) return 1;
+    return a.localeCompare(b);
+  });
+  for (const dir of dirs){
+    const groupId = "folder-" + (dir || "root").replace(/[^a-zA-Z0-9_-]/g, "_");
+    const open = !!dir; // 根目录通常是工作杂项,任务/ID 子目录默认展开
+    html += `<section class="tree-folder"><button class="tree-folder-head" data-folder="${esc(groupId)}" aria-expanded="${open}"><span class="arrow">▶</span><span>📁 ${esc(dir || "项目根目录")}${dir ? "/" : ""}</span><span class="tree-count">(${groups.get(dir).length})</span></button><div class="tree-folder-body${open ? "" : " collapsed"}" data-folder-body="${esc(groupId)}">`;
+    for (const f of groups.get(dir)){
+      const i = f.path.lastIndexOf("/");
+      const name = i < 0 ? f.path : f.path.slice(i + 1);
+      html += `<div class="fil" data-p="${esc(f.path)}"><input type="checkbox" class="fchk" data-p="${esc(f.path)}"><span class="fname">${esc(name)}</span><span class="sz">${fmtSize(f.size)}</span></div>`;
     }
-    html += `<div class="fil" data-p="${esc(f.path)}"><input type="checkbox" class="fchk" data-p="${esc(f.path)}"><span class="fname" style="${dir ? "padding-left:14px" : ""}">${esc(name)}</span><span class="sz">${fmtSize(f.size)}</span></div>`;
+    html += "</div></section>";
   }
   body.innerHTML = html + "</div>";
+  body.querySelectorAll(".tree-folder-head").forEach(head => head.onclick = () => {
+    const open = head.getAttribute("aria-expanded") === "true";
+    head.setAttribute("aria-expanded", String(!open));
+    const panel = body.querySelector(`[data-folder-body="${head.dataset.folder}"]`);
+    if (panel) panel.classList.toggle("collapsed", open);
+  });
   body.querySelectorAll(".fname").forEach(el =>
     el.onclick = () => openFile(el.parentElement.dataset.p));
   const chks = [...body.querySelectorAll(".fchk")];
