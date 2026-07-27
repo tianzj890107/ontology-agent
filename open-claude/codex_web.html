@@ -533,9 +533,18 @@ async function loadMeta(){
   updateProjLabel(); updateModelLabels(); fillParamPanel();
 }
 async function loadTasks(){
-  const j = await api("/api/tasks");
+  const q = (typeof MISSION !== "undefined" && MISSION)
+    ? ("?" + new URLSearchParams({repositoryId: MISSION.repositoryId, taskCode: MISSION.taskCode}).toString()) : "";
+  const j = await api("/api/tasks" + q);
   TASKS = j.tasks || [];
   renderTaskList();
+  if (MISSION && !ACTIVE && TASKS.length && !window._missionResumeAttempted){
+    window._missionResumeAttempted = true;
+    const key = `oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`;
+    const preferred = localStorage.getItem(key);
+    const found = TASKS.find(t => t.id === preferred) || TASKS[0];
+    if (found) await openTask(found.id);
+  }
 }
 
 /* ---------------- sidebar ---------------- */
@@ -578,6 +587,9 @@ async function openTask(id){
   const t = await api("/api/tasks/" + id);
   if (t.error) return;
   ACTIVE = t;
+  if (MISSION && t.repositoryId === MISSION.repositoryId && t.taskCode === MISSION.taskCode){
+    localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, t.id);
+  }
   $("home").style.display = "none";
   $("taskview").style.display = "flex";
   $("headtitle").textContent = t.title;
@@ -823,12 +835,16 @@ function closeStream(){
 async function startTask(){
   const text = $("input").value.trim();
   if (!text || BUSY) return;
-  if (!SELECTED_PROJECT){ openProjPop(); return; }
+  if (!SELECTED_PROJECT && !MISSION){ openProjPop(); return; }
   const t = await api("/api/tasks", {method:"POST", headers:{"Content-Type":"application/json"},
-                                     body: JSON.stringify({project: SELECTED_PROJECT})});
+                                     body: JSON.stringify({project: SELECTED_PROJECT || "",
+                                       repositoryId: MISSION ? MISSION.repositoryId : "",
+                                       taskCode: MISSION ? MISSION.taskCode : "",
+                                       taskType: MISSION ? (MISSION.taskType || "") : ""})});
   if (t.error){ alert(t.error); return; }
   TASKS.unshift(t);
   ACTIVE = t;
+  if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, t.id);
   $("input").value = "";
   $("home").style.display = "none";
   $("taskview").style.display = "flex";
@@ -1564,9 +1580,9 @@ $("history-toggle").onclick = () => {
 
 (async function init(){
   await loadMeta();
-  await loadTasks();
   showHome();
   initMission();
+  await loadTasks();
   setInterval(async () => { if (!BUSY) { await loadTasks(); } }, 20000);
 })();
 </script>

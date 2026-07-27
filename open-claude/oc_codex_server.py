@@ -383,10 +383,14 @@ def resolve_project_file(project: str, rel: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 class Task:
-    def __init__(self, project: str, cwd: str):
+    def __init__(self, project: str, cwd: str, repository_id: str = "",
+                 task_code: str = "", task_type: str = ""):
         self.id = uuid.uuid4().hex[:12]
         self.project = project
         self.cwd = cwd
+        self.repository_id = repository_id
+        self.task_code = task_code
+        self.task_type = task_type
         self.title = "新任务"
         self.created = time.time()
         self.updated = self.created
@@ -468,7 +472,9 @@ class Task:
 
     def summary(self) -> dict:
         return {"id": self.id, "project": self.project, "title": self.title,
-                "status": self.status, "created": self.created, "updated": self.updated}
+                "status": self.status, "created": self.created, "updated": self.updated,
+                "repositoryId": self.repository_id, "taskCode": self.task_code,
+                "taskType": self.task_type}
 
     # -- one full agentic turn, streamed --------------------------------------
 
@@ -597,11 +603,20 @@ TASKS: dict[str, Task] = {}
 TASKS_LOCK = threading.Lock()
 
 
-def create_task(project: str) -> Task | None:
+def mission_project_name(repository_id: str, task_code: str) -> str:
+    raw = f"mission-{repository_id}-{task_code}"
+    return re.sub(r"[^\w\-.一-鿿]", "_", raw)[:64]
+
+
+def create_task(project: str, repository_id: str = "", task_code: str = "",
+                task_type: str = "") -> Task | None:
+    if not project and repository_id and task_code:
+        project = mission_project_name(repository_id, task_code)
+        os.makedirs(os.path.join(SANDBOX_DIR, project), exist_ok=True)
     cwd = project_path(project)
     if not cwd:
         return None
-    task = Task(project, cwd)
+    task = Task(project, cwd, repository_id, task_code, task_type)
     with TASKS_LOCK:
         TASKS[task.id] = task
     return task
@@ -723,8 +738,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/projects":
             self._send_json({"projects": list_projects()})
         elif path == "/api/tasks":
+            query = parse_qs(urlparse(self.path).query)
+            repository_id = (query.get("repositoryId") or [""])[0]
+            task_code = (query.get("taskCode") or [""])[0]
             with TASKS_LOCK:
-                items = sorted(TASKS.values(), key=lambda t: t.updated, reverse=True)
+                items = [t for t in TASKS.values()
+                         if (not repository_id or t.repository_id == repository_id)
+                         and (not task_code or t.task_code == task_code)]
+                items.sort(key=lambda t: t.updated, reverse=True)
                 self._send_json({"tasks": [t.summary() for t in items]})
         else:
             m = re.match(r"^/api/tasks/([0-9a-f]+)$", path)
@@ -765,7 +786,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": msg}, status=400)
         elif path == "/api/tasks":
             data = self._read_body()
-            task = create_task(data.get("project", ""))
+            repository_id = str(data.get("repositoryId") or "")
+            task_code = str(data.get("taskCode") or "")
+            task_type = str(data.get("taskType") or "")
+            if repository_id and not re.fullmatch(r"[A-Za-z0-9_\-]{1,128}", repository_id):
+                self._send_json({"error": "本体库 ID 格式无效"}, status=400)
+                return
+            if task_code and not _TASK_CODE_RE.fullmatch(task_code):
+                self._send_json({"error": "任务编码格式无效"}, status=400)
+                return
+            task = create_task(str(data.get("project") or ""), repository_id, task_code, task_type)
             if not task:
                 self._send_json({"error": "项目不存在或不在沙箱内"}, status=400)
                 return
