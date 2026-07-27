@@ -14,6 +14,15 @@
 
 ## 2026-07-27
 
+### 18. 任务对象存储输入文件自动下载
+
+- Agent 首次接收当前任务上下文时，自动解析 execution-context 中的 `objectKey`/文件 Key。
+- 输入文件通过 FileServer 预览接口下载到当前项目的 `mission-input/` 目录，Agent 可直接读取，不再要求用户手动重新上传。
+- system prompt 增加下载成功的本地路径和下载失败提示；结果文件 `agent-output` 不会被误当作输入文件下载。
+- 涉及接口：FileServer `/file/preview/{bucket}/{objectKey}`、`POST /api/tasks/{id}/send`。
+- 主要文件：`open-claude/oc_codex_server.py`。
+- 类型：Python 后端与对象存储集成变更，需要重启后端服务。
+
 ### 17. 自动确认按钮悬停颜色
 
 - 保留自动确认开启时的绿色按钮样式。

@@ -283,6 +283,60 @@ def fileserver_put_object(cfg, object_key, content, filename, file_ctype="text/c
     return payload.get("data") or {}
 
 
+def _mission_object_refs(value, refs=None):
+    """从 execution-context 中提取输入文件对象 Key,不抓取 agent-output 结果文件。"""
+    refs = refs if refs is not None else []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            key = str(k).lower()
+            if key in {"objectkey", "object_key", "objectstoragekey", "filekey", "file_key"} and isinstance(v, str):
+                if v and "/agent-output/" not in v and v not in [x[0] for x in refs]:
+                    refs.append((v, ""))
+            elif key in {"filename", "file_name", "name"} and isinstance(v, str) and refs:
+                if not refs[-1][1]: refs[-1] = (refs[-1][0], v)
+            else:
+                _mission_object_refs(v, refs)
+    elif isinstance(value, list):
+        for item in value: _mission_object_refs(item, refs)
+    return refs
+
+
+def _mask_mission_secrets(value):
+    if isinstance(value, dict):
+        return {k: ("********" if str(k).lower() in {"password", "secret", "secretkey"}
+                    else _mask_mission_secrets(v)) for k, v in value.items()}
+    if isinstance(value, list): return [_mask_mission_secrets(v) for v in value]
+    return value
+
+
+def download_mission_files(cfg, context, cwd):
+    """把任务上下文引用的对象存储输入文件下载到项目 mission-input 目录。"""
+    refs = _mission_object_refs(context)
+    downloaded, errors = [], []
+    if not refs: return downloaded, errors
+    target_dir = os.path.join(cwd, "mission-input")
+    os.makedirs(target_dir, exist_ok=True)
+    for object_key, given_name in refs[:50]:
+        name = os.path.basename(given_name or object_key) or "input-file"
+        name = re.sub(r"[^\w.\-一-鿿() ]", "_", name)[:160]
+        target = os.path.join(target_dir, name)
+        url = f"{cfg['preview_base']}/file/preview/{cfg['bucket']}/{quote(object_key.lstrip('/'), safe='/') }"
+        try:
+            req = urllib.request.Request(url, method="GET", headers={"Accept": "*/*"})
+            handlers = [urllib.request.ProxyHandler({})]
+            if cfg.get("proxy"):
+                handlers = [urllib.request.ProxyHandler({"http": cfg["proxy"], "https": cfg["proxy"]})]
+            opener = urllib.request.build_opener(*handlers)
+            with opener.open(req, timeout=60) as resp:
+                blob = resp.read(100 * 1024 * 1024 + 1)
+            if len(blob) > 100 * 1024 * 1024: raise RuntimeError("文件超过 100MB")
+            with open(target, "wb") as fh: fh.write(blob)
+            downloaded.append({"objectKey": object_key, "path": os.path.relpath(target, cwd).replace("\\", "/")})
+        except Exception as e:
+            errors.append({"objectKey": object_key, "error": str(e)})
+    return downloaded, errors
+
+
 # Inference-parameter defaults applied to every new task (patched via /api/params).
 PARAM_DEFAULTS = {"temperature": None, "max_tokens": None,
                   "thinking": False, "thinking_budget": 8000}
@@ -427,9 +481,13 @@ class Task:
         if not isinstance(context, dict):
             return
         self.mission_context = context
-        safe = json.loads(json.dumps(context, ensure_ascii=False, default=str))
-        if isinstance(safe.get("password"), str):
-            safe["password"] = "********"
+        safe = _mask_mission_secrets(json.loads(json.dumps(context, ensure_ascii=False, default=str)))
+        try:
+            downloaded, errors = download_mission_files(minio_config(), safe, self.cwd)
+        except Exception as e:
+            downloaded, errors = [], [{"error": str(e)}]
+        if downloaded: safe["agentDownloadedFiles"] = downloaded
+        if errors: safe["agentFileDownloadErrors"] = errors
         try:
             files = [x["path"] for x in list_project_files(self.cwd)]
         except Exception:
