@@ -1999,7 +1999,10 @@
     document.getElementById('resultCancel').addEventListener('click', closeResultModal);
     document.getElementById('resultMerge').addEventListener('click', () => { closeModal('resultModal'); location.href = '智能消歧与整合.html'; });
     // ---- 右下角 Codex Agent（open-claude codex agent，独立本地服务） ----
-    const CODEX_AGENT_BASE = 'http://127.0.0.1:47313/';
+    // 页面部署到服务器时不能写死 127.0.0.1（那会指向访问者自己的电脑）。
+    // 本地直接打开 HTML 时再回退到本机 Agent 服务。
+    const CODEX_AGENT_HOST = window.location.hostname || '127.0.0.1';
+    const CODEX_AGENT_BASE = 'http://' + CODEX_AGENT_HOST + ':47313/';
     function getCodexAgentUrl() {
         const task = tasks.find(t => t.id === currentAgentTaskId)
             || tasks.find(t => t.status === '执行中') || tasks[0];

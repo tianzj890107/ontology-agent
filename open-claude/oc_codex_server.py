@@ -287,14 +287,15 @@ def _mission_object_refs(value, refs=None):
     """从 execution-context 中提取输入文件对象 Key,不抓取 agent-output 结果文件。"""
     refs = refs if refs is not None else []
     if isinstance(value, dict):
+        # 文件名只能与同一个对象内的 objectKey 配对，不能误配到前一个对象。
+        names = [str(v) for k, v in value.items()
+                 if str(k).lower() in {"filename", "file_name", "name"} and isinstance(v, str)]
         for k, v in value.items():
             key = str(k).lower()
             if key in {"objectkey", "object_key", "objectstoragekey", "filekey", "file_key"} and isinstance(v, str):
                 if v and "/agent-output/" not in v and v not in [x[0] for x in refs]:
-                    refs.append((v, ""))
-            elif key in {"filename", "file_name", "name"} and isinstance(v, str) and refs:
-                if not refs[-1][1]: refs[-1] = (refs[-1][0], v)
-            else:
+                    refs.append((v, names[0] if names else ""))
+            elif key not in {"filename", "file_name", "name"}:
                 _mission_object_refs(v, refs)
     elif isinstance(value, list):
         for item in value: _mission_object_refs(item, refs)
@@ -319,7 +320,10 @@ def download_mission_files(cfg, context, cwd):
     for object_key, given_name in refs[:50]:
         name = os.path.basename(given_name or object_key) or "input-file"
         name = re.sub(r"[^\w.\-一-鿿() ]", "_", name)[:160]
-        target = os.path.join(target_dir, name)
+        # 始终用 objectKey 摘要区分同名来源文件，同时保证重启后仍复用同一路径。
+        suffix = hashlib.sha256(object_key.encode("utf-8")).hexdigest()[:8]
+        stem, ext = os.path.splitext(name)
+        target = os.path.join(target_dir, f"{stem}-{suffix}{ext}")
         url = f"{cfg['preview_base']}/file/preview/{cfg['bucket']}/{quote(object_key.lstrip('/'), safe='/') }"
         try:
             req = urllib.request.Request(url, method="GET", headers={"Accept": "*/*"})
@@ -476,13 +480,19 @@ class Task:
         p.thinking = PARAM_DEFAULTS["thinking"]
         p.thinking_budget = PARAM_DEFAULTS["thinking_budget"]
         self.mission_context: dict = {}
+        self._mission_context_fingerprint = ""
         self.set_mission_context(mission_context)
 
     def set_mission_context(self, context: dict | None):
         """将当前本体任务上下文放入 agent system prompt,避免每轮重复上传/描述。"""
         if not isinstance(context, dict):
             return
+        fingerprint = hashlib.sha256(json.dumps(context, ensure_ascii=False,
+                                                sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        if fingerprint == self._mission_context_fingerprint:
+            return
         self.mission_context = context
+        self._mission_context_fingerprint = fingerprint
         safe = _mask_mission_secrets(json.loads(json.dumps(context, ensure_ascii=False, default=str)))
         try:
             downloaded, errors = download_mission_files(minio_config(), safe, self.cwd)
@@ -577,6 +587,8 @@ class Task:
                 self.title = text[:48]
             self.log.append({"type": "user", "text": text})
             conv.add_user_message(text)
+            # 用户消息和“working”状态先持久化，进程中断后仍能恢复该任务。
+            persist_tasks()
 
             text_buf: list[str] = []
 
@@ -684,6 +696,7 @@ class Task:
 
 TASKS: dict[str, Task] = {}
 TASKS_LOCK = threading.Lock()
+TASKS_STATE_LOCK = threading.Lock()
 TASKS_STATE_PATH = os.path.join(SANDBOX_DIR, ".web_tasks.json")
 
 
@@ -695,10 +708,11 @@ def persist_tasks():
             rows.append({**t.summary(), "log": t.log[-10000:],
                          "missionContext": t.mission_context,
                          "sessionId": getattr(t.conv.session, "session_id", "")})
-    tmp = TASKS_STATE_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(rows, fh, ensure_ascii=False)
-    os.replace(tmp, TASKS_STATE_PATH)
+    with TASKS_STATE_LOCK:
+        tmp = TASKS_STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(rows, fh, ensure_ascii=False)
+        os.replace(tmp, TASKS_STATE_PATH)
 
 
 def restore_tasks():
@@ -1365,11 +1379,11 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(SANDBOX_DIR, exist_ok=True)
-    restore_tasks()
     # Confine every tool call in this process to the sandbox tree. The pure-chat
     # bridge uses OC_READONLY_FS instead; here the agent keeps full tools but
     # can only touch sandbox/ (see execute_tool in open_claude/tools.py).
     os.environ["OC_SANDBOX_ROOT"] = SANDBOX_DIR
+    restore_tasks()
 
     # 不再强制要求启动前配置密钥:未配置时仅给出提示,服务照常启动,
     # 用户可在页面「参数」面板里填入对应模型的 Key(立即生效)。

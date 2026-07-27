@@ -526,7 +526,10 @@ function md(src){
 /* ---------------- api helpers ---------------- */
 async function api(path, opts){
   const r = await fetch(path, opts);
-  return r.json();
+  let body = null;
+  try{ body = await r.json(); }catch(e){ body = {error: `接口返回异常(${r.status})`}; }
+  if (!r.ok && !body.error) body.error = body.msg || `请求失败(${r.status})`;
+  return body;
 }
 async function loadMeta(){
   META = await api("/api/meta");
@@ -538,6 +541,7 @@ async function loadTasks(){
   const q = (typeof MISSION !== "undefined" && MISSION)
     ? ("?" + new URLSearchParams({repositoryId: MISSION.repositoryId, taskCode: MISSION.taskCode}).toString()) : "";
   const j = await api("/api/tasks" + q);
+  if (j.error){ console.warn("加载任务失败:", j.error); return; }
   TASKS = j.tasks || [];
   renderTaskList();
   if (MISSION && !ACTIVE && TASKS.length && !window._missionResumeAttempted){
@@ -890,6 +894,11 @@ async function sendToActive(text){
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({message: text, missionContext: MISSION ? MISSION_CONTEXT : null}),
     });
+    if (!r.ok || !r.body){
+      let msg = `请求失败(${r.status})`;
+      try{ const j = await r.json(); msg = j.error || j.msg || msg; }catch(e){}
+      throw new Error(msg);
+    }
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
