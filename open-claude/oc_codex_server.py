@@ -588,6 +588,7 @@ _SKIP_DIRS = {".git", ".open-claude", "node_modules", "__pycache__", ".venv", "v
 
 
 _TASK_PATH_RE = re.compile(r"(?:RM|MI)\d{10,}")
+_TASK_DIR_RE = re.compile(r"^(?:RM|MI)\d{10,}$|^任务\d+$")
 
 def list_project_files(base: str, task_code: str = "") -> list[dict]:
     """Flat file listing; when bound to a mission, hide outputs of other task IDs."""
@@ -599,7 +600,9 @@ def list_project_files(base: str, task_code: str = "") -> list[dict]:
             if task_code:
                 rel = os.path.relpath(fp, base).replace("\\", "/")
                 task_ids = _TASK_PATH_RE.findall(rel)
-                if task_ids and task_code not in task_ids:
+                parts = rel.split("/")
+                if (task_ids and task_code not in task_ids) or any(
+                        _TASK_DIR_RE.match(part) and task_code not in part for part in parts):
                     continue
             try:
                 st = os.stat(fp)

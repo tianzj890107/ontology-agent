@@ -1263,6 +1263,14 @@ async function showTree(){
     if (!b) return 1;
     return a.localeCompare(b);
   });
+  let missingNotice = "";
+  if (MISSION_CONTEXT && Array.isArray(MISSION_CONTEXT.expectedFiles)){
+    const actual = new Set(files.map(f => String(f.path || "").split("/").pop()));
+    const missing = MISSION_CONTEXT.expectedFiles.map(String).filter(n => !actual.has(n));
+    if (missing.length)
+      missingNotice = `<div class="pv-empty" style="margin:8px 0;color:#9a6700;background:#fff8e1">` +
+        `任务声明的输出文件尚未在当前项目中找到：${esc(missing.join("、"))}。Agent 只能在文件实际存在后报告完成。</div>`;
+  }
   for (const dir of dirs){
     const groupId = "folder-" + (dir || "root").replace(/[^a-zA-Z0-9_-]/g, "_");
     const open = !!dir; // 根目录通常是工作杂项,任务/ID 子目录默认展开
@@ -1274,7 +1282,7 @@ async function showTree(){
     }
     html += "</div></section>";
   }
-  body.innerHTML = html + "</div>";
+  body.innerHTML = missingNotice + html + "</div>";
   body.querySelectorAll(".tree-folder-head").forEach(head => head.onclick = () => {
     const open = head.getAttribute("aria-expanded") === "true";
     head.setAttribute("aria-expanded", String(!open));
