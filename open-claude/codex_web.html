@@ -289,6 +289,14 @@ body{background:var(--bg);color:var(--text)}
 .tree-tools .tree-act{background:var(--accent)}
 .cbtn.auto-btn.on,.auto-task-btn.on{color:#fff;background:var(--green);border-color:var(--green)}
 .auto-task-btn{font-size:12px;white-space:nowrap}
+#sidebar{width:264px;min-width:180px;max-width:420px;flex:none}
+#main{min-width:360px}
+#preview{min-width:380px;max-width:70%;flex:none}
+.column-resizer{width:6px;flex:none;cursor:col-resize;background:transparent;position:relative;z-index:20}
+.column-resizer::after{content:"";position:absolute;top:0;bottom:0;left:2px;width:2px;background:transparent}
+.column-resizer:hover::after,.column-resizer.dragging::after{background:#93c5fd}
+#preview-resizer{display:none}
+#preview-resizer.open{display:block}
 </style>
 </head>
 <body>
@@ -304,6 +312,8 @@ body{background:var(--bg);color:var(--text)}
   <div id="tasklist"><div class="empty-side">还没有任务。<br>选择一个项目开始吧。</div></div>
   <div id="sandboxnote">沙箱模式:智能体拥有完整工具(命令、读写、搜索),但只能操作 <b id="sbpath">sandbox/</b> 下的项目文件夹。</div>
 </div>
+
+<div class="column-resizer" id="sidebar-resizer" title="拖动调整导航栏宽度"></div>
 
 <div id="main">
 
@@ -357,6 +367,8 @@ body{background:var(--bg);color:var(--text)}
   </div>
 
 </div>
+
+<div class="column-resizer" id="preview-resizer" title="拖动调整文件区宽度"></div>
 
 <!-- ======== right preview panel ======== -->
 <div id="preview">
@@ -1060,7 +1072,11 @@ const IMG_EXT = new Set(["png","jpg","jpeg","gif","webp","svg","ico","bmp"]);
 
 function pvProject(){ return ACTIVE ? ACTIVE.project : SELECTED_PROJECT; }
 function previewOpen(){ return $("preview").classList.contains("open"); }
-function closePreview(){ $("preview").classList.remove("open"); }
+function setPreviewResizer(){
+  const r = $("preview-resizer");
+  if (r) r.classList.toggle("open", previewOpen());
+}
+function closePreview(){ $("preview").classList.remove("open"); setPreviewResizer(); }
 function extOf(p){ const i = p.lastIndexOf("."); return i < 0 ? "" : p.slice(i + 1).toLowerCase(); }
 function fmtSize(n){
   return n < 1024 ? n + " B" : n < 1048576 ? (n/1024).toFixed(1) + " KB" : (n/1048576).toFixed(1) + " MB";
@@ -1108,6 +1124,7 @@ async function showTree(){
   const proj = pvProject();
   if (!proj) return;
   $("preview").classList.add("open");
+  setPreviewResizer();
   PV.mode = "tree"; PV.file = null;
   $("pvback").style.display = "none";
   $("pvsrc").style.display = "none";
@@ -1443,6 +1460,49 @@ function initMission(){
   $("missionmeta").textContent =
     `taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
 }
+
+/* 可拖拽的三栏布局：默认尺寸沿用原页面，双击分隔条恢复默认值。 */
+function setupColumnResizers(){
+  const sidebar = $("sidebar");
+  const preview = $("preview");
+  const sideHandle = $("sidebar-resizer");
+  const previewHandle = $("preview-resizer");
+  if (!sidebar || !preview || !sideHandle || !previewHandle) return;
+  const drag = (handle, target, direction, min, max, reset) => {
+    handle.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = target.getBoundingClientRect().width;
+      handle.classList.add("dragging");
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      const move = ev => {
+        const delta = (ev.clientX - startX) * direction;
+        const width = Math.max(min, Math.min(max, startWidth + delta));
+        target.style.width = width + "px";
+        target.style.minWidth = width + "px";
+      };
+      const done = () => {
+        handle.classList.remove("dragging");
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", done);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", done, {once: true});
+    });
+    handle.addEventListener("dblclick", reset);
+  };
+  drag(sideHandle, sidebar, 1, 180, 420, () => {
+    sidebar.style.width = "264px"; sidebar.style.minWidth = "264px";
+  });
+  drag(previewHandle, preview, -1, 300, Math.floor(window.innerWidth * .7), () => {
+    preview.style.width = "46%"; preview.style.minWidth = "380px";
+  });
+}
+
+setupColumnResizers();
 
 (async function init(){
   await loadMeta();
