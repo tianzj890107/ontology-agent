@@ -544,7 +544,11 @@ async function loadTasks(){
     const key = `oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`;
     const preferred = localStorage.getItem(key);
     const found = TASKS.find(t => t.id === preferred) || TASKS[0];
-    if (found) await openTask(found.id);
+    if (found){
+      await openTask(found.id);
+      // 进入带任务 ID 的 Agent 页面时直接展示该任务项目已有文件。
+      await showTree();
+    }
   }
 }
 
@@ -874,13 +878,16 @@ async function sendFollowup(){
   await sendToActive(msg);
 }
 async function sendToActive(text){
+  if (MISSION){
+    try{ await ensureMissionContext(); }catch(e){ /* 对话仍可继续,系统会保留当前 ID */ }
+  }
   BUSY = true; setWorking(true);
   appendEvent({type:"user", text});
   scrollFeed(true);
   try{
     const r = await fetch(`/api/tasks/${ACTIVE.id}/send`, {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({message: text}),
+      body: JSON.stringify({message: text, missionContext: MISSION ? MISSION_CONTEXT : null}),
     });
     const reader = r.body.getReader();
     const dec = new TextDecoder();
@@ -1442,6 +1449,7 @@ $("parambtn2").onclick = e => { e.stopPropagation(); closePops(); fillParamPanel
 /* ---------------- 专属任务处理模式(当前任务信息) ---------------- */
 const MISSION = (window.__MISSION__ && window.__MISSION__.taskCode) ? window.__MISSION__ : null;
 let MISSION_PREFIX = null;   // 任务执行上下文里的 outputPrefix,上传 MinIO 用
+let MISSION_CONTEXT = null;  // 当前任务上下文,首次对话时写入 Agent system prompt
 
 /* 取任务的 outputPrefix:已缓存直接返回,否则拉一次任务信息。*/
 async function getMissionPrefix(){
@@ -1511,7 +1519,13 @@ async function loadMissionContext(){
   const j = await api("/api/mission/task?" + q.toString());
   if (j.error) throw new Error(j.error);
   if (j.task && j.task.outputPrefix) MISSION_PREFIX = j.task.outputPrefix;
+  if (j.task) MISSION_CONTEXT = j.task;
   return j.task;
+}
+
+async function ensureMissionContext(){
+  if (MISSION && !MISSION_CONTEXT) await loadMissionContext();
+  return MISSION_CONTEXT;
 }
 
 async function openMissionInfo(){

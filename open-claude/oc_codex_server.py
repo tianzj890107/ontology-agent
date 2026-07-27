@@ -384,7 +384,7 @@ def resolve_project_file(project: str, rel: str) -> str | None:
 
 class Task:
     def __init__(self, project: str, cwd: str, repository_id: str = "",
-                 task_code: str = "", task_type: str = ""):
+                 task_code: str = "", task_type: str = "", mission_context: dict | None = None):
         self.id = uuid.uuid4().hex[:12]
         self.project = project
         self.cwd = cwd
@@ -419,6 +419,25 @@ class Task:
         p.max_tokens = PARAM_DEFAULTS["max_tokens"]
         p.thinking = PARAM_DEFAULTS["thinking"]
         p.thinking_budget = PARAM_DEFAULTS["thinking_budget"]
+        self.mission_context: dict = {}
+        self.set_mission_context(mission_context)
+
+    def set_mission_context(self, context: dict | None):
+        """将当前本体任务上下文放入 agent system prompt,避免每轮重复上传/描述。"""
+        if not isinstance(context, dict):
+            return
+        self.mission_context = context
+        safe = json.loads(json.dumps(context, ensure_ascii=False, default=str))
+        if isinstance(safe.get("password"), str):
+            safe["password"] = "********"
+        try:
+            files = [x["path"] for x in list_project_files(self.cwd)]
+        except Exception:
+            files = []
+        safe["agentProjectFiles"] = files[:2000]
+        marker = "\n\n[本体任务系统上下文]\n"
+        self.conv.system_prompt = self.conv.system_prompt.split(marker, 1)[0]
+        self.conv.system_prompt += marker + json.dumps(safe, ensure_ascii=False, indent=2)
 
     # -- web approval flow -----------------------------------------------------
 
@@ -1201,6 +1220,8 @@ class Handler(BaseHTTPRequestHandler):
         task = TASKS.get(task_id)
         data = self._read_body()
         text = (data.get("message") or "").strip()
+        if task and isinstance(data.get("missionContext"), dict):
+            task.set_mission_context(data["missionContext"])
 
         self.close_connection = True
         self.send_response(200)

@@ -14,6 +14,14 @@
 
 ## 2026-07-27
 
+### 16. 进入当前任务自动加载文件与系统上下文
+
+- 从带任务 ID 的页面进入 Agent 时，自动打开当前任务项目的文件区，不要求再次上传已经存在于项目中的文件。
+- 首次发送消息时，将任务名称、提示词、解析要素、目标输出文件、数据源/文档信息以及当前项目文件清单写入 Agent system prompt，后续对话可直接使用这些上下文。
+- 涉及页面/接口：`open-claude/codex_web.html`、`POST /api/tasks/{id}/send`。
+- 主要文件：`open-claude/codex_web.html`、`open-claude/oc_codex_server.py`。
+- 类型：前端与 Python 后端变更，需要重启后端服务。
+
 ### 15. 输出文件预览路径兜底
 
 - `logical_entities.csv`、`entity_relations.csv` 等文件在消息中只有文件名、实际位于任务输出目录时，点击预览会自动在当前项目文件清单中定位真实路径。
