@@ -50,6 +50,13 @@
 - 页面：`open-claude/codex_web.html`。
 - 类型：HTML/CSS 静态资源变更，刷新浏览器即可；服务器已同步。
 
+### 11. 任务上下文数组标签浅色化
+
+- 进一步覆盖“校验类型”“期望输出文件”“条目”“解析要素”等数组标签的残留深色样式。
+- 统一为白色背景、浅蓝边框和深色文字，并处理嵌套任务信息区域。
+- 页面：`open-claude/codex_web.html`。
+- 类型：HTML/CSS 静态资源变更，刷新浏览器即可；服务器已同步。
+
 ### 1. Qwen 模型配置与动态模型目录
 
 - 默认 Provider 改为读取 `LLM_PROVIDER`；当前服务器使用 Qwen，不再要求 Anthropic API Key。
