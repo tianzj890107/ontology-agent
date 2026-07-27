@@ -1140,6 +1140,23 @@ function fileURL(proj, rel){
          String(rel).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
 }
 
+/* Agent 消息里经常只返回输出文件名,而实际文件位于任务输出目录。
+ * 预览首次 404 时,在当前项目文件清单中按完整路径/后缀/唯一文件名兜底定位。 */
+async function findPreviewPath(proj, rel){
+  const wanted = String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  try{
+    const j = await api("/api/files?project=" + encodeURIComponent(proj));
+    const files = (j.files || []).map(f => f.path).filter(Boolean);
+    if (files.includes(wanted)) return wanted;
+    const suffix = files.filter(p => p.endsWith("/" + wanted));
+    if (suffix.length === 1) return suffix[0];
+    const name = wanted.split("/").pop().toLowerCase();
+    const sameName = files.filter(p => p.split("/").pop().toLowerCase() === name);
+    if (sameName.length === 1) return sameName[0];
+  }catch(e){ /* 保留原始路径,让下方显示标准错误 */ }
+  return wanted;
+}
+
 /* CSV/TSV -> 表格预览(支持引号包裹字段) */
 function parseCSV(text, sep){
   const rows = []; let row = [], cur = "", inQ = false;
@@ -1300,7 +1317,7 @@ async function openFile(rel){
   PV.file = rel;
   $("pvback").style.display = "";
   $("pvtitle").textContent = rel;
-  const url = fileURL(proj, rel);
+  let url = fileURL(proj, rel);
   const ext = extOf(rel);
   const body = $("pvbody");
   const canSrc = ext === "html" || ext === "htm" || ext === "md" || ext === "csv" || ext === "tsv";
@@ -1321,7 +1338,14 @@ async function openFile(rel){
   }
   let r;
   try{ r = await fetch(url); }catch(e){ body.innerHTML = `<div class="pv-empty">加载失败</div>`; return; }
-  if (!r.ok){ body.innerHTML = `<div class="pv-empty">无法打开文件(${r.status})</div>`; return; }
+  if (!r.ok){
+    const fallback = await findPreviewPath(proj, rel);
+    if (fallback && fallback !== rel){
+      rel = fallback; PV.file = rel; url = fileURL(proj, rel);
+      r = await fetch(url);
+    }
+    if (!r.ok){ body.innerHTML = `<div class="pv-empty">无法打开文件(${r.status})</div>`; return; }
+  }
   const buf = await r.arrayBuffer();
   if (buf.byteLength > 1500000){
     body.innerHTML = `<div class="pv-empty">文件太大(${fmtSize(buf.byteLength)}),不在此预览。</div>`;
