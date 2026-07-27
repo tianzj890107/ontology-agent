@@ -249,7 +249,7 @@ input,textarea,select{font-family:inherit;color:inherit}
 .mi-sec{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}
 .mi-sec h4{font-size:12px;color:var(--dimmer);margin-bottom:8px;font-weight:600}
 .mi-loading{color:var(--dimmer);padding:16px 0;text-align:center}
-.mi-err{color:var(--red);padding:12px 0}
+.mi-err{color:#94a3b8;padding:8px 0;font-size:11px;line-height:1.5;white-space:normal;overflow-wrap:anywhere}
 /* 参数面板内的模型密钥 */
 .pkey{border-top:1px solid var(--border);margin-top:10px;padding-top:10px}
 .pkey-h{font-size:12px;color:var(--dimmer);margin-bottom:7px}
@@ -324,7 +324,7 @@ body{background:var(--bg);color:var(--text)}
 .mi-grid .v,.mi-grid .v .tag,.mi-sec .tag{color:#334155 !important}
 .mi-grid .v .tag,.mi-sec .tag{display:inline-block;background:#fff !important;border:1px solid #bfdbfe !important;border-radius:6px;padding:1px 8px;margin:0 4px 4px 0;font-size:12px}
 .mi-sec{background:transparent !important}
-.mi-err{color:var(--dimmer) !important;font-size:11px !important;line-height:1.5;padding:8px 0;white-space:normal;overflow-wrap:anywhere}
+.mi-err{color:#94a3b8 !important;font-size:11px !important;line-height:1.5;padding:8px 0;white-space:normal;overflow-wrap:anywhere;background:transparent !important}
 </style>
 </head>
 <body>
@@ -1500,7 +1500,7 @@ async function openMissionInfo(){
     const task = await loadMissionContext();
     $("missionbody").innerHTML = renderMissionInfo(task);
   }catch(e){
-    $("missionbody").innerHTML = `<div class="mi-err">请求失败:${esc(e.message)}</div>`;
+    $("missionbody").innerHTML = `<div class="mi-err">当前任务信息暂不可用：${esc(e.message)}</div>`;
   }
 }
 
@@ -1526,7 +1526,7 @@ function initMission(){
   loadMissionContext().then(task => {
     $("side-missionbody").innerHTML = renderMissionInfo(task);
   }).catch(e => {
-    $("side-missionbody").innerHTML = `<div class="mi-err">请求失败:${esc(e.message)}</div>`;
+    $("side-missionbody").innerHTML = `<div class="mi-err">当前任务信息暂不可用：${esc(e.message)}</div>`;
   });
 }
 
