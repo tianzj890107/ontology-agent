@@ -343,6 +343,43 @@ def write_mission_database_config(context, cwd):
     return os.path.relpath(path, cwd).replace("\\", "/")
 
 
+def ensure_database_helpers(cwd, db_config_path):
+    """提供可直接运行的安全连接验证/引擎 helper,不依赖 Agent 临时拼 URL。"""
+    helper_dir = os.path.join(cwd, "mission-input")
+    verify_path = os.path.join(helper_dir, "verify_database.py")
+    helper_path = os.path.join(helper_dir, "db_connection.py")
+    helper = '''import json
+from pathlib import Path
+from sqlalchemy import URL, create_engine
+
+CONFIG_PATH = Path(__file__).with_name(".db_connection.json")
+
+def load_config():
+    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+def create_db_engine():
+    cfg = load_config()
+    return create_engine(URL.create(
+        "postgresql+psycopg2",
+        username=cfg["username"], password=cfg["password"],
+        host=cfg["host"], port=int(cfg.get("port", 5432)),
+        database=cfg["database"],
+    ))
+'''
+    verify = '''from db_connection import create_db_engine
+from sqlalchemy import text
+
+with create_db_engine().connect() as conn:
+    print(conn.execute(text("select current_user, current_database()" )).one())
+    print("DATABASE_CONNECTION_OK")
+'''
+    for path, content in ((helper_path, helper), (verify_path, verify)):
+        with open(path, "w", encoding="utf-8") as fh: fh.write(content)
+        try: os.chmod(path, 0o700)
+        except OSError: pass
+    return os.path.relpath(verify_path, cwd).replace("\\", "/")
+
+
 def ensure_mission_reference_files(cwd):
     """为每个本体任务准备元模型和模板参考文件,避免重复手动上传。"""
     candidates = [
@@ -589,10 +626,14 @@ class Task:
         safe["agentOutputInstructions"] = build_mission_output_instructions(safe)
         db_config_path = write_mission_database_config(context, self.cwd)
         if db_config_path:
+            verify_path = ensure_database_helpers(self.cwd, db_config_path)
             safe["agentDatabaseConfigPath"] = db_config_path
+            safe["agentDatabaseVerifyCommand"] = f"python3 {verify_path}"
             safe["agentDatabaseInstructions"] = (
-                "数据库脚本必须读取 agentDatabaseConfigPath,使用 sqlalchemy.engine.URL.create 构造连接;"
-                "禁止把密码直接拼进 postgresql:// URL,因为密码可能包含 @、! 等特殊字符。"
+                "先由 Agent 自己执行 agentDatabaseVerifyCommand 验证连接,不要要求用户手动执行 psql;"
+                "数据库脚本必须复用 mission-input/db_connection.py 的 create_db_engine;"
+                "禁止把密码直接拼进 postgresql:// URL,因为密码可能包含 @、! 等特殊字符;"
+                "如果已有 extract_schema.py 语法错误或包含 ********,先修复/重写连接部分再执行。"
             )
         try:
             downloaded, errors = download_mission_files(minio_config(), safe, self.cwd)
