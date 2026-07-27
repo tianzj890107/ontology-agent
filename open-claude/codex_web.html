@@ -242,6 +242,48 @@ input,textarea,select{font-family:inherit;color:inherit}
 .btn-ghost{border:1px solid var(--border);color:var(--dim)}
 .btn-pri{background:var(--accent);color:#111;font-weight:600}
 </style>
+<style>
+/* Light workspace theme */
+:root{
+  --bg:#f5f7fb; --panel:#ffffff; --panel2:#f8fafc; --border:#e2e8f0;
+  --text:#1e293b; --dim:#64748b; --dimmer:#94a3b8;
+  --accent:#2563eb; --green:#16a34a; --red:#dc2626; --amber:#d97706;
+}
+body{background:var(--bg);color:var(--text)}
+::-webkit-scrollbar-thumb{background:#cbd5e1}
+#sidebar{background:var(--panel);border-color:var(--border)}
+.brand .logo{background:linear-gradient(135deg,#3b82f6,#1d4ed8)}
+.brand .tag,.chip{color:var(--dimmer);border-color:var(--border)}
+#newtask{background:var(--panel2);border-color:var(--border)}
+#newtask:hover,.task-row:hover{background:#f1f5f9}
+.task-row.active{background:#eff6ff}
+.dot{background:#cbd5e1}
+.composer{background:var(--panel);border-color:var(--border);box-shadow:0 2px 8px rgba(15,23,42,.05)}
+.cbtn,.pvbtn{border-color:var(--border);color:var(--dim)}
+.cbtn:hover,.pvbtn:hover{background:#f1f5f9;color:var(--text)}
+#sendbtn,#sendbtn2{background:var(--accent);color:#fff}
+.pop{background:#fff;border-color:var(--border);box-shadow:0 12px 32px rgba(15,23,42,.14)}
+.pop .item:hover{background:#f1f5f9}
+.pop .sep,.tool .tbody,.mi-sec{background:var(--border);border-color:var(--border)}
+.prow input[type=number],.pkey-row input,.modal input{background:#fff;border-color:var(--border);color:var(--text)}
+.msg-user{background:#eaf2ff;color:#1e3a8a}
+.msg-asst code{background:#eef2f7;color:#334155}
+.msg-asst pre,.term,.diff,.appr .adetail{background:#f8fafc;border-color:var(--border);color:#334155}
+.tool,.appr.done{background:#fff;border-color:var(--border)}
+.tool .thead:hover,.tree .fil:hover{background:#f1f5f9}
+.pv-code{color:#334155}
+.pv-table th{background:#f1f5f9;color:#1e293b}
+.pv-table td{color:#475569}
+.pv-table tr:nth-child(even) td{background:#f8fafc}
+#preview{background:#fff;border-color:var(--border)}
+.fchip{background:#f8fafc;border-color:var(--border);color:var(--dim)}
+#mask,#missionmask{background:rgba(15,23,42,.35)}
+.modal{background:#fff;border-color:var(--border);box-shadow:0 18px 50px rgba(15,23,42,.18)}
+.btn-pri{background:var(--accent);color:#fff}
+.tree-tools .tree-act{background:var(--accent)}
+.cbtn.auto-btn.on,.auto-task-btn.on{color:#fff;background:var(--green);border-color:var(--green)}
+.auto-task-btn{font-size:12px;white-space:nowrap}
+</style>
 </head>
 <body>
 
@@ -288,6 +330,7 @@ input,textarea,select{font-family:inherit;color:inherit}
       <span class="dot" id="headdot"></span>
       <span class="title" id="headtitle"></span>
       <span class="chip" id="headproj"></span>
+      <button class="pvbtn auto-task-btn" id="autook3" title="切换后续危险操作是否自动确认">⚡ 自动确认:关</button>
       <button class="pvbtn" id="filesbtn" style="margin-left:auto">📂 文件</button>
       <span class="spin" id="headspin"><span class="spinner"></span>正在工作…</span>
     </div>
@@ -1223,10 +1266,10 @@ $("filesbtn").onclick = toggleFiles;
 $("filesbtn0").onclick = toggleFiles;
 
 /* 自动确认开关:打开后收到“需要确认”自动允许执行,跳过人工点按。
-   首页与任务视图各一个按钮(autook / autook2),共享同一状态。*/
+   首页、任务输入区和任务标题栏三个按钮共享同一状态。*/
 let AUTO_APPROVE = localStorage.getItem("oc_auto_approve") === "1";
 function renderAutoBtn(){
-  for (const id of ["autook", "autook2"]){
+  for (const id of ["autook", "autook2", "autook3"]){
     const b = $(id);
     if (!b) continue;
     b.classList.toggle("on", AUTO_APPROVE);
@@ -1238,7 +1281,7 @@ function toggleAuto(){
   localStorage.setItem("oc_auto_approve", AUTO_APPROVE ? "1" : "0");
   renderAutoBtn();
 }
-for (const id of ["autook", "autook2"]){
+for (const id of ["autook", "autook2", "autook3"]){
   const b = $(id);
   if (b) b.onclick = toggleAuto;
 }
