@@ -137,6 +137,136 @@ def write(path: Path, content: str) -> None:
     path.write_text(content.rstrip() + "\n", encoding="utf-8")
 
 
+INTEGRATION_OUTPUT_SCHEMA = """# 智能消歧与整合输出文件字段契约
+
+本文件是 Agent 生成消歧与整合结果 CSV 的固定字段规范。Ontology 后端会按
+`execution-context.expectedFiles` 读取这些文件并导入；文件名、第一行表头和字段含义必须保持一致。
+
+## 通用 CSV 要求
+
+- 每个文件必须存在，即使没有记录也必须保留表头；但如果文件不在当前任务 `expectedFiles` 中，禁止创建或上传。
+- 第一行必须是下面列出的完整表头，不要在表头之前增加标题、注释或空行。
+- 使用 UTF-8 编码、逗号分隔；字段内含逗号、换行或双引号时按 CSV 规则使用双引号转义。
+- 每行代表一条记录；不能把多条记录拼在一个字段中。多值字段（如“原名称集合”“来源模型”）使用 JSON 数组字符串，例如 `[\"RM001\",\"RM002\"]`。
+- 空值留空，不要写 `None`、`undefined` 或 `********`。相似度使用 0 到 1 之间的小数。
+
+## 本体元素结果文件
+
+这些文件沿用《本体元模型模板》的字段名称，字段顺序不能改变。
+
+### `business_objects.csv`：业务对象
+
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| 业务对象编码 | 是 | 整合后的稳定编码；已有本体库编码优先，否则选择保留编码 |
+| 业务对象名称 | 是 | 整合后的业务对象名称 |
+| 业务对象英文名 | 否 | 英文名称 |
+| 业务对象定义 | 是 | 按规则写清定义、目的和范围 |
+| 数据类别 | 否 | 数据/业务分类 |
+
+### `logical_entities.csv`：逻辑实体
+
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| 业务对象编码 | 是 | 所属业务对象编码 |
+| 业务对象名称 | 是 | 所属业务对象名称 |
+| 逻辑实体编码 | 是 | 整合后的稳定编码 |
+| 逻辑实体名称 | 是 | 整合后的逻辑实体名称 |
+| 逻辑实体英文名 | 否 | 英文名称 |
+| 逻辑实体定义 | 是 | 按规则写清定义、目的和范围 |
+| 是否主逻辑实体 | 是 | 统一使用 `是` 或 `否`；每个业务对象必须且只能有一个 `是` |
+| 数据类别 | 否 | 数据/业务分类 |
+
+### `business_attributes.csv`：业务属性
+
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| 逻辑实体编码 | 是 | 所属逻辑实体编码 |
+| 逻辑实体名称 | 是 | 所属逻辑实体名称 |
+| 业务属性编码 | 是 | 整合后的稳定编码 |
+| 业务属性名称 | 是 | 整合后的属性名称 |
+| 业务属性英文名称 | 否 | 英文名称 |
+| 业务属性定义 | 是 | 用“是指……”描述业务含义 |
+| 数据类型 | 是 | 统一的数据类型名称 |
+| 是否主键 | 是 | 统一使用 `是` 或 `否` |
+| 是否非空 | 是 | 统一使用 `是` 或 `否` |
+
+### `entity_relations.csv`：实体关系
+
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| 关系编码 | 是 | 稳定关系编码 |
+| 源逻辑实体编码 | 是 | 关系源实体 |
+| 源逻辑实体名称 | 是 | 关系源实体名称 |
+| 目标逻辑实体编码 | 是 | 关系目标实体 |
+| 目标逻辑实体名称 | 是 | 关系目标实体名称 |
+| 关系分类编码 | 否 | 关系分类编码 |
+| 关系分类 | 否 | 关系分类名称 |
+| 关系中文名称 | 是 | 正向关系名称 |
+| 关系英文名称 | 否 | 正向关系英文名 |
+| 关系基数 | 是 | 例如 `1:1`、`1:N`、`N:1`、`N:N` |
+| 反向关系中文名称 | 否 | 反向关系名称 |
+| 反向关系英文名称 | 否 | 反向关系英文名 |
+| 关系描述 | 是 | 关系语义和证据说明 |
+| 源关联属性编码 | 否 | 源端关联属性，必须能在业务属性结果中找到 |
+| 源关联属性英文名 | 否 | 源端属性英文名 |
+| 源关联属性中文名 | 否 | 源端属性中文名 |
+| 目标关联属性编码 | 否 | 目标端关联属性 |
+| 目标关联属性英文名 | 否 | 目标端属性英文名 |
+| 目标关联属性中文名 | 否 | 目标端属性中文名 |
+
+### `business_rules.csv`：业务规则
+
+| 字段 | 必填 | 含义 |
+| --- | --- | --- |
+| 规则编码 | 是 | 稳定规则编码 |
+| 规则名称 | 是 | 业务规则名称 |
+| 规则描述 | 是 | 可验证的业务约束或判断条件 |
+
+## 消歧整合报告文件
+
+这些文件对应《智能消歧与整合模板》的五类工作表，字段名必须按模板保留。
+
+### `integration_report.csv`：总体检核报告
+
+表头：`检核项,问题类型,涉及源模型,处理结果,说明`
+
+- `检核项`：一致性、完整性或正确性检查项。
+- `问题类型`：同名不同义、同义不同名、同名同义、缺失、冲突等。
+- `涉及源模型`：涉及的模型任务编码或来源文件；多值用 JSON 数组。
+- `处理结果`：已合并、已修正、待确认、冲突、缺失或无需处理。
+- `说明`：判断依据、证据和后续动作。
+
+### `merged_elements.csv`：已合并元素
+
+表头：`整合后名称,元素类型,原名称集合,来源模型,合并策略,相似度`
+
+`元素类型` 使用 `BUSINESS_OBJECT`、`LOGICAL_ENTITY`、`BUSINESS_ATTRIBUTE`、`ENTITY_RELATION`、`RULE` 等枚举；`原名称集合` 和 `来源模型` 为 JSON 数组；`合并策略` 写明保留编码/推荐名称等处理；必须有语义或结构证据支持合并。
+
+### `pending_elements.csv`：待人工确认元素
+
+表头：`候选名称 A,候选名称 B,推荐名称,元素类型,来源模型,相似度,待确认原因`
+
+相似但证据不足、不能自动合并的候选必须放在这里，不得强行写入 `merged_elements.csv`。
+
+### `conflict_elements.csv`：冲突元素
+
+表头：`元素名称,冲突类型,来源模型,冲突描述,来源内容`
+
+记录同名不同义、定义冲突、类型/长度冲突、主键或关系冲突等；`来源内容` 保留可追溯的原始定义或字段摘要。
+
+### `missing_elements.csv`：缺失元素
+
+表头：`元素名称,元素类型,来源模型,缺失说明`
+
+记录业务对象缺少逻辑实体、逻辑实体缺少主键/业务属性/关系等完整性问题；不能用虚构数据填充缺失项。
+
+## 生成前后校验
+
+生成后必须逐个检查当前任务 `expectedFiles` 中的文件：文件存在、表头精确匹配、CSV 可解析、编码稳定、记录数真实。最后创建 `ok.csv` 作为整合完成标记；只有所有 expectedFiles 已生成并验证后，才允许上传 `ok.csv` 并回写完成状态。
+"""
+
+
 BASE_SOURCES = [
     "智能建模任务.docx",
     "数据模型建模规范-20260626.xlsx",
@@ -161,10 +291,9 @@ def build() -> None:
 ## 使用方式
 
 - 运行服务只读取已经生成的 Markdown，不会在服务器实时解析 DOCX/XLSX，也不会修改本目录。
-- `integration.md` 用于智能消歧与整合，包含目标、规则和整合模板。
+- `integration/` 用于智能消歧与整合：`base.md` 是目标和规则，`template.md` 是 Excel 模板，`output_schema.md` 是十类结果 CSV 的字段契约，`all_sources.md` 是组合后的 system prompt 知识。
 - `modeling/base.md` 用于所有智能建模任务；各 `modeling/*.md` 文件只保存对应输入源的专项规则，运行时由 Agent 加载器按需拼接公共规则和专项规则，避免重复复制。
-- `本体元模型.md`、`本体元模型模板.md` 和 `本体建模步骤拆解.md` 是单独可审阅的参考 Markdown；同样内容也已编入 `modeling/base.md`，由 system prompt 静态注入 Agent。
-- `智能消歧与整合模板.md` 是整合任务输出/对齐结构的静态 Markdown 参考，并已编入 `integration.md`，由 integration system prompt 静态注入 Agent。
+- `modeling/本体元模型.md`、`modeling/本体元模型模板.md` 和 `modeling/本体建模步骤拆解.md` 是建模参考 Markdown；同样内容也已编入 `modeling/base.md`，由 modeling system prompt 静态注入 Agent。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 
 ## 安全边界
@@ -174,14 +303,12 @@ def build() -> None:
 
     base = "# 智能建模任务：静态私有知识\n\n" + "\n\n".join(block(x) for x in BASE_SOURCES)
     write(OUTPUT_DIR / "modeling" / "base.md", base)
-    write(OUTPUT_DIR / "本体元模型.md",
+    write(OUTPUT_DIR / "modeling" / "本体元模型.md",
           "# 本体元模型：静态 Markdown\n\n" + block("本体元模型.xlsx"))
-    write(OUTPUT_DIR / "本体元模型模板.md",
+    write(OUTPUT_DIR / "modeling" / "本体元模型模板.md",
           "# 本体元模型模板：静态 Markdown\n\n" + block("本体元模型模板.xlsx"))
-    write(OUTPUT_DIR / "本体建模步骤拆解.md",
+    write(OUTPUT_DIR / "modeling" / "本体建模步骤拆解.md",
           "# 本体建模步骤拆解：静态 Markdown\n\n" + block("本体建模步骤拆解.xlsx"))
-    write(OUTPUT_DIR / "智能消歧与整合模板.md",
-          "# 智能消歧与整合模板：静态 Markdown\n\n" + block("智能消歧与整合模板.xlsx"))
     # 专项文件只保存对应输入源的规则，不重复复制公共建模规范。
     # 运行时由 ontology_knowledge.load_static_knowledge() 按需拼接 base.md。
     all_parts = [base] + [block(name) for name in SOURCE_DOCS.values()]
@@ -191,10 +318,17 @@ def build() -> None:
         write(OUTPUT_DIR / "modeling" / f"{key}.md",
               f"# 智能建模任务：{name}专项静态私有知识\n\n{block(name)}")
 
-    integration = "# 智能消歧与整合：静态私有知识\n\n" + "\n\n".join(
-        block(x) for x in ("智能消歧与整合.docx", "智能消歧与整合规则v0.1.docx",
-                           "智能消歧与整合模板.xlsx"))
-    write(OUTPUT_DIR / "integration.md", integration)
+    integration_base = "# 智能消歧与整合：目标与规则\n\n" + "\n\n".join(
+        block(x) for x in ("智能消歧与整合.docx", "智能消歧与整合规则v0.1.docx"))
+    integration_template = "# 智能消歧与整合模板：静态 Markdown\n\n" + block("智能消歧与整合模板.xlsx")
+    integration_template += "\n\n" + INTEGRATION_OUTPUT_SCHEMA
+    write(OUTPUT_DIR / "integration" / "base.md", integration_base)
+    write(OUTPUT_DIR / "integration" / "template.md", integration_template)
+    write(OUTPUT_DIR / "integration" / "output_schema.md",
+          INTEGRATION_OUTPUT_SCHEMA)
+    write(OUTPUT_DIR / "integration" / "all_sources.md",
+          "# 智能消歧与整合：全部静态私有知识\n\n" + integration_base
+          + "\n\n---\n\n" + integration_template)
 
 
 if __name__ == "__main__":

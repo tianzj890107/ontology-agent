@@ -5,10 +5,9 @@
 ## 使用方式
 
 - 运行服务只读取已经生成的 Markdown，不会在服务器实时解析 DOCX/XLSX，也不会修改本目录。
-- `integration.md` 用于智能消歧与整合，包含目标、规则和整合模板。
+- `integration/` 用于智能消歧与整合：`base.md` 是目标和规则，`template.md` 是 Excel 模板，`output_schema.md` 是十类结果 CSV 的字段契约，`all_sources.md` 是组合后的 system prompt 知识。
 - `modeling/base.md` 用于所有智能建模任务；各 `modeling/*.md` 文件只保存对应输入源的专项规则，运行时由 Agent 加载器按需拼接公共规则和专项规则，避免重复复制。
-- `本体元模型.md`、`本体元模型模板.md` 和 `本体建模步骤拆解.md` 是单独可审阅的参考 Markdown；同样内容也已编入 `modeling/base.md`，由 system prompt 静态注入 Agent。
-- `智能消歧与整合模板.md` 是整合任务输出/对齐结构的静态 Markdown 参考，并已编入 `integration.md`，由 integration system prompt 静态注入 Agent。
+- `modeling/本体元模型.md`、`modeling/本体元模型模板.md` 和 `modeling/本体建模步骤拆解.md` 是建模参考 Markdown；同样内容也已编入 `modeling/base.md`，由 modeling system prompt 静态注入 Agent。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 
 ## 安全边界

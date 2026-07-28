@@ -24,7 +24,7 @@ def knowledge_filename(task_type: str, context: Optional[Mapping[str, object]] =
     """Return a safe relative Markdown path for a task mode."""
     kind = str(task_type or "").strip().lower()
     if kind == "integration":
-        return "integration.md"
+        return "integration/all_sources.md"
     if kind != "modeling":
         return ""
     mode = str((context or {}).get("sourceMode") or "").lower()

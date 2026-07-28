@@ -16,7 +16,7 @@ from open_claude.ontology_knowledge import knowledge_filename, load_static_knowl
 
 class StaticKnowledgeContractTests(unittest.TestCase):
     def test_task_modes_select_fixed_files(self):
-        self.assertEqual(knowledge_filename("integration"), "integration.md")
+        self.assertEqual(knowledge_filename("integration"), "integration/all_sources.md")
         self.assertEqual(
             knowledge_filename("modeling", {"sourceMode": "DATABASE"}),
             "modeling/multi_source_data.md",
@@ -42,14 +42,17 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("智能消歧与整合规则v0.1.docx", integration)
         self.assertIn("智能消歧与整合模板.xlsx", integration)
         self.assertIn("检核项", integration)
+        self.assertIn("business_attributes.csv", integration)
+        self.assertIn("关系编码", integration)
         self.assertIn("本体元模型.xlsx", modeling)
         self.assertIn("本体元模型模板.xlsx", modeling)
         self.assertIn("本体建模步骤拆解.xlsx", modeling)
-        self.assertIn("本体元模型.xlsx", (ROOT / "agent_knowledge" / "本体元模型.md").read_text(encoding="utf-8"))
-        self.assertIn("本体元模型模板.xlsx", (ROOT / "agent_knowledge" / "本体元模型模板.md").read_text(encoding="utf-8"))
-        integration_template = (ROOT / "agent_knowledge" / "智能消歧与整合模板.md").read_text(encoding="utf-8")
+        self.assertIn("本体元模型.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型.md").read_text(encoding="utf-8"))
+        self.assertIn("本体元模型模板.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板.md").read_text(encoding="utf-8"))
+        integration_template = (ROOT / "agent_knowledge" / "integration" / "template.md").read_text(encoding="utf-8")
         self.assertIn("智能消歧与整合模板.xlsx", integration_template)
         self.assertIn("推荐名称", integration_template)
+        self.assertIn("business_rules.csv", integration_template)
 
     def test_modeling_source_files_are_specialized_and_composed_at_runtime(self):
         source_code = (ROOT / "agent_knowledge" / "modeling" / "source_code.md").read_text(encoding="utf-8")
@@ -64,6 +67,19 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("智能建模任务.docx", composed)
         self.assertIn("源代码本体建模.docx", composed)
         self.assertNotIn("业务文档本体建模.docx", composed)
+
+    def test_integration_output_contract_covers_expected_files(self):
+        schema = (ROOT / "agent_knowledge" / "integration" / "output_schema.md").read_text(encoding="utf-8")
+        for name in (
+            "business_attributes.csv", "business_objects.csv", "business_rules.csv",
+            "conflict_elements.csv", "entity_relations.csv", "integration_report.csv",
+            "logical_entities.csv", "merged_elements.csv", "missing_elements.csv",
+            "pending_elements.csv",
+        ):
+            self.assertIn(name, schema)
+        for header in ("业务对象编码", "逻辑实体编码", "业务属性编码", "关系编码",
+                      "检核项", "整合后名称", "候选名称 A", "冲突类型", "缺失说明"):
+            self.assertIn(header, schema)
 
     def test_static_knowledge_is_outside_task_sandbox(self):
         self.assertFalse((ROOT / "agent_knowledge").is_relative_to(
