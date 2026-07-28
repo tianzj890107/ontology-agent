@@ -906,6 +906,20 @@ async function startTask(){
   }
   await sendToActive(msg);
 }
+async function startNewMissionTask(){
+  if (!MISSION || BUSY) return;
+  const t = await api("/api/tasks", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({project:"", repositoryId:MISSION.repositoryId,
+      taskCode:MISSION.taskCode, taskType:MISSION.taskType || ""})});
+  if (t.error){ alert(t.error); return; }
+  TASKS.unshift(t);
+  localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, t.id);
+  // 不发送任何用户消息；打开一个真正的空会话，由按钮触发 autoStartMessage。
+  await openTask(t.id);
+}
+function newTaskAction(){
+  return MISSION ? startNewMissionTask() : showHome();
+}
 async function sendFollowup(){
   const text = $("input2").value.trim();
   if (!text || BUSY || !ACTIVE) return;
@@ -1537,7 +1551,7 @@ for (const id of ["input", "input2"]){
 }
 $("sendbtn").onclick = startTask;
 $("sendbtn2").onclick = handleTaskSend;
-$("newtask").onclick = showHome;
+$("newtask").onclick = newTaskAction;
 $("attach1").onclick = $("attach2").onclick = e => { e.stopPropagation(); $("fpick").click(); };
 $("projbtn").onclick = e => { e.stopPropagation(); closePops(); openProjPop(); };
 $("modelbtn").onclick = e => { e.stopPropagation(); closePops(); openModelPop($("modelbtn")); };
