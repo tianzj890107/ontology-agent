@@ -51,6 +51,20 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("智能消歧与整合模板.xlsx", integration_template)
         self.assertIn("推荐名称", integration_template)
 
+    def test_modeling_source_files_are_specialized_and_composed_at_runtime(self):
+        source_code = (ROOT / "agent_knowledge" / "modeling" / "source_code.md").read_text(encoding="utf-8")
+        document = (ROOT / "agent_knowledge" / "modeling" / "business_document.md").read_text(encoding="utf-8")
+        self.assertIn("源代码本体建模.docx", source_code)
+        self.assertNotIn("业务文档本体建模.docx", source_code)
+        self.assertIn("业务文档本体建模.docx", document)
+        self.assertNotIn("源代码本体建模.docx", document)
+
+        composed = load_static_knowledge(ROOT / "agent_knowledge", "modeling",
+                                         {"sourceMode": "SOURCE_CODE"})
+        self.assertIn("智能建模任务.docx", composed)
+        self.assertIn("源代码本体建模.docx", composed)
+        self.assertNotIn("业务文档本体建模.docx", composed)
+
     def test_static_knowledge_is_outside_task_sandbox(self):
         self.assertFalse((ROOT / "agent_knowledge").is_relative_to(
             ROOT / "open-claude" / "sandbox"))

@@ -35,7 +35,13 @@ def knowledge_filename(task_type: str, context: Optional[Mapping[str, object]] =
 
 def load_static_knowledge(directory: str | Path, task_type: str,
                           context: Optional[Mapping[str, object]] = None) -> str:
-    """Read one prebuilt Markdown file, returning empty text when unavailable."""
+    """Read prebuilt Markdown knowledge, composing common + source rules.
+
+    Source-specific files intentionally contain only their own rules so the
+    repository remains auditable and avoids copying the same large modeling
+    specification into every file.  The Agent still receives the common
+    modeling rules followed by the selected source-specific rules.
+    """
     relative = knowledge_filename(task_type, context)
     if not relative:
         return ""
@@ -43,6 +49,19 @@ def load_static_knowledge(directory: str | Path, task_type: str,
     path = (root / relative).resolve()
     if root not in path.parents:
         return ""
+
+    def read(path_to_read: Path) -> str:
+        if root not in path_to_read.parents:
+            return ""
+        try:
+            return path_to_read.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            return ""
+
+    if str(task_type or "").strip().lower() == "modeling" and path.name != "all_sources.md":
+        common = read(root / "modeling" / "base.md")
+        specific = read(path)
+        return "\n\n---\n\n".join(part for part in (common, specific) if part)
     try:
         return path.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError):
