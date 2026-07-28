@@ -757,7 +757,7 @@ function appendEvent(ev, col){
   if (ev.type === "user"){
     closeStream();
     const d = document.createElement("div");
-    d.className = "msg-user"; d.textContent = ev.text;
+    d.className = "msg-user"; d.textContent = publicUserText(ev.text);
     col.appendChild(d);
   }
   else if (ev.type === "assistant"){          // coalesced block from replay
@@ -899,6 +899,12 @@ function appendEvent(ev, col){
 }
 function closeStream(){
   if (streamEl){ streamEl.innerHTML = md(streamBuf); linkifyFiles(streamEl); streamEl = null; streamBuf = ""; }
+}
+
+function publicUserText(text){
+  const value = String(text || "");
+  return value.startsWith("请直接开始执行当前任务")
+    ? "请直接开始执行当前任务" : value;
 }
 
 /* ---------------- sending ---------------- */
