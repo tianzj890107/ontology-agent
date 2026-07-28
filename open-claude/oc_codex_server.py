@@ -169,13 +169,40 @@ _PARSE_ELEMENT_BY_FILE = {
     "business_attributes.csv": "BUSINESS_ATTRIBUTE",
     "entity_relations.csv": "ENTITY_RELATION",
     "business_rules.csv": "RULE",
+    # 其他建模类型(源代码/UI/文档/指标)按 execution-context 动态校验。
+    "apis.csv": "API", "actions.csv": "ACTION", "metrics.csv": "METRIC",
+    "dimensions.csv": "DIMENSION", "activities.csv": "ACTIVITY",
+    "api_services.csv": "API", "entity_relationships.csv": "ENTITY_RELATION",
+    "business_object_relationships.csv": "BUSINESS_OBJECT_RELATION",
+    "activity_flow.csv": "ACTIVITY_FLOW", "indicator.csv": "METRIC",
+    "activity_flows.csv": "ACTIVITY_FLOW", "business_object_relations.csv": "BUSINESS_OBJECT_RELATION",
+    "terms.csv": "TERM", "atomic_indicators.csv": "ATOMIC_INDICATOR",
+    "composite_indicators.csv": "COMPOSITE_INDICATOR", "indicator_lineage.csv": "INDICATOR_LINEAGE",
+    "activity_business_objects.csv": "ACTIVITY_BUSINESS_OBJECT",
+    "activity_business_rules.csv": "ACTIVITY_BUSINESS_RULE",
+    "activity_indicators.csv": "ACTIVITY_INDICATOR",
 }
 
 _PARSE_ELEMENT_ALIASES = {
     "业务对象": "BUSINESS_OBJECT", "逻辑实体": "LOGICAL_ENTITY",
     "业务属性": "BUSINESS_ATTRIBUTE", "实体关系": "ENTITY_RELATION",
-    "业务规则": "RULE", "RULES": "RULE",
+    "业务规则": "RULE", "RULES": "RULE", "API服务": "API", "接口": "API", "动作": "ACTION",
+    "活动": "ACTIVITY", "活动流": "ACTIVITY_FLOW", "指标": "METRIC", "维度": "DIMENSION",
+    "业务对象关系": "BUSINESS_OBJECT_RELATION", "术语": "TERM",
 }
+
+def parse_element_for_file(filename):
+    """将输出文件名映射为 parseElement；未知文件也按规范化文件名推导。"""
+    name = os.path.basename(str(filename or "")).lower()
+    if name in _PARSE_ELEMENT_BY_FILE:
+        return _PARSE_ELEMENT_BY_FILE[name]
+    stem = re.sub(r"\.(csv|json|xlsx?)$", "", name)
+    stem = re.sub(r"(?:_list|_data|_result)$", "", stem)
+    if stem.endswith("ies"):
+        stem = stem[:-3] + "y"
+    elif stem.endswith("s"):
+        stem = stem[:-1]
+    return stem.upper().replace("-", "_")
 
 def normalize_parse_elements(value):
     """将 execution-context 的解析要素统一为回调枚举名。"""
@@ -183,9 +210,9 @@ def normalize_parse_elements(value):
         return set()
     raw = str(value) if not isinstance(value, list) else ""
     # 某些网关/页面会把数组序列化成 BUSINESS_OBJECTLOGICAL_ENTITY…，无分隔符也要正确拆分。
-    compact_tokens = re.findall(
-        r"BUSINESS_OBJECT|LOGICAL_ENTITY|BUSINESS_ATTRIBUTE|ENTITY_RELATION|RULE|业务对象|逻辑实体|业务属性|实体关系|业务规则",
-        raw, flags=re.IGNORECASE) if raw else []
+    token_names = set(_PARSE_ELEMENT_ALIASES) | set(_PARSE_ELEMENT_BY_FILE.values())
+    compact_pattern = "|".join(re.escape(x) for x in sorted(token_names, key=len, reverse=True))
+    compact_tokens = re.findall(compact_pattern, raw, flags=re.IGNORECASE) if raw else []
     values = value if isinstance(value, list) else (compact_tokens or re.split(r"[,，、;；\s]+", raw))
     out = set()
     for item in values:
@@ -207,7 +234,8 @@ def normalize_expected_files(value):
 def allowed_output_files(parse_elements, expected_files=None):
     elements = normalize_parse_elements(parse_elements)
     expected = normalize_expected_files(expected_files)
-    allowed = {name for name, elem in _PARSE_ELEMENT_BY_FILE.items() if elem in elements}
+    candidates = expected or set(_PARSE_ELEMENT_BY_FILE)
+    allowed = {name for name in candidates if parse_element_for_file(name) in elements}
     return allowed & expected if expected else allowed
 
 
@@ -370,7 +398,9 @@ def _mission_object_refs(value, refs=None):
 
 def _mask_mission_secrets(value):
     if isinstance(value, dict):
-        return {k: ("********" if str(k).lower() in {"password", "secret", "secretkey"}
+        secret_keys = {"password", "passwd", "pwd", "secret", "secretkey", "accesskey",
+                       "access_key", "apikey", "api_key", "token", "clientsecret", "client_secret"}
+        return {k: ("********" if str(k).lower() in secret_keys
                     else _mask_mission_secrets(v)) for k, v in value.items()}
     if isinstance(value, list): return [_mask_mission_secrets(v) for v in value]
     return value
@@ -691,6 +721,13 @@ def project_path(name: str) -> str | None:
 
 
 _SKIP_DIRS = {".git", ".open-claude", "node_modules", "__pycache__", ".venv", "venv"}
+_WEB_HIDDEN_FILES = {".db_connection.json", ".env", ".env.local", "credentials.json",
+                    "db_connection.py", "verify_database.py"}
+
+def is_web_visible_file(rel):
+    """阻止浏览器预览/下载任务数据库密码和内部连接 helper。"""
+    parts = str(rel or "").replace("\\", "/").split("/")
+    return not any(part in _WEB_HIDDEN_FILES or part.startswith(".") for part in parts)
 
 
 _TASK_PATH_RE = re.compile(r"(?:RM|MI)\d{10,}")
@@ -703,8 +740,10 @@ def list_project_files(base: str, task_code: str = "") -> list[dict]:
         dirs[:] = [d for d in dirs if d not in _SKIP_DIRS and not d.startswith(".")]
         for fn in files:
             fp = os.path.join(root, fn)
+            rel = os.path.relpath(fp, base).replace("\\", "/")
+            if not is_web_visible_file(rel):
+                continue
             if task_code:
-                rel = os.path.relpath(fp, base).replace("\\", "/")
                 task_ids = _TASK_PATH_RE.findall(rel)
                 parts = rel.split("/")
                 if (task_ids and task_code not in task_ids) or any(
@@ -1322,6 +1361,9 @@ class Handler(BaseHTTPRequestHandler):
         resources inside a previewed HTML page resolve correctly in the iframe.
         """
         m = re.match(r"^/p/([^/]+)/(.+)$", path)
+        if m and not is_web_visible_file(m.group(2)):
+            self.send_error(404)
+            return
         f = resolve_project_file(m.group(1), m.group(2)) if m else None
         if not f or not os.path.isfile(f):
             self.send_error(404)
@@ -1350,11 +1392,18 @@ class Handler(BaseHTTPRequestHandler):
         每个路径都经 resolve_project_file 校验,确保限定在项目目录内。
         """
         proj = (qs.get("project") or [""])[0]
+        task_code = (qs.get("taskCode") or [""])[0].strip()
         if not project_path(proj):
             self.send_error(404)
             return
         picked = []
+        visible = ({x["path"] for x in list_project_files(project_path(proj), task_code)}
+                   if task_code else None)
         for rel in (qs.get("path") or []):
+            if not is_web_visible_file(rel):
+                continue
+            if visible is not None and str(rel).replace("\\", "/").lstrip("/") not in visible:
+                continue
             f = resolve_project_file(proj, rel)
             if f and os.path.isfile(f):
                 picked.append((str(rel).replace("\\", "/").lstrip("/"), f))
@@ -1416,8 +1465,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         parse_elements = normalize_parse_elements(context.get("parseElements")) if isinstance(context, dict) else set()
         expected_files = normalize_expected_files(context.get("expectedFiles")) if isinstance(context, dict) else set()
-        allowed_files = allowed_output_files(parse_elements, expected_files) if modeling_upload else None
-        if modeling_upload and task_code and not allowed_files:
+        if modeling_upload:
+            allowed_files = allowed_output_files(parse_elements, expected_files)
+        else:
+            # integration 回调不携带 files，但平台会按 outputPrefix 读取固定结果文件；
+            # 允许 expectedFiles 及协议要求的 ok.csv，拒绝其他任务/调试文件。
+            allowed_files = set(expected_files) | {"ok.csv"}
+        if task_code and not allowed_files:
             self._send_json({"error": "无法确认当前任务 execution-context 的解析要素，已拒绝上传和回写结果文件"}, status=422)
             return
         if not project_path(proj):
@@ -1434,10 +1488,9 @@ class Handler(BaseHTTPRequestHandler):
         for rel in paths:
             f = resolve_project_file(proj, str(rel))
             name = os.path.basename(f) if f else os.path.basename(str(rel))
-            elem = _PARSE_ELEMENT_BY_FILE.get(name)
-            if elem and (name not in allowed_files):
+            if name not in allowed_files:
                 results.append({"name": name, "ok": False,
-                                "error": "该解析类型未在当前任务 execution-context 中选中，已跳过"})
+                                "error": "该文件未在当前任务 execution-context.expectedFiles 中，已跳过"})
                 continue
             if not f or not os.path.isfile(f):
                 results.append({"name": name, "ok": False, "error": "文件不存在"})
@@ -1490,9 +1543,7 @@ class Handler(BaseHTTPRequestHandler):
             for r in results:
                 if not r.get("ok"):
                     continue
-                elem = _PARSE_ELEMENT_BY_FILE.get(r["name"])
-                if not elem:
-                    continue   # 非标准解析要素文件(如 ok.csv)不进 files
+                elem = parse_element_for_file(r["name"])
                 if allowed_files is not None and r["name"] not in allowed_files:
                     continue
                 # objectKey / previewUrl 优先用 FileServer 上传返回值,缺失才回退。
@@ -1707,9 +1758,18 @@ class Handler(BaseHTTPRequestHandler):
         task = TASKS.get(task_id)
         data = self._read_body()
         text = (data.get("message") or "").strip()
-        if task and isinstance(data.get("missionContext"), dict):
-            task.set_mission_context(data["missionContext"])
-            persist_tasks()
+        if task:
+            client_context = data.get("missionContext") if isinstance(data.get("missionContext"), dict) else None
+            # 任务绑定后，服务端重新读取 execution-context，避免浏览器篡改任务规则/输出范围。
+            server_context = fetch_execution_context(
+                task.task_code, task.repository_id, task.task_type) if task.task_code else None
+            if isinstance(server_context, dict):
+                task.set_mission_context(server_context)
+                persist_tasks()
+            elif not task.mission_context and client_context:
+                # 平台暂时不可达时，仅首次允许浏览器上下文作为降级；已有上下文不被覆盖。
+                task.set_mission_context(client_context)
+                persist_tasks()
 
         self.close_connection = True
         self.send_response(200)

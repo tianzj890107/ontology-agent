@@ -1202,6 +1202,11 @@ function filesAPIPath(proj){
     url += "&taskCode=" + encodeURIComponent(MISSION.taskCode);
   return url;
 }
+function missionExpectedFiles(){
+  const value = MISSION_CONTEXT && MISSION_CONTEXT.expectedFiles;
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  return value ? (String(value).match(/[A-Za-z][A-Za-z0-9_-]*\.csv/g) || []) : [];
+}
 
 /* Agent 消息里经常只返回输出文件名,而实际文件位于任务输出目录。
  * 预览首次 404 时,在当前项目文件清单中按完整路径/后缀/唯一文件名兜底定位。 */
@@ -1296,9 +1301,10 @@ async function showTree(){
     return a.localeCompare(b);
   });
   let missingNotice = "";
-  if (MISSION_CONTEXT && Array.isArray(MISSION_CONTEXT.expectedFiles)){
+  const expectedMissionFiles = missionExpectedFiles();
+  if (expectedMissionFiles.length){
     const actual = new Set(files.map(f => String(f.path || "").split("/").pop()));
-    const missing = MISSION_CONTEXT.expectedFiles.map(String).filter(n => !actual.has(n));
+    const missing = expectedMissionFiles.filter(n => !actual.has(n));
     if (missing.length)
       missingNotice = `<div class="pv-empty" style="margin:8px 0;color:#9a6700;background:#fff8e1">` +
         `任务声明的输出文件尚未在当前项目中找到：${esc(missing.join("、"))}。Agent 只能在文件实际存在后报告完成。</div>`;
@@ -1375,6 +1381,8 @@ function downloadSelected(){
 
 function downloadFiles(proj, rels){
   let url = "/api/download?project=" + encodeURIComponent(proj);
+  if (typeof MISSION !== "undefined" && MISSION && MISSION.taskCode)
+    url += "&taskCode=" + encodeURIComponent(MISSION.taskCode);
   for (const r of rels) url += "&path=" + encodeURIComponent(r);
   const a = document.createElement("a");
   a.href = url; a.download = "";
