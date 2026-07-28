@@ -50,8 +50,8 @@
 - 每个本体任务会自动准备 `mission-input/本体元模型.xlsx` 和 `mission-input/本体元模型模板.xlsx`，并将路径写入 system prompt；Agent 可直接读取，不再要求重复上传。
 - system prompt 增加最终交接格式约束：回复最后必须列出实际 `outputPrefix`、输出文件树和各 CSV 去表头后的真实记录数；文件缺失或读取失败必须明确说明。
 - 解析要素改为以任务 `execution-context` 为唯一许可来源：system prompt 明确禁止生成未勾选类型；MinIO 上传前重新读取并过滤标准结果文件，回调前再次按许可范围过滤，未选择 `RULE` 时不会上传或回写 `business_rules.csv`。
-- modeling 私有规则加载兼容真实 DOCX、UTF-8 文本伪 DOCX 以及 XLSX 建模规范；`数据模型建模规范-20260626.xlsx` 等规则表会在服务端转为规则上下文注入 Agent，不进入 sandbox 或前端文件列表。
-- 私有目标、DOCX 和 XLSX 不再逐个原样拼接给 Agent；服务端会编译成带标题、来源和优先级说明的单份 Markdown 知识上下文，并按步骤表执行“能 AI 化/人工后续”分流。
+- 规则源文件统一在本地离线编译为可审阅的静态 Markdown，存放于 `agent_knowledge/`；服务端运行时只读取已生成的 Markdown，不再实时解析 DOCX/XLSX，也不修改规则文件。
+- `scripts/build_agent_knowledge.py` 负责规则变更后的离线重建；`modeling/base.md`、各输入源专项 Markdown 和 `integration.md` 分开维护并按任务模式加载，仍不进入 sandbox 或前端文件列表。
 - 全链路加固：对话任务上下文优先由服务端按 taskCode 重新读取，输出文件支持多种建模类型的动态映射，整合上传仅允许 expectedFiles/ok.csv，网页文件树和下载接口隐藏数据库密码及连接 helper。
 - 任务模式右侧文件树请求现在携带当前 `taskCode`，服务端会隐藏同一项目中其他 RM/MI 任务目录的文件；Agent 的最终回复仍必须以实际存在文件为准，不能把未生成文件写成“已成功生成”。
 - 文件树会对照当前任务 `expectedFiles` 提示实际缺失的输出文件，不会用任务声明或 Agent 文本虚构文件。
