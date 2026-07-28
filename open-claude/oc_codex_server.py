@@ -483,7 +483,11 @@ def _read_private_docx(path):
                 paragraphs.append(text)
         return "\n".join(paragraphs)
     except Exception:
-        return ""
+        # rules_goals 中部分文档是 UTF-8 文本但沿用了 .docx 文件名，兼容读取。
+        try:
+            return open(path, "r", encoding="utf-8").read().strip()
+        except (OSError, UnicodeDecodeError):
+            return ""
 
 
 def load_private_goals_and_rules(task_type):
