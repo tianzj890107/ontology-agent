@@ -472,6 +472,7 @@ def ensure_integration_reference_files(cwd):
     """为消歧整合任务准备产品规则文档；规则以文件形式保留版本，便于审计和更新。"""
     name = "智能消歧与整合规则v0.1.docx"
     candidates = [os.path.join(SANDBOX_DIR, name), os.path.join(SCRIPT_DIR, "..", name),
+                  os.path.join(SCRIPT_DIR, "..", "rules_goals", name),
                   os.path.join(os.getcwd(), name)]
     source = next((p for p in candidates if os.path.isfile(p)), None)
     if not source:
