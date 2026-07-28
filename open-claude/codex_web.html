@@ -1727,6 +1727,9 @@ function initMission(){
   SELECTED_PROJECT = null;
   $("projbtn").style.display = "none";
   $("filesbtn0").style.display = "none";
+  $("input").placeholder = MISSION.taskType === "integration"
+    ? "你可以直接点击开始智能消歧与整合任务，或者描述一个任务"
+    : "你可以直接点击开始智能建模任务，或者描述一个任务";
   const label = `📋 ${MISSION_MODE_LABEL} · 当前任务信息`;
   const meta = `taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
   // 左侧当前任务卡默认展开;首页原有任务栏保留兼容但不再重复显示。
