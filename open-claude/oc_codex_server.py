@@ -917,7 +917,32 @@ class Task:
         return {"id": self.id, "project": self.project, "title": self.title,
                 "status": self.status, "created": self.created, "updated": self.updated,
                 "repositoryId": self.repository_id, "taskCode": self.task_code,
-                "taskType": self.task_type}
+                "taskType": self.task_type, "hasConversation": self.has_conversation()}
+
+    def has_conversation(self) -> bool:
+        """Whether this task has a real user/assistant conversation.
+
+        Tool cards, model-switch events, and an empty placeholder log are not
+        enough to hide the first-run button.  The restored Conversation is the
+        source of truth for old tasks whose web replay log is incomplete.
+        """
+        for message in getattr(self.conv, "messages", []) or []:
+            if not isinstance(message, dict) or message.get("role") not in ("user", "assistant"):
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                return True
+            if isinstance(content, list) and any(
+                    isinstance(block, dict) and (
+                        str(block.get("text") or "").strip() or block.get("type") in ("tool_result", "tool_use")
+                    ) for block in content):
+                return True
+        for event in self.log:
+            if not isinstance(event, dict) or event.get("type") not in ("user", "assistant", "text"):
+                continue
+            if str(event.get("text") or "").strip():
+                return True
+        return False
 
     # -- one full agentic turn, streamed --------------------------------------
 

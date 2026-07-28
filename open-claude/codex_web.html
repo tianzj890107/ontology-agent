@@ -623,8 +623,12 @@ async function openTask(id){
   toolCards = {}; approvalCards = {};
   streamEl = null;
   for (const ev of (t.log || [])) appendEvent(ev, col);
-  ACTIVE.hasConversation = (t.log || []).some(ev =>
-    ev && (ev.type === "user" || ev.type === "assistant" || ev.type === "text" || ev.type === "tool_use"));
+  // 服务端会结合恢复后的 Conversation.messages 判断旧任务是否真正开始过；
+  // 只有兼容旧服务器时才回退到网页日志，且工具卡片本身不算已开始对话。
+  ACTIVE.hasConversation = typeof t.hasConversation === "boolean"
+    ? t.hasConversation
+    : (t.log || []).some(ev => ev && ["user", "assistant", "text"].includes(ev.type)
+        && String(ev.text || "").trim());
   updateTaskSendButton();
   renderTaskList();
   scrollFeed(true);

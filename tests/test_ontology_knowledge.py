@@ -90,6 +90,16 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 ]),
                 {"logical_entities.csv", "entity_relations.csv"},
             )
+            empty = types.SimpleNamespace(conv=types.SimpleNamespace(messages=[]), log=[
+                {"type": "model_switch", "from": "a", "to": "b"},
+                {"type": "tool_use", "name": "Read"},
+            ])
+            self.assertFalse(server.Task.has_conversation(empty))
+            started = types.SimpleNamespace(
+                conv=types.SimpleNamespace(messages=[{"role": "user", "content": "开始任务"}]),
+                log=[],
+            )
+            self.assertTrue(server.Task.has_conversation(started))
             class Session:
                 session_id = "session-1"
 
