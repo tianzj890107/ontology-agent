@@ -138,6 +138,12 @@ input,textarea,select{font-family:inherit;color:inherit}
 .think{border-left:2px solid var(--border);padding:2px 0 2px 12px;color:var(--dimmer);font-size:12.5px;white-space:pre-wrap;max-height:72px;overflow:hidden;cursor:pointer}
 .think.open{max-height:none}
 
+/* 可核验的执行审计摘要（不展示隐藏思维链） */
+.audit{border:1px solid var(--border);border-left:3px solid #60a5fa;border-radius:8px;background:var(--panel2);padding:8px 10px;color:var(--dim);font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.audit.warning{border-left-color:var(--amber);background:#fffbeb;color:#92400e}
+.audit .audit-title{font-weight:600;color:var(--text);margin-right:6px}
+.audit.warning .audit-title{color:#92400e}
+
 /* tool cards */
 .tool{border:1px solid var(--border);border-radius:10px;background:var(--panel);overflow:hidden}
 .tool .thead{display:flex;align-items:center;gap:8px;padding:8px 12px;font-size:12.5px;color:var(--dim);cursor:pointer;user-select:none}
@@ -786,6 +792,13 @@ function appendEvent(ev, col){
     }
     el.dataset.buf += ev.text;
     el.textContent = el.dataset.buf;
+  }
+  else if (ev.type === "audit"){
+    closeStream();
+    const d = document.createElement("div");
+    d.className = "audit" + (ev.severity === "warning" ? " warning" : "");
+    d.innerHTML = `<span class="audit-title">🔎 ${esc(ev.title || "执行审计")}</span>${esc(ev.detail || "")}`;
+    col.appendChild(d);
   }
   else if (ev.type === "tool_use"){
     closeStream();

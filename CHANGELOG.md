@@ -50,6 +50,7 @@
 - 验证命令使用服务实际虚拟环境的 Python 解释器，避免系统 `python3` 缺少 SQLAlchemy 导致“未提供密码/连接失败”的误判；服务重启恢复时不会再用脱敏密码覆盖真实配置文件。
 - 每个本体任务会自动准备 `mission-input/本体元模型.xlsx` 和 `mission-input/本体元模型模板.xlsx`，并将路径写入 system prompt；Agent 可直接读取，不再要求重复上传。
 - system prompt 增加最终交接格式约束：回复最后必须列出实际 `outputPrefix`、输出文件树和各 CSV 去表头后的真实记录数；文件缺失或读取失败必须明确说明。
+- 建模与消歧整合增加可见执行审计摘要：每个阶段需报告实际读取的文件/工作表/行数、静态规则文件名与章节定位、关键证据、产出数量和校验结果；不输出隐藏思维链或私有规则原文。
 - 解析要素改为以任务 `execution-context` 为唯一许可来源：system prompt 明确禁止生成未勾选类型；MinIO 上传前重新读取并过滤标准结果文件，回调前再次按许可范围过滤，未选择 `RULE` 时不会上传或回写 `business_rules.csv`。
 - `rules/` 中的规则、步骤表、本体元模型和本体元模型模板统一在本地离线编译为可审阅的静态 Markdown，存放于仓库更高一级的 `agent_knowledge/`；服务端运行时只读取已生成的 Markdown，不再实时解析 DOCX/XLSX，也不修改规则文件。
 - `scripts/build_agent_knowledge.py` 负责规则变更后的离线重建；`modeling/base.md`、各输入源专项 Markdown、`integration.md` 以及单独的 `本体元模型.md`、`本体元模型模板.md`、`本体建模步骤拆解.md` 均可在本地和服务器源码目录审阅，但仍不进入 sandbox 或前端文件列表。
@@ -58,6 +59,7 @@
 - 消歧整合结果增加服务端 CSV 协议校验：逐文件校验 UTF-8 CSV、精确表头、列数、引号/换行解析、关系分类和关系基数字典；`business_rules.csv` 统一为五列（编码、名称、分类、描述、来源内容）。整合只有在全部 `expectedFiles` 和最后的 `ok.csv` 都存在并通过校验后才回写 `COMPLETED`。
 - 修复 Ontology `DOCUMENT_MODELING`、`DATA_SOURCE_MODELING` 等任务类型没有被识别为 modeling 模式的问题；现在会正确注入建模私有规则和建模步骤。建模 CSV 也会拒绝 `id,name,description` 等临时表头。建模 XLSX 不再建议用 locale 相关的 `soffice` 转 CSV，避免中文被替换成 `?`。
 - 全链路加固：对话任务上下文优先由服务端按 taskCode 重新读取，输出文件支持多种建模类型的动态映射，整合上传仅允许 expectedFiles/ok.csv，网页文件树和下载接口隐藏数据库密码及连接 helper。
+- 工具执行会自动生成审计卡片：展示 Read 的文件范围、Write/Edit 的结果路径，并对 `head`、小范围 Read 等可能造成“只分析前几行”的操作显示警告。
 - 任务模式右侧文件树请求现在携带当前 `taskCode`，服务端会隐藏同一项目中其他 RM/MI 任务目录的文件；Agent 的最终回复仍必须以实际存在文件为准，不能把未生成文件写成“已成功生成”。
 - 文件树会对照当前任务 `expectedFiles` 提示实际缺失的输出文件，不会用任务声明或 Agent 文本虚构文件。
 - 兼容网关将解析要素/期望文件拼接成无分隔符字符串的情况；输出回写改为完整清单校验，缺少任一期望文件时不再部分回写成功。

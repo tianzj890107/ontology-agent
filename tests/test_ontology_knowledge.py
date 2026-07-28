@@ -125,6 +125,16 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             server = importlib.util.module_from_spec(spec)
             assert spec.loader is not None
             spec.loader.exec_module(server)
+            self.assertIn("执行审计摘要", server.build_modeling_instructions({}))
+            self.assertIn("规则文件名和章节标题", server.build_integration_instructions({}))
+            self.assertEqual(
+                server.build_tool_audit("Bash", {"command": "head -n 5 input.csv"})["severity"],
+                "warning",
+            )
+            self.assertEqual(
+                server.build_tool_audit("Read", {"file_path": "input.csv", "limit": 5})["severity"],
+                "warning",
+            )
             handler = object.__new__(server.Handler)
             self.assertEqual(handler._mission_from("1", "RM123456789", "modeling")["taskCode"],
                              "RM123456789")
