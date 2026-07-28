@@ -974,26 +974,28 @@ async function startActiveTask(){
   }
   ACTIVE.hasConversation = true;
   updateTaskSendButton();
-  await sendToActive(autoStartMessage());
+  await sendToActive(autoStartMessage(), "请直接开始执行当前任务");
 }
 async function handleTaskSend(){
   if (ACTIVE && !ACTIVE.hasConversation && !$("input2").value.trim()) return startActiveTask();
   return sendFollowup();
 }
-async function sendToActive(text){
+async function sendToActive(text, displayText){
   if (MISSION){
     try{ await ensureMissionContext(); }catch(e){ /* 对话仍可继续,系统会保留当前 ID */ }
   }
   BUSY = true; setWorking(true);
   if (ACTIVE){ ACTIVE.hasConversation = true; updateTaskSendButton(); }
-  appendEvent({type:"user", text});
+  displayText = displayText || text;
+  appendEvent({type:"user", text: displayText});
   scrollFeed(true);
   let serverStatus = null;
   let requestFailed = false;
   try{
     const r = await fetch(`/api/tasks/${ACTIVE.id}/send`, {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({message: text, missionContext: MISSION ? MISSION_CONTEXT : null}),
+      body: JSON.stringify({message: text, displayMessage: displayText,
+        missionContext: MISSION ? MISSION_CONTEXT : null}),
     });
     if (!r.ok || !r.body){
       let msg = `请求失败(${r.status})`;

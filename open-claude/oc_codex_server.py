@@ -946,8 +946,9 @@ class Task:
 
     # -- one full agentic turn, streamed --------------------------------------
 
-    def stream_turn(self, text: str, emit):
-        """Run one turn; emit(dict) per event. Also records events for replay."""
+    def stream_turn(self, text: str, emit, display_text: str | None = None):
+        """Run one turn; keep an optional short UI label separate from LLM input."""
+        display_text = str(display_text or text).strip() or text
         def rec(ev):
             self.log.append(ev)
             if len(self.log) > 10000:
@@ -964,9 +965,9 @@ class Task:
             conv = self.conv
             self.status = "working"
             self.updated = time.time()
-            if self.title == "新任务" and text:
-                self.title = text[:48]
-            self.log.append({"type": "user", "text": text})
+            if self.title == "新任务" and display_text:
+                self.title = display_text[:48]
+            self.log.append({"type": "user", "text": display_text})
             conv.add_user_message(text)
             # 用户消息和“working”状态先持久化，进程中断后仍能恢复该任务。
             persist_tasks()
@@ -1871,6 +1872,9 @@ class Handler(BaseHTTPRequestHandler):
         task = TASKS.get(task_id)
         data = self._read_body()
         text = (data.get("message") or "").strip()
+        display_text = (data.get("displayMessage") or "").strip()
+        if not display_text:
+            display_text = text
         if task:
             client_context = data.get("missionContext") if isinstance(data.get("missionContext"), dict) else None
             # 任务绑定后，服务端重新读取 execution-context，避免浏览器篡改任务规则/输出范围。
@@ -1909,7 +1913,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             return
         try:
-            task.stream_turn(text, emit)
+            task.stream_turn(text, emit, display_text)
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Client disconnected mid-stream; the turn state is already saved.
             pass
