@@ -527,7 +527,8 @@ def build_mission_output_instructions(context):
     prefix = str(context.get("outputPrefix") or "").strip().rstrip("/")
     expected = context.get("expectedFiles") or []
     if isinstance(expected, str):
-        expected = [x.strip() for x in re.split(r"[,，\s]+", expected) if x.strip()]
+        compact_files = re.findall(r"[A-Za-z][A-Za-z0-9_-]*\.csv", expected)
+        expected = compact_files or [x.strip() for x in re.split(r"[,，\s]+", expected) if x.strip()]
     expected = [str(x) for x in expected if str(x).strip()]
     labels = {
         "business_objects.csv": "业务对象数据",
