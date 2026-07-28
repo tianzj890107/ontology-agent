@@ -60,7 +60,7 @@ input,textarea,select{font-family:inherit;color:inherit}
 .cbtn:hover{background:#26262b;color:var(--text)}
 .cbtn .caret{font-size:9px;opacity:.7}
 #sendbtn,#sendbtn2{margin-left:auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none;transition:width .15s,border-radius .15s}
-#sendbtn2.start-mode{width:auto;min-width:92px;padding:0 14px;border-radius:17px;font-size:13px;font-weight:600}
+#sendbtn.start-mode,#sendbtn2.start-mode{width:auto;min-width:178px;padding:0 14px;border-radius:17px;font-size:13px;font-weight:600}
 #sendbtn:disabled,#sendbtn2:disabled{opacity:.3;cursor:default}
 
 /* dropdown popovers */
@@ -604,6 +604,7 @@ function showHome(){
   $("taskview").style.display = "none";
   closePreview();
   renderTaskList();
+  updateHomeSendButton();
   $("input").focus();
 }
 async function openTask(id){
@@ -643,9 +644,21 @@ function setWorking(on){
 function updateTaskSendButton(){
   const b = $("sendbtn2");
   if (!b) return;
-  const empty = !!ACTIVE && !ACTIVE.hasConversation;
+  const empty = !!ACTIVE && !ACTIVE.hasConversation && !$("input2").value.trim();
   b.classList.toggle("start-mode", empty);
-  b.textContent = empty ? "开始任务" : "↑";
+  b.textContent = empty ? missionStartLabel() : "↑";
+  b.title = empty ? "直接开始当前任务" : "发送";
+}
+function missionStartLabel(){
+  return MISSION && MISSION.taskType === "integration"
+    ? "开始智能消歧与整合" : "开始智能建模";
+}
+function updateHomeSendButton(){
+  const b = $("sendbtn");
+  if (!b) return;
+  const empty = !!MISSION && !$("input").value.trim();
+  b.classList.toggle("start-mode", empty);
+  b.textContent = empty ? missionStartLabel() : "↑";
   b.title = empty ? "直接开始当前任务" : "发送";
 }
 function scrollFeed(force){
@@ -920,6 +933,11 @@ async function startNewMissionTask(){
 function newTaskAction(){
   return MISSION ? startNewMissionTask() : showHome();
 }
+function handleHomeSend(){
+  const text = $("input").value.trim();
+  if (MISSION && !text) return startNewMissionTask();
+  return startTask();
+}
 async function sendFollowup(){
   const text = $("input2").value.trim();
   if (!text || BUSY || !ACTIVE) return;
@@ -948,7 +966,7 @@ async function startActiveTask(){
   await sendToActive(autoStartMessage());
 }
 async function handleTaskSend(){
-  if (ACTIVE && !ACTIVE.hasConversation) return startActiveTask();
+  if (ACTIVE && !ACTIVE.hasConversation && !$("input2").value.trim()) return startActiveTask();
   return sendFollowup();
 }
 async function sendToActive(text){
@@ -1541,7 +1559,11 @@ function autosize(el){
 }
 for (const id of ["input", "input2"]){
   const el = $(id);
-  el.addEventListener("input", () => autosize(el));
+  el.addEventListener("input", () => {
+    autosize(el);
+    if (id === "input") updateHomeSendButton();
+    else updateTaskSendButton();
+  });
   el.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey){
       e.preventDefault();
@@ -1549,7 +1571,7 @@ for (const id of ["input", "input2"]){
     }
   });
 }
-$("sendbtn").onclick = startTask;
+$("sendbtn").onclick = handleHomeSend;
 $("sendbtn2").onclick = handleTaskSend;
 $("newtask").onclick = newTaskAction;
 $("attach1").onclick = $("attach2").onclick = e => { e.stopPropagation(); $("fpick").click(); };
