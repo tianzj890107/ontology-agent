@@ -161,9 +161,10 @@ def build() -> None:
 ## 使用方式
 
 - 运行服务只读取已经生成的 Markdown，不会在服务器实时解析 DOCX/XLSX，也不会修改本目录。
-- `integration.md` 用于智能消歧与整合。
+- `integration.md` 用于智能消歧与整合，包含目标、规则和整合模板。
 - `modeling/base.md` 用于所有智能建模任务；各 `modeling/*.md` 文件在此基础上补充对应输入源的专项规则。
 - `本体元模型.md`、`本体元模型模板.md` 和 `本体建模步骤拆解.md` 是单独可审阅的参考 Markdown；同样内容也已编入 `modeling/base.md`，由 system prompt 静态注入 Agent。
+- `智能消歧与整合模板.md` 是整合任务输出/对齐结构的静态 Markdown 参考，并已编入 `integration.md`，由 integration system prompt 静态注入 Agent。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 
 ## 安全边界
@@ -179,6 +180,8 @@ def build() -> None:
           "# 本体元模型模板：静态 Markdown\n\n" + block("本体元模型模板.xlsx"))
     write(OUTPUT_DIR / "本体建模步骤拆解.md",
           "# 本体建模步骤拆解：静态 Markdown\n\n" + block("本体建模步骤拆解.xlsx"))
+    write(OUTPUT_DIR / "智能消歧与整合模板.md",
+          "# 智能消歧与整合模板：静态 Markdown\n\n" + block("智能消歧与整合模板.xlsx"))
     all_parts = [base] + [block(name) for name in SOURCE_DOCS.values()]
     write(OUTPUT_DIR / "modeling" / "all_sources.md",
           "# 智能建模任务：全部输入源静态私有知识\n\n" + "\n\n".join(all_parts))
@@ -187,7 +190,8 @@ def build() -> None:
               f"# 智能建模任务：{name}静态私有知识\n\n{base}\n\n{block(name)}")
 
     integration = "# 智能消歧与整合：静态私有知识\n\n" + "\n\n".join(
-        block(x) for x in ("智能消歧与整合.docx", "智能消歧与整合规则v0.1.docx"))
+        block(x) for x in ("智能消歧与整合.docx", "智能消歧与整合规则v0.1.docx",
+                           "智能消歧与整合模板.xlsx"))
     write(OUTPUT_DIR / "integration.md", integration)
 
 
