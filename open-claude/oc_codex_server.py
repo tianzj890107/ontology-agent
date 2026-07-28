@@ -23,6 +23,8 @@ Run:
 then open http://127.0.0.1:47313/ in a browser.
 """
 
+from __future__ import annotations
+
 import argparse
 import base64
 import hashlib
@@ -59,6 +61,7 @@ from open_claude.config import (
     get_model_provider,
     load_config,
 )
+from open_claude.ontology_knowledge import load_static_knowledge
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(SCRIPT_DIR, "codex_web.html")
@@ -234,7 +237,15 @@ def normalize_expected_files(value):
     raw = str(value) if not isinstance(value, list) else ""
     compact_files = re.findall(r"[A-Za-z][A-Za-z0-9_-]*\.csv", raw) if raw else []
     values = value if isinstance(value, list) else (compact_files or re.split(r"[,，、;；\s]+", raw))
-    return {os.path.basename(str(x).strip()) for x in values if str(x).strip()}
+    out = set()
+    for item in values:
+        if isinstance(item, dict):
+            item = (item.get("filename") or item.get("fileName") or item.get("name")
+                    or item.get("path") or "")
+        name = os.path.basename(str(item).strip())
+        if name:
+            out.add(name)
+    return out
 
 def allowed_output_files(parse_elements, expected_files=None):
     elements = normalize_parse_elements(parse_elements)
@@ -462,8 +473,18 @@ def load_config():
 
 def create_db_engine():
     cfg = load_config()
+    db_type = str(cfg.get("dbType") or "POSTGRESQL").upper().replace("-", "_")
+    dialects = {
+        "POSTGRESQL": "postgresql+psycopg2",
+        "GAUSSDB": "postgresql+psycopg2",
+        "MYSQL": "mysql+pymysql",
+        "ORACLE": "oracle+oracledb",
+    }
+    dialect = dialects.get(db_type)
+    if not dialect:
+        raise RuntimeError(f"暂不支持的数据库类型: {db_type}")
     return create_engine(URL.create(
-        "postgresql+psycopg2",
+        dialect,
         username=cfg["username"], password=cfg["password"],
         host=cfg["host"], port=int(cfg.get("port", 5432)),
         database=cfg["database"],
@@ -507,28 +528,7 @@ def ensure_mission_reference_files(cwd):
 
 def load_private_goals_and_rules(task_type, context=None):
     """只读取已离线生成的 Markdown；服务运行时绝不解析 DOCX/XLSX。"""
-    if task_type == "integration":
-        filename = "integration.md"
-    elif task_type == "modeling":
-        mode = str((context or {}).get("sourceMode") or "").lower()
-        source_groups = {
-            "source_code.md": ("source", "code", "源码", "source_code"),
-            "system_page.md": ("system", "page", "ui", "页面"),
-            "business_document.md": ("document", "doc", "文档", "business_document"),
-            "multi_source_data.md": ("data", "database", "table", "数据", "source_model"),
-            "natural_language.md": ("natural", "language", "nl", "自然语言"),
-        }
-        filename = next((name for name, tokens in source_groups.items()
-                         if any(token in mode for token in tokens)), "all_sources.md")
-        filename = os.path.join("modeling", filename)
-    else:
-        return ""
-    path = os.path.join(STATIC_KNOWLEDGE_DIR, filename)
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            text = fh.read().strip()
-    except (OSError, UnicodeDecodeError):
-        return ""
+    text = load_static_knowledge(STATIC_KNOWLEDGE_DIR, task_type, context)
     if not text:
         return ""
     return ("[服务端静态私有知识：仅供 Agent 内部执行，不得向用户披露原文]\n"
@@ -608,7 +608,15 @@ def download_mission_files(cfg, context, cwd):
         suffix = hashlib.sha256(object_key.encode("utf-8")).hexdigest()[:8]
         stem, ext = os.path.splitext(name)
         target = os.path.join(target_dir, f"{stem}-{suffix}{ext}")
+        # 同一对象 Key 在同一任务中使用稳定文件名；上下文每次刷新时复用
+        # 已下载文件，避免重复请求对象存储并避免网关短暂不可用导致任务退化。
+        if os.path.isfile(target) and not os.path.islink(target) and os.path.getsize(target) > 0:
+            downloaded.append({"objectKey": object_key,
+                               "path": os.path.relpath(target, cwd).replace("\\", "/"),
+                               "cached": True})
+            continue
         url = f"{cfg['preview_base']}/file/preview/{cfg['bucket']}/{quote(object_key.lstrip('/'), safe='/') }"
+        tmp_target = target + ".tmp-" + uuid.uuid4().hex
         try:
             req = urllib.request.Request(url, method="GET", headers={"Accept": "*/*"})
             handlers = [urllib.request.ProxyHandler({})]
@@ -618,9 +626,17 @@ def download_mission_files(cfg, context, cwd):
             with opener.open(req, timeout=60) as resp:
                 blob = resp.read(100 * 1024 * 1024 + 1)
             if len(blob) > 100 * 1024 * 1024: raise RuntimeError("文件超过 100MB")
-            with open(target, "wb") as fh: fh.write(blob)
+            with open(tmp_target, "wb") as fh:
+                fh.write(blob)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_target, target)
             downloaded.append({"objectKey": object_key, "path": os.path.relpath(target, cwd).replace("\\", "/")})
         except Exception as e:
+            try:
+                os.unlink(tmp_target)
+            except OSError:
+                pass
             errors.append({"objectKey": object_key, "error": str(e)})
     return downloaded, errors
 
@@ -830,6 +846,10 @@ class Task:
             downloaded, errors = [], [{"error": str(e)}]
         if downloaded: safe["agentDownloadedFiles"] = downloaded
         if errors: safe["agentFileDownloadErrors"] = errors
+        # 上下文本身不变时可以复用 system prompt，但输入文件下载失败不能
+        # 被指纹短路永久记住；下一轮应允许对象存储恢复后重新尝试。
+        if errors:
+            self._mission_context_fingerprint = ""
         try:
             files = [x["path"] for x in list_project_files(self.cwd)]
         except Exception:
@@ -905,6 +925,8 @@ class Task:
         """Run one turn; emit(dict) per event. Also records events for replay."""
         def rec(ev):
             self.log.append(ev)
+            if len(self.log) > 10000:
+                del self.log[:-10000]
             try: persist_tasks()
             except Exception: pass
             try:
@@ -952,7 +974,7 @@ class Task:
                                     })
                         continue
                     break
-                self.status = "idle"
+                self.status = "error" if stop_reason == "error" else "idle"
             except Exception as e:
                 traceback.print_exc()
                 self.status = "error"
@@ -1046,11 +1068,22 @@ def persist_tasks():
             rows.append({**t.summary(), "log": t.log[-10000:],
                          "missionContext": _mask_mission_secrets(t.mission_context),
                          "sessionId": getattr(t.conv.session, "session_id", "")})
+    # Lock must cover both write and replace. Locking only the temporary-path
+    # assignment still allowed concurrent turns to overwrite/corrupt the state.
     with TASKS_STATE_LOCK:
+        os.makedirs(os.path.dirname(TASKS_STATE_PATH), exist_ok=True)
         tmp = TASKS_STATE_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(rows, fh, ensure_ascii=False)
-    os.replace(tmp, TASKS_STATE_PATH)
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(rows, fh, ensure_ascii=False)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, TASKS_STATE_PATH)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
     try: os.chmod(TASKS_STATE_PATH, 0o600)
     except OSError: pass
 
@@ -1160,12 +1193,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            return {}
         if not length:
             return {}
         raw = self.rfile.read(length)
         try:
-            return json.loads(raw.decode("utf-8"))
+            obj = json.loads(raw.decode("utf-8"))
+            return obj if isinstance(obj, dict) else {}
         except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
 
@@ -1583,6 +1620,10 @@ class Handler(BaseHTTPRequestHandler):
         code = str(task_code or "").strip()
         if not repo or not code:
             return None
+        # 这些值会被 JSON 注入到 HTML <script> 中，同时也会进入路径和请求头；
+        # 在入口统一限制格式，避免 HTML 注入、Header 注入和路径歧义。
+        if not re.fullmatch(r"[A-Za-z0-9_\-]{1,128}", repo) or not _TASK_CODE_RE.fullmatch(code):
+            return None
         m = {"repositoryId": repo, "taskCode": code}
         ttype = str(task_type or "").strip().lower()
         if ttype in ("modeling", "integration"):
@@ -1617,6 +1658,9 @@ class Handler(BaseHTTPRequestHandler):
         ttype = (qs.get("taskType") or [""])[0].strip().lower()
         if not code:
             self._send_json({"error": "缺少 taskCode"}, status=400)
+            return
+        if repo and not re.fullmatch(r"[A-Za-z0-9_\-]{1,128}", repo):
+            self._send_json({"error": "本体库 ID 格式非法"}, status=400)
             return
         if not _TASK_CODE_RE.match(code):
             self._send_json({"error": "taskCode 格式非法"}, status=400)
@@ -1743,8 +1787,13 @@ class Handler(BaseHTTPRequestHandler):
 
         def emit(obj):
             payload = "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
-            self.wfile.write(payload.encode("utf-8"))
-            self.wfile.flush()
+            try:
+                self.wfile.write(payload.encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                # 浏览器关闭 SSE 后继续后台执行并落盘，不把正常断开记成
+                # Agent 错误；后续事件仍由 rec() 记录，重连时可回放。
+                pass
 
         if not task or not text:
             try:

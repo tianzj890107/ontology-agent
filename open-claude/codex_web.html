@@ -526,7 +526,12 @@ function md(src){
 
 /* ---------------- api helpers ---------------- */
 async function api(path, opts){
-  const r = await fetch(path, opts);
+  let r;
+  try{
+    r = await fetch(path, opts);
+  }catch(e){
+    return {error: `网络连接失败: ${e && e.message ? e.message : "无法连接服务"}`};
+  }
   let body = null;
   try{ body = await r.json(); }catch(e){ body = {error: `接口返回异常(${r.status})`}; }
   if (!r.ok && !body.error) body.error = body.msg || `请求失败(${r.status})`;
@@ -534,6 +539,13 @@ async function api(path, opts){
 }
 async function loadMeta(){
   META = await api("/api/meta");
+  if (!META || META.error){
+    console.warn("加载服务元数据失败:", META && META.error);
+    META = {sandbox:"sandbox/", projects:[], models:[], providers:[], params:{}, model:""};
+    $("sbpath").textContent = META.sandbox;
+    updateProjLabel(); updateModelLabels(); fillParamPanel();
+    return;
+  }
   $("sbpath").textContent = META.sandbox;
   if (!SELECTED_PROJECT && META.projects.length) SELECTED_PROJECT = META.projects[0].name;
   updateProjLabel(); updateModelLabels(); fillParamPanel();
@@ -929,6 +941,8 @@ async function sendToActive(text){
   if (ACTIVE){ ACTIVE.hasConversation = true; updateTaskSendButton(); }
   appendEvent({type:"user", text});
   scrollFeed(true);
+  let serverStatus = null;
+  let requestFailed = false;
   try{
     const r = await fetch(`/api/tasks/${ACTIVE.id}/send`, {
       method:"POST", headers:{"Content-Type":"application/json"},
@@ -953,6 +967,7 @@ async function sendToActive(text){
           if (!line.startsWith("data: ")) continue;
           let ev; try{ ev = JSON.parse(line.slice(6)); }catch(e){ continue; }
           if (ev.type === "done"){
+            serverStatus = ev.status || null;
             closeStream();
             if (ev.cost > 0){
               const n = document.createElement("div");
@@ -967,13 +982,19 @@ async function sendToActive(text){
       }
     }
   }catch(e){
+    requestFailed = true;
     appendEvent({type:"error", error:"连接中断: " + e.message});
   }finally{
     closeStream();
     BUSY = false; setWorking(false);
+    if (serverStatus === "error" || requestFailed) $("headdot").className = "dot error";
     if (ACTIVE){
       const t = TASKS.find(x => x.id === ACTIVE.id);
-      if (t){ t.title = $("headtitle").textContent; t.updated = Date.now()/1000; t.status = "idle"; }
+      if (t){
+        t.title = $("headtitle").textContent;
+        t.updated = Date.now()/1000;
+        t.status = serverStatus === "error" ? "error" : "idle";
+      }
     }
     renderTaskList();
     scrollFeed(false);

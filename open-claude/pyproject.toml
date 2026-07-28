@@ -17,6 +17,8 @@ dependencies = [
 # Needed only for non-Anthropic models (Qwen, GLM, Kimi, DeepSeek, OpenAI),
 # which speak the OpenAI-compatible Chat Completions API.
 openai = ["openai>=1.30.0"]
+# Needed by the ontology modeling database verification helper.
+ontology = ["SQLAlchemy>=2.0", "psycopg2-binary>=2.9", "PyMySQL>=1.1", "oracledb>=2.0"]
 
 [tool.setuptools.packages.find]
 include = ["open_claude*"]

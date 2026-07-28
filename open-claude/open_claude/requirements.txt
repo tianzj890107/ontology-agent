@@ -1,3 +1,8 @@
 anthropic>=0.42.0
 prompt_toolkit>=3.0.0
 rich>=13.0.0
+# Database task helpers generated for ontology modeling.
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
+PyMySQL>=1.1
+oracledb>=2.0
