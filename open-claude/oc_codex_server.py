@@ -186,9 +186,12 @@ _PARSE_ELEMENT_BY_FILE = {
 _PARSE_ELEMENT_ALIASES = {
     "业务对象": "BUSINESS_OBJECT", "逻辑实体": "LOGICAL_ENTITY",
     "业务属性": "BUSINESS_ATTRIBUTE", "实体关系": "ENTITY_RELATION",
-    "业务规则": "RULE", "RULES": "RULE", "API服务": "API", "接口": "API", "动作": "ACTION",
+    "业务规则": "RULE", "BUSINESS_RULE": "RULE", "RULES": "RULE",
+    "API服务": "API", "接口": "API", "动作": "ACTION",
     "活动": "ACTIVITY", "活动流": "ACTIVITY_FLOW", "指标": "METRIC", "维度": "DIMENSION",
-    "业务对象关系": "BUSINESS_OBJECT_RELATION", "术语": "TERM",
+    "业务对象关系": "BUSINESS_OBJECT_RELATION",
+    "BUSINESS_OBJECT_RELATIONSHIP": "BUSINESS_OBJECT_RELATION",
+    "术语": "TERM",
 }
 
 def parse_element_for_file(filename):
@@ -216,6 +219,9 @@ def normalize_parse_elements(value):
     values = value if isinstance(value, list) else (compact_tokens or re.split(r"[,，、;；\s]+", raw))
     out = set()
     for item in values:
+        if isinstance(item, dict):
+            item = (item.get("code") or item.get("value") or item.get("name")
+                    or item.get("label") or "")
         key = str(item).strip()
         if not key:
             continue
