@@ -1697,14 +1697,7 @@ async function loadMissionContext(){
   const j = await api("/api/mission/task?" + q.toString());
   if (j.error) throw new Error(j.error);
   if (j.task && j.task.outputPrefix) MISSION_PREFIX = j.task.outputPrefix;
-  if (j.task){
-    MISSION_CONTEXT = j.task;
-    const side = $("side-missionbody");
-    if (side) side.innerHTML = renderMissionInfo(j.task);
-    const body = $("missionbody");
-    if (body && $("missionmask").classList.contains("open"))
-      body.innerHTML = renderMissionInfo(j.task);
-  }
+  if (j.task) MISSION_CONTEXT = j.task;
   return j.task;
 }
 
@@ -1720,18 +1713,11 @@ async function openMissionInfo(){
   $("missionbody").innerHTML = '<div class="mi-loading">正在获取任务信息…</div>';
   $("missionmask").classList.add("open");
   try{
-    if (MISSION_CONTEXT){
-      $("missionbody").innerHTML = renderMissionInfo(MISSION_CONTEXT);
-    } else {
-      $("missionbody").innerHTML = renderMissionNotStartedInfo();
-    }
+    const task = await loadMissionContext();
+    $("missionbody").innerHTML = renderMissionInfo(task);
   }catch(e){
     $("missionbody").innerHTML = `<div class="mi-err">当前任务信息暂不可用：${esc(e.message)}</div>`;
   }
-}
-
-function renderMissionNotStartedInfo(){
-  return `<div class="mi-err">当前任务尚未开始。为避免读取 execution-context 将任务状态改为“执行中”，完整任务信息会在点击开始任务或发送第一条消息后加载。</div>`;
 }
 
 $("missioninfo").onclick = openMissionInfo;
@@ -1760,7 +1746,12 @@ function initMission(){
   $("side-current-mission").style.display = "block";
   $("side-mission-label").textContent = label;
   $("side-mission-meta").textContent = meta;
-  $("side-missionbody").innerHTML = renderMissionNotStartedInfo();
+  $("side-missionbody").innerHTML = '<div class="mi-loading">正在获取任务信息…</div>';
+  loadMissionContext().then(task => {
+    $("side-missionbody").innerHTML = renderMissionInfo(task);
+  }).catch(e => {
+    $("side-missionbody").innerHTML = `<div class="mi-err">当前任务信息暂不可用：${esc(e.message)}</div>`;
+  });
 }
 
 /* 可拖拽的三栏布局：默认尺寸沿用原页面，双击分隔条恢复默认值。 */
