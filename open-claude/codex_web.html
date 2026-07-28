@@ -55,8 +55,31 @@ input,textarea,select{font-family:inherit;color:inherit}
 .composer{width:100%;max-width:720px;background:var(--panel2);border:1px solid var(--border);border-radius:16px;padding:12px 14px 10px}
 .composer textarea{width:100%;background:none;border:none;outline:none;resize:none;font-size:14px;line-height:1.55;color:var(--text);max-height:220px;min-height:24px}
 .composer textarea::placeholder{color:var(--dimmer)}
-.crow{display:flex;flex-wrap:nowrap;align-items:center;gap:8px;margin-top:10px;overflow-x:auto}
-.cbtn{display:flex;flex:none;align-items:center;gap:6px;border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--dim);background:transparent;white-space:nowrap}
+.crow{display:flex;flex-wrap:nowrap;align-items:center;gap:8px;margin-top:10px;overflow:visible;min-width:0}
+.cbtn{display:flex;flex:none;align-items:center;gap:6px;border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--dim);background:transparent;white-space:nowrap;min-width:0}
+.btn-icon{flex:none}
+.crow[data-compact="1"] .compactable[data-compact-level="1"] .btn-label,
+.crow[data-compact="2"] .compactable[data-compact-level="1"] .btn-label,
+.crow[data-compact="2"] .compactable[data-compact-level="2"] .btn-label,
+.crow[data-compact="3"] .compactable[data-compact-level="1"] .btn-label,
+.crow[data-compact="3"] .compactable[data-compact-level="2"] .btn-label,
+.crow[data-compact="3"] .compactable[data-compact-level="3"] .btn-label,
+.crow[data-compact="4"] .compactable[data-compact-level="1"] .btn-label,
+.crow[data-compact="4"] .compactable[data-compact-level="2"] .btn-label,
+.crow[data-compact="4"] .compactable[data-compact-level="3"] .btn-label,
+.crow[data-compact="4"] .compactable[data-compact-level="4"] .btn-label,
+.crow[data-compact="5"] .compactable[data-compact-level="1"] .btn-label,
+.crow[data-compact="5"] .compactable[data-compact-level="2"] .btn-label,
+.crow[data-compact="5"] .compactable[data-compact-level="3"] .btn-label,
+.crow[data-compact="5"] .compactable[data-compact-level="4"] .btn-label,
+.crow[data-compact="5"] .compactable[data-compact-level="5"] .btn-label,
+.crow[data-compact="6"] .compactable[data-compact-level="1"] .btn-label,
+.crow[data-compact="6"] .compactable[data-compact-level="2"] .btn-label,
+.crow[data-compact="6"] .compactable[data-compact-level="3"] .btn-label,
+.crow[data-compact="6"] .compactable[data-compact-level="4"] .btn-label,
+.crow[data-compact="6"] .compactable[data-compact-level="5"] .btn-label,
+.crow[data-compact="6"] .compactable[data-compact-level="6"] .btn-label{display:none}
+.crow[data-compact]:not([data-compact="0"]) .compactable[data-compact-level] .caret{display:none}
 .cbtn:hover{background:#26262b;color:var(--text)}
 .cbtn .caret{font-size:9px;opacity:.7}
 #sendbtn,#sendbtn2{margin-left:auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none;transition:width .15s,border-radius .15s}
@@ -375,12 +398,12 @@ body{background:var(--bg);color:var(--text)}
       <textarea id="input" rows="2" placeholder="描述一个任务,例如:写一个贪吃蛇网页游戏…"></textarea>
       <div class="chips" id="chips1"></div>
       <div class="crow">
-        <button class="cbtn" id="attach1" title="上传文件到项目">📎 上传文件到项目</button>
-        <button class="cbtn" id="projbtn">📁 <span id="projlabel">选择项目</span> <span class="caret">▼</span></button>
-        <button class="cbtn" id="filesbtn0" title="浏览项目文件">📂 文件</button>
-        <button class="cbtn" id="modelbtn">⚙ <span id="modellabel">模型</span> <span class="caret">▼</span></button>
-        <button class="cbtn" id="parambtn">⚗ LLM模型参数</button>
-        <button class="cbtn auto-btn" id="autook" title="打开后自动跳过“需要确认”,直接允许执行">⚡ 自动确认:关</button>
+        <button class="cbtn compactable" data-compact-level="5" id="attach1" title="上传文件到项目"><span class="btn-icon">📎</span><span class="btn-label">上传文件到项目</span></button>
+        <button class="cbtn compactable" data-compact-level="6" id="projbtn"><span class="btn-icon">📁</span><span id="projlabel" class="btn-label">选择项目</span> <span class="caret">▼</span></button>
+        <button class="cbtn compactable" data-compact-level="1" id="filesbtn0" title="浏览项目文件"><span class="btn-icon">📂</span><span class="btn-label">文件</span></button>
+        <button class="cbtn compactable" data-compact-level="2" id="modelbtn"><span class="btn-icon">⚙</span><span id="modellabel" class="btn-label">模型</span> <span class="caret">▼</span></button>
+        <button class="cbtn compactable" data-compact-level="4" id="parambtn"><span class="btn-icon">⚗</span><span class="btn-label">LLM模型参数</span></button>
+        <button class="cbtn auto-btn compactable" data-compact-level="3" id="autook" title="打开后自动跳过“需要确认”,直接允许执行"><span class="btn-icon">⚡</span><span class="btn-label">自动确认:关</span></button>
         <button id="sendbtn" title="开始任务">↑</button>
       </div>
     </div>
@@ -407,10 +430,10 @@ body{background:var(--bg);color:var(--text)}
         <textarea id="input2" rows="1" placeholder="继续对这个任务下指令…"></textarea>
         <div class="chips" id="chips2"></div>
         <div class="crow">
-          <button class="cbtn" id="attach2" title="上传文件到项目">📎 上传文件到项目</button>
-          <button class="cbtn" id="modelbtn2">⚙ <span id="modellabel2">模型</span> <span class="caret">▼</span></button>
-          <button class="cbtn" id="parambtn2">⚗ LLM模型参数</button>
-          <button class="cbtn auto-btn" id="autook2" title="打开后自动跳过“需要确认”,直接允许执行">⚡ 自动确认:关</button>
+          <button class="cbtn compactable" data-compact-level="4" id="attach2" title="上传文件到项目"><span class="btn-icon">📎</span><span class="btn-label">上传文件到项目</span></button>
+          <button class="cbtn compactable" data-compact-level="1" id="modelbtn2"><span class="btn-icon">⚙</span><span id="modellabel2" class="btn-label">模型</span> <span class="caret">▼</span></button>
+          <button class="cbtn compactable" data-compact-level="3" id="parambtn2"><span class="btn-icon">⚗</span><span class="btn-label">LLM模型参数</span></button>
+          <button class="cbtn auto-btn compactable" data-compact-level="2" id="autook2" title="打开后自动跳过“需要确认”,直接允许执行"><span class="btn-icon">⚡</span><span class="btn-label">自动确认:关</span></button>
           <button id="sendbtn2" title="发送">↑</button>
         </div>
       </div>
@@ -665,7 +688,70 @@ function updateTaskSendButton(){
 function updateTaskLayout(){
   const view = $("taskview");
   if (view) view.classList.toggle("empty-task", !!ACTIVE && !ACTIVE.hasConversation);
+  scheduleComposerLayout();
 }
+
+/* 输入区自适应：不滚动按钮行。空任务优先扩大卡片；空间仍不足时，
+ * 按 data-compact-level 从小按钮到大按钮依次收起文字，发送按钮永远保留。 */
+let composerLayoutFrame = 0;
+function rowContentWidth(row){
+  const items = [...row.children].filter(el => getComputedStyle(el).display !== "none");
+  if (!items.length) return 0;
+  const gap = parseFloat(getComputedStyle(row).gap) || 0;
+  return items.reduce((sum, el) => sum + el.getBoundingClientRect().width, 0) + gap * (items.length - 1);
+}
+function fitComposerRow(row, composer){
+  row.dataset.compact = "0";
+  const pad = (parseFloat(getComputedStyle(composer).paddingLeft) || 0) +
+              (parseFloat(getComputedStyle(composer).paddingRight) || 0);
+  const available = Math.max(0, composer.clientWidth - pad);
+  const levels = [...row.querySelectorAll(".compactable[data-compact-level]")]
+    .map(el => Number(el.dataset.compactLevel)).filter(Number.isFinite);
+  const maxLevel = levels.length ? Math.max(...levels) : 0;
+  let level = 0;
+  while (level < maxLevel && rowContentWidth(row) > available){
+    level += 1;
+    row.dataset.compact = String(level);
+  }
+  return {level, required: rowContentWidth(row), available};
+}
+function syncComposerLayout(){
+  composerLayoutFrame = 0;
+  document.querySelectorAll(".composer").forEach(composer => {
+    const row = composer.querySelector(".crow");
+    if (!row) return;
+    const isHome = !!composer.closest("#home");
+    const isCenteredTask = !!composer.closest("#taskview.empty-task");
+    if (isHome || isCenteredTask){
+      // 720px remains the default. If the full text labels need more room,
+      // expand the centered card up to the usable home width before compacting.
+      composer.style.width = "100%";
+      composer.style.maxWidth = "720px";
+      row.dataset.compact = "0";
+      const pad = (parseFloat(getComputedStyle(composer).paddingLeft) || 0) +
+                  (parseFloat(getComputedStyle(composer).paddingRight) || 0);
+      const host = composer.closest("#home") || composer.closest("#taskview.empty-task");
+      const hostAvailable = Math.max(0, host.clientWidth - (isHome ? 48 : 44));
+      const required = rowContentWidth(row) + pad;
+      if (required > composer.clientWidth && hostAvailable > composer.clientWidth){
+        const target = Math.min(hostAvailable, required);
+        composer.style.width = target + "px";
+        composer.style.maxWidth = hostAvailable + "px";
+      }
+    } else {
+      // A completed conversation uses the normal bottom composer width; only
+      // the centered first-run composer is allowed to expand the card.
+      composer.style.width = "100%";
+      composer.style.maxWidth = "720px";
+    }
+    fitComposerRow(row, composer);
+  });
+}
+function scheduleComposerLayout(){
+  if (composerLayoutFrame) cancelAnimationFrame(composerLayoutFrame);
+  composerLayoutFrame = requestAnimationFrame(syncComposerLayout);
+}
+window.addEventListener("resize", scheduleComposerLayout);
 function missionStartLabel(){
   return MISSION && MISSION.taskType === "integration"
     ? "开始智能消歧与整合" : "开始智能建模";
@@ -1292,6 +1378,7 @@ function previewOpen(){ return $("preview").classList.contains("open"); }
 function setPreviewResizer(){
   const r = $("preview-resizer");
   if (r) r.classList.toggle("open", previewOpen());
+  scheduleComposerLayout();
 }
 function closePreview(){ $("preview").classList.remove("open"); setPreviewResizer(); }
 function extOf(p){ const i = p.lastIndexOf("."); return i < 0 ? "" : p.slice(i + 1).toLowerCase(); }
@@ -1593,8 +1680,11 @@ function renderAutoBtn(){
     const b = $(id);
     if (!b) continue;
     b.classList.toggle("on", AUTO_APPROVE);
-    b.textContent = AUTO_APPROVE ? "⚡ 自动确认:开" : "⚡ 自动确认:关";
+    const label = b.querySelector(".btn-label");
+    if (label) label.textContent = AUTO_APPROVE ? "自动确认:开" : "自动确认:关";
+    else b.textContent = AUTO_APPROVE ? "⚡ 自动确认:开" : "⚡ 自动确认:关";
   }
+  scheduleComposerLayout();
 }
 function toggleAuto(){
   AUTO_APPROVE = !AUTO_APPROVE;
