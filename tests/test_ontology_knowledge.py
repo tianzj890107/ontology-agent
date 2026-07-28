@@ -183,6 +183,9 @@ class StaticKnowledgeContractTests(unittest.TestCase):
 
             class Task:
                 log = [{"type": "user", "text": "offline"}]
+                repository_id = "1"
+                task_code = "RM123456789"
+                updated = 2
                 mission_context = {"taskType": "modeling"}
                 conv = types.SimpleNamespace(session=Session())
 
@@ -191,6 +194,10 @@ class StaticKnowledgeContractTests(unittest.TestCase):
 
             with tempfile.TemporaryDirectory() as tmp:
                 server.TASKS = {"task-1": Task()}
+                self.assertEqual(
+                    server.cached_mission_context("1", "RM123456789"),
+                    {"taskType": "modeling"},
+                )
                 server.TASKS_STATE_PATH = str(Path(tmp) / ".web_tasks.json")
                 with ThreadPoolExecutor(max_workers=4) as pool:
                     list(pool.map(lambda _: server.persist_tasks(), range(12)))

@@ -403,6 +403,32 @@ def fetch_execution_context(task_code, repo_id="", task_type=""):
     return None
 
 
+def cached_mission_context(repository_id: str, task_code: str) -> dict | None:
+    """Read the last trusted execution-context persisted for this mission.
+
+    The Ontology gateway deliberately rejects a second execution-context read
+    after a task has completed successfully.  A completed task must still be
+    inspectable in the web UI, so use the context captured when the task was
+    created/started rather than treating that expected gateway response as a
+    missing task.
+    """
+    repository_id = str(repository_id or "").strip()
+    task_code = str(task_code or "").strip()
+    if not repository_id or not task_code:
+        return None
+    with TASKS_LOCK:
+        matches = [t for t in TASKS.values()
+                   if str(t.repository_id or "") == repository_id
+                   and str(t.task_code or "") == task_code
+                   and isinstance(t.mission_context, dict)
+                   and t.mission_context]
+        if not matches:
+            return None
+        context = max(matches, key=lambda t: t.updated).mission_context
+        return _mask_mission_secrets(json.loads(json.dumps(context, ensure_ascii=False,
+                                                          default=str)))
+
+
 def _http_err_body(e):
     try:
         return e.read().decode("utf-8", "replace")[:400].strip()
@@ -1935,6 +1961,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "kind": kind, "task": payload.get("data")})
                 return
             self._send_json({"ok": True, "kind": kind, "task": payload})
+            return
+
+        # A completed task cannot be queried from the upstream execution-context
+        # endpoint again (the gateway returns “任务已成功，不能再次执行”).  The
+        # context was persisted locally when the task was started, so expose
+        # that trusted snapshot for read-only task information and file browsing.
+        cached = cached_mission_context(repo, code)
+        if cached:
+            cached_kind = normalize_task_type(cached.get("taskType"))
+            if cached_kind not in ("modeling", "integration"):
+                cached_kind = "integration" if code.upper().startswith("MI") else "modeling"
+            self._send_json({"ok": True, "cached": True, "kind": cached_kind,
+                             "task": cached})
             return
         self._send_json({"error": f"获取任务信息失败: {last_err}", "base": base},
                         status=502)

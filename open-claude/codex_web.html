@@ -1265,9 +1265,15 @@ async function uploadPending(project){
 const PV = {mode: "tree", file: null, showSrc: false};
 const IMG_EXT = new Set(["png","jpg","jpeg","gif","webp","svg","ico","bmp"]);
 
+function missionProjectName(){
+  return MISSION ? `mission-${MISSION.repositoryId}-${MISSION.taskCode}` : null;
+}
 function pvProject(){
   if (ACTIVE) return ACTIVE.project;
-  return MISSION ? null : SELECTED_PROJECT;
+  // Even before the persisted conversation is restored, the mission has one
+  // deterministic project.  This lets the task page show existing files
+  // immediately instead of requiring a new conversation or an upload.
+  return MISSION ? missionProjectName() : SELECTED_PROJECT;
 }
 function previewOpen(){ return $("preview").classList.contains("open"); }
 function setPreviewResizer(){
