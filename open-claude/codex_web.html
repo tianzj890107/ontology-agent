@@ -59,7 +59,8 @@ input,textarea,select{font-family:inherit;color:inherit}
 .cbtn{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--dim);background:transparent}
 .cbtn:hover{background:#26262b;color:var(--text)}
 .cbtn .caret{font-size:9px;opacity:.7}
-#sendbtn,#sendbtn2{margin-left:auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
+#sendbtn,#sendbtn2{margin-left:auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none;transition:width .15s,border-radius .15s}
+#sendbtn2.start-mode{width:auto;min-width:92px;padding:0 14px;border-radius:17px;font-size:13px;font-weight:600}
 #sendbtn:disabled,#sendbtn2:disabled{opacity:.3;cursor:default}
 
 /* dropdown popovers */
@@ -610,6 +611,9 @@ async function openTask(id){
   toolCards = {}; approvalCards = {};
   streamEl = null;
   for (const ev of (t.log || [])) appendEvent(ev, col);
+  ACTIVE.hasConversation = (t.log || []).some(ev =>
+    ev && (ev.type === "user" || ev.type === "assistant" || ev.type === "text" || ev.type === "tool_use"));
+  updateTaskSendButton();
   renderTaskList();
   scrollFeed(true);
   if (previewOpen()) showTree();   // panel follows the task's project
@@ -619,6 +623,14 @@ function setWorking(on){
   $("headspin").classList.toggle("on", on);
   $("headdot").className = "dot" + (on ? " working" : "");
   $("sendbtn2").disabled = on;
+}
+function updateTaskSendButton(){
+  const b = $("sendbtn2");
+  if (!b) return;
+  const empty = !!ACTIVE && !ACTIVE.hasConversation;
+  b.classList.toggle("start-mode", empty);
+  b.textContent = empty ? "开始任务" : "↑";
+  b.title = empty ? "直接开始当前任务" : "发送";
 }
 function scrollFeed(force){
   const f = $("feed");
@@ -890,11 +902,31 @@ async function sendFollowup(){
   }
   await sendToActive(msg);
 }
+function autoStartMessage(){
+  const p = MISSION_CONTEXT && String(MISSION_CONTEXT.prompt || "").trim();
+  return p
+    ? `请直接开始执行当前任务，不需要等待我补充提示词。严格按照当前 execution-context、系统规则和任务提示词完成全部工作。\n\n当前任务提示词：\n${p}`
+    : "请直接开始执行当前任务，不需要等待我补充提示词。严格按照当前 execution-context 和系统规则完成全部工作。";
+}
+async function startActiveTask(){
+  if (!ACTIVE || BUSY) return;
+  if (MISSION){
+    try{ await ensureMissionContext(); }catch(e){ /* sendToActive仍会保留当前任务上下文 */ }
+  }
+  ACTIVE.hasConversation = true;
+  updateTaskSendButton();
+  await sendToActive(autoStartMessage());
+}
+async function handleTaskSend(){
+  if (ACTIVE && !ACTIVE.hasConversation) return startActiveTask();
+  return sendFollowup();
+}
 async function sendToActive(text){
   if (MISSION){
     try{ await ensureMissionContext(); }catch(e){ /* 对话仍可继续,系统会保留当前 ID */ }
   }
   BUSY = true; setWorking(true);
+  if (ACTIVE){ ACTIVE.hasConversation = true; updateTaskSendButton(); }
   appendEvent({type:"user", text});
   scrollFeed(true);
   try{
@@ -1466,12 +1498,12 @@ for (const id of ["input", "input2"]){
   el.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey){
       e.preventDefault();
-      id === "input" ? startTask() : sendFollowup();
+      id === "input" ? startTask() : handleTaskSend();
     }
   });
 }
 $("sendbtn").onclick = startTask;
-$("sendbtn2").onclick = sendFollowup;
+$("sendbtn2").onclick = handleTaskSend;
 $("newtask").onclick = showHome;
 $("attach1").onclick = $("attach2").onclick = e => { e.stopPropagation(); $("fpick").click(); };
 $("projbtn").onclick = e => { e.stopPropagation(); closePops(); openProjPop(); };
