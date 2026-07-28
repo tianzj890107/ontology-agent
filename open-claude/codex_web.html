@@ -1230,6 +1230,7 @@ async function uploadPending(project){
       if (MISSION){
         payload.repositoryId = MISSION.repositoryId;
         payload.taskCode = MISSION.taskCode;
+        if (ACTIVE && ACTIVE.id) payload.taskId = ACTIVE.id;
         if (MISSION.taskType) payload.taskType = MISSION.taskType;
       }
       const j = await api("/api/upload", {method:"POST", headers:{"Content-Type":"application/json"},
@@ -1264,7 +1265,8 @@ function fileURL(proj, rel){
          String(rel).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
   if (MISSION){
     url += "?" + new URLSearchParams({repositoryId: MISSION.repositoryId,
-      taskCode: MISSION.taskCode, taskType: MISSION.taskType || ""});
+      taskCode: MISSION.taskCode, taskType: MISSION.taskType || "",
+      taskId: ACTIVE && ACTIVE.id || ""});
   }
   return url;
 }
@@ -1273,7 +1275,8 @@ function filesAPIPath(proj){
   if (typeof MISSION !== "undefined" && MISSION && MISSION.taskCode)
     url += "&repositoryId=" + encodeURIComponent(MISSION.repositoryId)
       + "&taskCode=" + encodeURIComponent(MISSION.taskCode)
-      + "&taskType=" + encodeURIComponent(MISSION.taskType || "");
+      + "&taskType=" + encodeURIComponent(MISSION.taskType || "")
+      + "&taskId=" + encodeURIComponent(ACTIVE && ACTIVE.id || "");
   return url;
 }
 function missionExpectedFiles(){
@@ -1429,6 +1432,7 @@ async function uploadSelectedToMinio(){
       taskCode: MISSION.taskCode, repositoryId: MISSION.repositoryId,
       parseElements: MISSION_CONTEXT && MISSION_CONTEXT.parseElements || [],
       expectedFiles: MISSION_CONTEXT && MISSION_CONTEXT.expectedFiles || []};
+    if (ACTIVE && ACTIVE.id) body.taskId = ACTIVE.id;
     if (MISSION.taskType) body.taskType = MISSION.taskType;
     const j = await api("/api/minio/upload", {method:"POST", body: JSON.stringify(body)});
     if (j.error){ alert("上传失败:" + j.error); return; }
@@ -1458,7 +1462,8 @@ function downloadFiles(proj, rels){
   if (typeof MISSION !== "undefined" && MISSION && MISSION.taskCode)
     url += "&repositoryId=" + encodeURIComponent(MISSION.repositoryId)
       + "&taskCode=" + encodeURIComponent(MISSION.taskCode)
-      + "&taskType=" + encodeURIComponent(MISSION.taskType || "");
+      + "&taskType=" + encodeURIComponent(MISSION.taskType || "")
+      + "&taskId=" + encodeURIComponent(ACTIVE && ACTIVE.id || "");
   for (const r of rels) url += "&path=" + encodeURIComponent(r);
   const a = document.createElement("a");
   a.href = url; a.download = "";

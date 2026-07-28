@@ -1146,7 +1146,8 @@ def mission_project_name(repository_id: str, task_code: str) -> str:
     return re.sub(r"[^\w\-.一-鿿]", "_", raw)[:64]
 
 
-def mission_bound_project(repository_id: str, task_code: str) -> str | None:
+def mission_bound_project(repository_id: str, task_code: str,
+                          task_id: str = "") -> str | None:
     """Return the only project allowed for an ontology mission.
 
     New sessions use the deterministic mission-* directory.  Persisted sessions
@@ -1161,6 +1162,12 @@ def mission_bound_project(repository_id: str, task_code: str) -> str | None:
         return None
     matches = []
     with TASKS_LOCK:
+        if task_id:
+            task = TASKS.get(task_id)
+            if (task and task.repository_id == repository_id
+                    and task.task_code == task_code and task.project
+                    and project_path(task.project)):
+                return task.project
         for task in TASKS.values():
             if task.repository_id == repository_id and task.task_code == task_code:
                 project = str(task.project or "")
@@ -1172,14 +1179,14 @@ def mission_bound_project(repository_id: str, task_code: str) -> str | None:
 
 
 def bind_mission_project(project: str, repository_id: str = "",
-                         task_code: str = "") -> str | None:
+                         task_code: str = "", task_id: str = "") -> str | None:
     """Bind a request to its mission project; ordinary requests are unchanged."""
     project = str(project or "").strip()
     repository_id = str(repository_id or "").strip()
     task_code = str(task_code or "").strip()
     if not (repository_id and task_code):
         return project
-    bound = mission_bound_project(repository_id, task_code)
+    bound = mission_bound_project(repository_id, task_code, task_id)
     if not bound or (project and project != bound):
         return None
     return bound
@@ -1297,7 +1304,8 @@ class Handler(BaseHTTPRequestHandler):
             requested_project = (qs.get("project") or [""])[0]
             repository_id = (qs.get("repositoryId") or [""])[0]
             task_code = (qs.get("taskCode") or [""])[0].strip()
-            project = bind_mission_project(requested_project, repository_id, task_code)
+            task_id = (qs.get("taskId") or [""])[0].strip()
+            project = bind_mission_project(requested_project, repository_id, task_code, task_id)
             if repository_id and task_code and not project:
                 self._send_json({"error": "当前任务只能访问自己的项目目录"}, status=403)
                 return
@@ -1438,7 +1446,8 @@ class Handler(BaseHTTPRequestHandler):
         requested_project = m.group(1) if m else ""
         repository_id = (qs.get("repositoryId") or [""])[0]
         task_code = (qs.get("taskCode") or [""])[0].strip()
-        project = bind_mission_project(requested_project, repository_id, task_code)
+        task_id = (qs.get("taskId") or [""])[0].strip()
+        project = bind_mission_project(requested_project, repository_id, task_code, task_id)
         if repository_id and task_code and not project:
             self.send_error(403)
             return
@@ -1472,7 +1481,8 @@ class Handler(BaseHTTPRequestHandler):
         requested_project = (qs.get("project") or [""])[0]
         repository_id = (qs.get("repositoryId") or [""])[0]
         task_code = (qs.get("taskCode") or [""])[0].strip()
-        proj = bind_mission_project(requested_project, repository_id, task_code)
+        task_id = (qs.get("taskId") or [""])[0].strip()
+        proj = bind_mission_project(requested_project, repository_id, task_code, task_id)
         if repository_id and task_code and not proj:
             self.send_error(403)
             return
@@ -1539,8 +1549,9 @@ class Handler(BaseHTTPRequestHandler):
         paths = data.get("paths") or []
         task_code = str(data.get("taskCode") or "").strip()
         repo_id = str(data.get("repositoryId") or "").strip()
+        task_id = str(data.get("taskId") or "").strip()
         ttype = str(data.get("taskType") or "").strip().lower()
-        proj = bind_mission_project(requested_project, repo_id, task_code)
+        proj = bind_mission_project(requested_project, repo_id, task_code, task_id)
         if repo_id and task_code and not proj:
             self._send_json({"error": "当前任务只能操作自己的项目目录"}, status=403)
             return
@@ -1666,7 +1677,8 @@ class Handler(BaseHTTPRequestHandler):
         requested_project = str(data.get("project") or "")
         repository_id = str(data.get("repositoryId") or "")
         task_code = str(data.get("taskCode") or "")
-        project = bind_mission_project(requested_project, repository_id, task_code)
+        task_id = str(data.get("taskId") or "")
+        project = bind_mission_project(requested_project, repository_id, task_code, task_id)
         if repository_id and task_code and not project:
             self._send_json({"error": "当前任务只能上传到自己的项目目录"}, status=403)
             return
