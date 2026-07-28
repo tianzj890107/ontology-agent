@@ -673,6 +673,12 @@ def execute_tool(name: str, params: dict[str, Any], cwd: str) -> str:
         )
     root = _sandbox_root()
     if root:
+        # The web server sets OC_SANDBOX_ROOT to the global sandbox directory,
+        # but each Conversation has its own project cwd. Narrow the effective
+        # root to that cwd so one task cannot browse a sibling project.
+        session_root = os.path.normcase(os.path.realpath(cwd))
+        if _in_sandbox(session_root, root):
+            root = session_root
         violation = _sandbox_violation(name, params, cwd, root)
         if violation:
             return violation

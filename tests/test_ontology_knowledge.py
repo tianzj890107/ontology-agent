@@ -84,6 +84,13 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                              "RM123456789")
             self.assertIsNone(handler._mission_from("1", "</script><script>alert(1)</script>", "modeling"))
             self.assertEqual(
+                server.bind_mission_project("mission-1-RM123456789", "1", "RM123456789"),
+                "mission-1-RM123456789",
+            )
+            self.assertIsNone(
+                server.bind_mission_project("another-project", "1", "RM123456789")
+            )
+            self.assertEqual(
                 server.normalize_expected_files([
                     {"filename": "logical_entities.csv"},
                     {"path": "x/entity_relations.csv"},

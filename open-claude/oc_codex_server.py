@@ -1146,6 +1146,45 @@ def mission_project_name(repository_id: str, task_code: str) -> str:
     return re.sub(r"[^\w\-.一-鿿]", "_", raw)[:64]
 
 
+def mission_bound_project(repository_id: str, task_code: str) -> str | None:
+    """Return the only project allowed for an ontology mission.
+
+    New sessions use the deterministic mission-* directory.  Persisted sessions
+    are preferred so older tasks created with a compatible project name keep
+    working after a restart.
+    """
+    repository_id = str(repository_id or "").strip()
+    task_code = str(task_code or "").strip()
+    if (not repository_id or not task_code
+            or not re.fullmatch(r"[A-Za-z0-9_\-]{1,128}", repository_id)
+            or not _TASK_CODE_RE.fullmatch(task_code)):
+        return None
+    matches = []
+    with TASKS_LOCK:
+        for task in TASKS.values():
+            if task.repository_id == repository_id and task.task_code == task_code:
+                project = str(task.project or "")
+                if project and project_path(project):
+                    matches.append(task)
+    if matches:
+        return max(matches, key=lambda t: t.updated).project
+    return mission_project_name(repository_id, task_code)
+
+
+def bind_mission_project(project: str, repository_id: str = "",
+                         task_code: str = "") -> str | None:
+    """Bind a request to its mission project; ordinary requests are unchanged."""
+    project = str(project or "").strip()
+    repository_id = str(repository_id or "").strip()
+    task_code = str(task_code or "").strip()
+    if not (repository_id and task_code):
+        return project
+    bound = mission_bound_project(repository_id, task_code)
+    if not bound or (project and project != bound):
+        return None
+    return bound
+
+
 def create_task(project: str, repository_id: str = "", task_code: str = "",
                 task_type: str = "") -> Task | None:
     if not project and repository_id and task_code:
@@ -1255,8 +1294,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/mission/task":
             self._handle_mission_task(qs)
         elif path == "/api/files":
-            base = project_path((qs.get("project") or [""])[0])
+            requested_project = (qs.get("project") or [""])[0]
+            repository_id = (qs.get("repositoryId") or [""])[0]
             task_code = (qs.get("taskCode") or [""])[0].strip()
+            project = bind_mission_project(requested_project, repository_id, task_code)
+            if repository_id and task_code and not project:
+                self._send_json({"error": "当前任务只能访问自己的项目目录"}, status=403)
+                return
+            base = project_path(project)
             if not base:
                 self._send_json({"error": "项目不存在"}, status=404)
             else:
@@ -1264,7 +1309,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/download":
             self._handle_download(qs)
         elif path.startswith("/p/"):
-            self._serve_project_file(path)
+            self._serve_project_file(path, qs)
         elif path == "/api/meta":
             self._send_json({
                 "model": get_model(),
@@ -1379,17 +1424,25 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_error(404)
 
-    def _serve_project_file(self, path: str):
+    def _serve_project_file(self, path: str, qs=None):
         """GET /p/<project>/<path> — raw file from a sandbox project.
 
         Served under a real URL path (not a query param) so that relative
         resources inside a previewed HTML page resolve correctly in the iframe.
         """
+        qs = qs or {}
         m = re.match(r"^/p/([^/]+)/(.+)$", path)
         if m and not is_web_visible_file(m.group(2)):
             self.send_error(404)
             return
-        f = resolve_project_file(m.group(1), m.group(2)) if m else None
+        requested_project = m.group(1) if m else ""
+        repository_id = (qs.get("repositoryId") or [""])[0]
+        task_code = (qs.get("taskCode") or [""])[0].strip()
+        project = bind_mission_project(requested_project, repository_id, task_code)
+        if repository_id and task_code and not project:
+            self.send_error(403)
+            return
+        f = resolve_project_file(project, m.group(2)) if m else None
         if not f or not os.path.isfile(f):
             self.send_error(404)
             return
@@ -1416,8 +1469,13 @@ class Handler(BaseHTTPRequestHandler):
         单个文件按原文件名附件下载;多个文件打包成 <project>.zip 下载。
         每个路径都经 resolve_project_file 校验,确保限定在项目目录内。
         """
-        proj = (qs.get("project") or [""])[0]
+        requested_project = (qs.get("project") or [""])[0]
+        repository_id = (qs.get("repositoryId") or [""])[0]
         task_code = (qs.get("taskCode") or [""])[0].strip()
+        proj = bind_mission_project(requested_project, repository_id, task_code)
+        if repository_id and task_code and not proj:
+            self.send_error(403)
+            return
         if not project_path(proj):
             self.send_error(404)
             return
@@ -1476,12 +1534,16 @@ class Handler(BaseHTTPRequestHandler):
         prefix 即任务执行上下文里的 outputPrefix,例如
         ontology/1/modeling-tasks/RM.../agent-output。走 FileServer 的 /sdk/object/put。"""
         data = self._read_body()
-        proj = str(data.get("project") or "")
+        requested_project = str(data.get("project") or "")
         prefix = str(data.get("prefix") or "").strip().strip("/")
         paths = data.get("paths") or []
         task_code = str(data.get("taskCode") or "").strip()
         repo_id = str(data.get("repositoryId") or "").strip()
         ttype = str(data.get("taskType") or "").strip().lower()
+        proj = bind_mission_project(requested_project, repo_id, task_code)
+        if repo_id and task_code and not proj:
+            self._send_json({"error": "当前任务只能操作自己的项目目录"}, status=403)
+            return
         # execution-context 是唯一许可来源；浏览器字段只作缓存，上传前强制刷新。
         context = fetch_execution_context(task_code, repo_id, ttype) if task_code else None
         modeling_upload = ttype == "modeling" or (not ttype and not task_code.upper().startswith("MI"))
@@ -1599,9 +1661,16 @@ class Handler(BaseHTTPRequestHandler):
         return out
 
     def _handle_upload(self):
-        """POST /api/upload {project, name, data(base64)} — save into project root."""
+        """POST /api/upload {project, repositoryId, taskCode, name, data(base64)}."""
         data = self._read_body()
-        base = project_path(data.get("project", ""))
+        requested_project = str(data.get("project") or "")
+        repository_id = str(data.get("repositoryId") or "")
+        task_code = str(data.get("taskCode") or "")
+        project = bind_mission_project(requested_project, repository_id, task_code)
+        if repository_id and task_code and not project:
+            self._send_json({"error": "当前任务只能上传到自己的项目目录"}, status=403)
+            return
+        base = project_path(project)
         name = os.path.basename(str(data.get("name") or "")).strip()
         if not base:
             self._send_json({"error": "项目不存在"}, status=400)

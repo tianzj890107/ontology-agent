@@ -1066,6 +1066,7 @@ document.addEventListener("click", e => {
 
 function updateProjLabel(){ $("projlabel").textContent = SELECTED_PROJECT || "选择项目"; }
 function openProjPop(){
+  if (MISSION) return;
   const pop = $("pop-proj");
   let h = '<div class="head">沙箱内的项目</div>';
   for (const p of (META.projects || [])){
@@ -1225,8 +1226,14 @@ async function uploadPending(project){
     if (f.size > 20 * 1024 * 1024){ alert(`${f.name} 超过 20MB,已跳过`); continue; }
     try{
       const data = await readB64(f);
+      const payload = {project, name: f.name, data};
+      if (MISSION){
+        payload.repositoryId = MISSION.repositoryId;
+        payload.taskCode = MISSION.taskCode;
+        if (MISSION.taskType) payload.taskType = MISSION.taskType;
+      }
       const j = await api("/api/upload", {method:"POST", headers:{"Content-Type":"application/json"},
-                                          body: JSON.stringify({project, name: f.name, data})});
+                                          body: JSON.stringify(payload)});
       if (j.ok) names.push(j.name); else alert(f.name + " 上传失败: " + (j.error || ""));
     }catch(e){ alert(f.name + " 上传失败: " + e.message); }
   }
@@ -1238,7 +1245,10 @@ async function uploadPending(project){
 const PV = {mode: "tree", file: null, showSrc: false};
 const IMG_EXT = new Set(["png","jpg","jpeg","gif","webp","svg","ico","bmp"]);
 
-function pvProject(){ return ACTIVE ? ACTIVE.project : SELECTED_PROJECT; }
+function pvProject(){
+  if (ACTIVE) return ACTIVE.project;
+  return MISSION ? null : SELECTED_PROJECT;
+}
 function previewOpen(){ return $("preview").classList.contains("open"); }
 function setPreviewResizer(){
   const r = $("preview-resizer");
@@ -1250,13 +1260,20 @@ function fmtSize(n){
   return n < 1024 ? n + " B" : n < 1048576 ? (n/1024).toFixed(1) + " KB" : (n/1048576).toFixed(1) + " MB";
 }
 function fileURL(proj, rel){
-  return "/p/" + encodeURIComponent(proj) + "/" +
+  let url = "/p/" + encodeURIComponent(proj) + "/" +
          String(rel).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
+  if (MISSION){
+    url += "?" + new URLSearchParams({repositoryId: MISSION.repositoryId,
+      taskCode: MISSION.taskCode, taskType: MISSION.taskType || ""});
+  }
+  return url;
 }
 function filesAPIPath(proj){
   let url = "/api/files?project=" + encodeURIComponent(proj);
   if (typeof MISSION !== "undefined" && MISSION && MISSION.taskCode)
-    url += "&taskCode=" + encodeURIComponent(MISSION.taskCode);
+    url += "&repositoryId=" + encodeURIComponent(MISSION.repositoryId)
+      + "&taskCode=" + encodeURIComponent(MISSION.taskCode)
+      + "&taskType=" + encodeURIComponent(MISSION.taskType || "");
   return url;
 }
 function missionExpectedFiles(){
@@ -1439,7 +1456,9 @@ function downloadSelected(){
 function downloadFiles(proj, rels){
   let url = "/api/download?project=" + encodeURIComponent(proj);
   if (typeof MISSION !== "undefined" && MISSION && MISSION.taskCode)
-    url += "&taskCode=" + encodeURIComponent(MISSION.taskCode);
+    url += "&repositoryId=" + encodeURIComponent(MISSION.repositoryId)
+      + "&taskCode=" + encodeURIComponent(MISSION.taskCode)
+      + "&taskType=" + encodeURIComponent(MISSION.taskType || "");
   for (const r of rels) url += "&path=" + encodeURIComponent(r);
   const a = document.createElement("a");
   a.href = url; a.download = "";
@@ -1517,7 +1536,7 @@ $("pvrefresh").onclick = () => { PV.mode === "tree" ? showTree() : openFile(PV.f
 $("pvsrc").onclick = () => { PV.showSrc = !PV.showSrc; openFile(PV.file); };
 function toggleFiles(){
   if (previewOpen() && PV.mode === "tree") closePreview();
-  else if (!pvProject()) openProjPop();   // 还没选项目 -> 先让用户选
+  else if (!pvProject()) return;          // 任务模式必须先创建/恢复当前任务
   else showTree();
 }
 $("filesbtn").onclick = toggleFiles;
@@ -1689,6 +1708,11 @@ const MISSION_MODE_LABEL =
 
 function initMission(){
   if (!MISSION) return;
+  // 本体任务的项目由 repositoryId + taskCode 唯一决定，不允许在任务页切换
+  // 到全局沙箱中的其他项目；普通 Agent 页面仍保留项目选择器。
+  SELECTED_PROJECT = null;
+  $("projbtn").style.display = "none";
+  $("filesbtn0").style.display = "none";
   const label = `📋 ${MISSION_MODE_LABEL} · 当前任务信息`;
   const meta = `taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
   // 左侧当前任务卡默认展开;首页原有任务栏保留兼容但不再重复显示。
