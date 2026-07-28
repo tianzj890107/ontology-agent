@@ -327,8 +327,10 @@ body{background:var(--bg);color:var(--text)}
 #preview-resizer.open{display:block}
 /* 任务上下文中的数组标签（解析要素/校验类型/期望文件/条目等）覆盖原深色规则 */
 .mi-grid .v,.mi-grid .v .tag,.mi-sec .tag{color:#334155 !important}
-.mi-grid .v .tag,.mi-sec .tag{display:inline-block;background:#fff !important;border:1px solid #bfdbfe !important;border-radius:6px;padding:1px 8px;margin:0 4px 4px 0;font-size:12px}
-.mi-sec{background:transparent !important}
+.mi-grid,.mi-grid .v,.mi-sec{min-width:0}
+.mi-grid .v{overflow-wrap:anywhere;word-break:break-word}
+.mi-grid .v .tag,.mi-sec .tag{display:inline-block;max-width:100%;box-sizing:border-box;background:#fff !important;border:1px solid #bfdbfe !important;border-radius:6px;padding:1px 8px;margin:0 4px 4px 0;font-size:12px;white-space:normal;overflow-wrap:anywhere;word-break:break-word;vertical-align:top}
+.mi-sec{background:transparent !important;min-width:0}
 .mi-err{color:#94a3b8 !important;font-size:11px !important;line-height:1.5;padding:8px 0;white-space:normal;overflow-wrap:anywhere;background:transparent !important}
 </style>
 </head>
