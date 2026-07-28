@@ -52,6 +52,7 @@
 - 解析要素改为以任务 `execution-context` 为唯一许可来源：system prompt 明确禁止生成未勾选类型；MinIO 上传前重新读取并过滤标准结果文件，回调前再次按许可范围过滤，未选择 `RULE` 时不会上传或回写 `business_rules.csv`。
 - 任务模式右侧文件树请求现在携带当前 `taskCode`，服务端会隐藏同一项目中其他 RM/MI 任务目录的文件；Agent 的最终回复仍必须以实际存在文件为准，不能把未生成文件写成“已成功生成”。
 - 文件树会对照当前任务 `expectedFiles` 提示实际缺失的输出文件，不会用任务声明或 Agent 文本虚构文件。
+- 兼容网关将解析要素/期望文件拼接成无分隔符字符串的情况；输出回写改为完整清单校验，缺少任一期望文件时不再部分回写成功。
 - 同一上下文不重复下载；同名远程文件按对象 Key 区分；`agent-output` 结果文件不会被当作输入文件下载。
 - 主要接口：`GET /api/mission/task`、`POST /api/tasks/{id}/send`、FileServer `/file/preview/{bucket}/{objectKey}`。
 

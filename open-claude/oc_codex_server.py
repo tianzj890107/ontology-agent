@@ -179,7 +179,12 @@ def normalize_parse_elements(value):
     """将 execution-context 的解析要素统一为回调枚举名。"""
     if value is None:
         return set()
-    values = value if isinstance(value, list) else re.split(r"[,，、;；\s]+", str(value))
+    raw = str(value) if not isinstance(value, list) else ""
+    # 某些网关/页面会把数组序列化成 BUSINESS_OBJECTLOGICAL_ENTITY…，无分隔符也要正确拆分。
+    compact_tokens = re.findall(
+        r"BUSINESS_OBJECT|LOGICAL_ENTITY|BUSINESS_ATTRIBUTE|ENTITY_RELATION|RULE|业务对象|逻辑实体|业务属性|实体关系|业务规则",
+        raw, flags=re.IGNORECASE) if raw else []
+    values = value if isinstance(value, list) else (compact_tokens or re.split(r"[,，、;；\s]+", raw))
     out = set()
     for item in values:
         key = str(item).strip()
@@ -192,7 +197,9 @@ def normalize_parse_elements(value):
 def normalize_expected_files(value):
     if value is None:
         return set()
-    values = value if isinstance(value, list) else re.split(r"[,，、;；\s]+", str(value))
+    raw = str(value) if not isinstance(value, list) else ""
+    compact_files = re.findall(r"[A-Za-z][A-Za-z0-9_-]*\.csv", raw) if raw else []
+    values = value if isinstance(value, list) else (compact_files or re.split(r"[,，、;；\s]+", raw))
     return {os.path.basename(str(x).strip()) for x in values if str(x).strip()}
 
 def allowed_output_files(parse_elements, expected_files=None):
@@ -486,6 +493,9 @@ def build_mission_output_instructions(context):
         "先确认文件确实存在，再统计 CSV 去掉表头后的实际数据行数，禁止使用预计数量或编造数量。\n\n"
         f"本任务 execution-context 允许的解析要素仅为：{allowed_text}。只能生成、上传和回写这些要素对应的文件；"
         "未选中的解析类型严禁创建或上传（例如未包含 RULE 时绝对不能生成 business_rules.csv），不能根据文件名自行扩大范围。\n\n"
+        f"输出文件清单是强制清单：{', '.join(expected) or '必须先读取 execution-context'}。"
+        "必须逐个创建清单中的每一个文件，逐个检查文件存在、表头正确并统计实际数据行；"
+        "只生成其中一个或少数文件时，任务不得宣称完成，必须继续处理其余文件或明确报告缺失原因。\n\n"
         "所有输出文件已生成并按要求存储至指定路径：\n"
         f"{prefix or '（填写实际 outputPrefix）'}/\n"
         f"{tree or '└── （填写实际生成文件名）'}\n"
@@ -1351,10 +1361,11 @@ class Handler(BaseHTTPRequestHandler):
         # 上传成功后回写报告(callback)。有 taskCode 且至少上传成功一个文件才回调。
         if ok_n and task_code:
             resp["callback"] = self._callback_after_upload(
-                cfg, task_code, repo_id, ttype, results, allowed_files)
+                cfg, task_code, repo_id, ttype, results, allowed_files, expected_files)
         self._send_json(resp)
 
-    def _callback_after_upload(self, cfg, task_code, repo_id, ttype, results, allowed_files=None):
+    def _callback_after_upload(self, cfg, task_code, repo_id, ttype, results,
+                               allowed_files=None, expected_files=None):
         """按上传结果构造 COMPLETED 回调:智能建模带 files[](按文件名映射 parseElement),
         消歧整合按文档 §5.2 不带 files。"""
         if ttype in ("modeling", "integration"):
@@ -1389,6 +1400,12 @@ class Handler(BaseHTTPRequestHandler):
             if not files:
                 return {"ok": False, "skipped": True,
                         "error": "没有可回写的解析要素文件(文件名需为 business_objects.csv 等)"}
+            expected = normalize_expected_files(expected_files)
+            actual = {f["filename"] for f in files}
+            missing = sorted(expected - actual) if expected else []
+            if missing:
+                return {"ok": False, "skipped": True,
+                        "error": "结果文件未完整生成，缺少: " + ", ".join(missing)}
             payload["files"] = files
         else:
             payload["files"] = None
