@@ -490,6 +490,35 @@ def _read_private_docx(path):
             return ""
 
 
+def _read_private_xlsx(path):
+    """读取私有建模规范 Excel 的文本单元格，不将原表暴露给前端。"""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+            shared = []
+            if "xl/sharedStrings.xml" in zf.namelist():
+                root = ElementTree.fromstring(zf.read("xl/sharedStrings.xml"))
+                shared = ["".join(t.text or "" for t in si.findall(".//m:t", ns))
+                          for si in root.findall("m:si", ns)]
+            rows = []
+            for sheet in sorted(x for x in zf.namelist()
+                                if x.startswith("xl/worksheets/sheet") and x.endswith(".xml")):
+                root = ElementTree.fromstring(zf.read(sheet))
+                for row in root.findall(".//m:row", ns):
+                    vals = []
+                    for cell in row.findall("m:c", ns):
+                        v = cell.find("m:v", ns)
+                        val = "" if v is None else (v.text or "")
+                        if cell.attrib.get("t") == "s" and val:
+                            val = shared[int(val)]
+                        vals.append(val.replace("\n", " ").strip())
+                    if any(vals):
+                        rows.append(" | ".join(vals))
+            return "\n".join(rows)
+    except Exception:
+        return ""
+
+
 def load_private_goals_and_rules(task_type):
     """从服务端私有 rules_goals 加载目标/规则，仅注入 model system prompt，不返回前端。"""
     directory = PRIVATE_RULES_DIR if os.path.isdir(PRIVATE_RULES_DIR) else os.path.dirname(SCRIPT_DIR)
@@ -498,12 +527,13 @@ def load_private_goals_and_rules(task_type):
     elif task_type == "modeling":
         names = sorted(
             name for name in os.listdir(directory)
-            if name.endswith(".docx") and name not in {"智能消歧与整合.docx", "智能消歧与整合规则v0.1.docx"})
+            if name.endswith((".docx", ".xlsx")) and name not in {"智能消歧与整合.docx", "智能消歧与整合规则v0.1.docx"})
     else:
         return ""
     blocks = []
     for name in names:
-        text = _read_private_docx(os.path.join(directory, name))
+        path = os.path.join(directory, name)
+        text = _read_private_xlsx(path) if name.endswith(".xlsx") else _read_private_docx(path)
         if text:
             blocks.append(f"### 私有规则文档：{name}\n{text}")
     return "\n\n".join(blocks)

@@ -50,6 +50,7 @@
 - 每个本体任务会自动准备 `mission-input/本体元模型.xlsx` 和 `mission-input/本体元模型模板.xlsx`，并将路径写入 system prompt；Agent 可直接读取，不再要求重复上传。
 - system prompt 增加最终交接格式约束：回复最后必须列出实际 `outputPrefix`、输出文件树和各 CSV 去表头后的真实记录数；文件缺失或读取失败必须明确说明。
 - 解析要素改为以任务 `execution-context` 为唯一许可来源：system prompt 明确禁止生成未勾选类型；MinIO 上传前重新读取并过滤标准结果文件，回调前再次按许可范围过滤，未选择 `RULE` 时不会上传或回写 `business_rules.csv`。
+- modeling 私有规则加载兼容真实 DOCX、UTF-8 文本伪 DOCX 以及 XLSX 建模规范；`数据模型建模规范-20260626.xlsx` 等规则表会在服务端转为规则上下文注入 Agent，不进入 sandbox 或前端文件列表。
 - 任务模式右侧文件树请求现在携带当前 `taskCode`，服务端会隐藏同一项目中其他 RM/MI 任务目录的文件；Agent 的最终回复仍必须以实际存在文件为准，不能把未生成文件写成“已成功生成”。
 - 文件树会对照当前任务 `expectedFiles` 提示实际缺失的输出文件，不会用任务声明或 Agent 文本虚构文件。
 - 兼容网关将解析要素/期望文件拼接成无分隔符字符串的情况；输出回写改为完整清单校验，缺少任一期望文件时不再部分回写成功。
