@@ -11,12 +11,15 @@ import types
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-claude"))
 
-from open_claude.ontology_knowledge import knowledge_filename, load_static_knowledge
+from open_claude.ontology_knowledge import knowledge_filename, load_static_knowledge, normalize_task_type
 
 
 class StaticKnowledgeContractTests(unittest.TestCase):
     def test_task_modes_select_fixed_files(self):
         self.assertEqual(knowledge_filename("integration"), "integration/all_sources.md")
+        self.assertEqual(normalize_task_type("DOCUMENT_MODELING"), "modeling")
+        self.assertEqual(normalize_task_type("DATA_SOURCE_MODELING"), "modeling")
+        self.assertEqual(normalize_task_type("INTEGRATION_TASK"), "integration")
         self.assertEqual(
             knowledge_filename("modeling", {"sourceMode": "DATABASE"}),
             "modeling/multi_source_data.md",
@@ -162,6 +165,9 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             relation_header = "关系编码,源逻辑实体编码,源逻辑实体名称,目标逻辑实体编码,目标逻辑实体名称,关系分类编码,关系分类,关系中文名称,关系英文名称,关系基数,反向关系中文名称,反向关系英文名称,关系描述,源关联属性编码,源关联属性英文名,源关联属性中文名,目标关联属性编码,目标关联属性英文名,目标关联属性中文名\n"
             bad_relation = relation_header + "R1,E1,订单,E2,客户,REL,错误分类,属于,belongs,一对多,,,,,,,,,\n"
             self.assertTrue(server.validate_integration_csv("entity_relations.csv", bad_relation.encode("utf-8")))
+            self.assertTrue(server.validate_modeling_csv(
+                "business_objects.csv", "id,name,description\nBO1,订单,描述\n".encode("utf-8")
+            ))
             empty = types.SimpleNamespace(conv=types.SimpleNamespace(messages=[]), log=[
                 {"type": "model_switch", "from": "a", "to": "b"},
                 {"type": "tool_use", "name": "Read"},

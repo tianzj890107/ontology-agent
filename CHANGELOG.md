@@ -55,6 +55,7 @@
 - 建模专项 Markdown 不再重复复制整份公共建模规范：`modeling/*.md` 只保留对应输入源规则；运行时由静态知识加载器拼接 `modeling/base.md` 与当前 `sourceMode` 专项文件，避免文件看似全部相同且降低 system prompt 重复内容。
 - 补充独立的 `agent_knowledge/modeling/数据模型建模规范-20260626.md`，将数据库建模中的命名、定义、主键、归属、关系和质量规则单独提供给审阅，同时继续编入所有建模任务的 `base.md`。
 - 消歧整合结果增加服务端 CSV 协议校验：逐文件校验 UTF-8 CSV、精确表头、列数、引号/换行解析、关系分类和关系基数字典；`business_rules.csv` 统一为五列（编码、名称、分类、描述、来源内容）。整合只有在全部 `expectedFiles` 和最后的 `ok.csv` 都存在并通过校验后才回写 `COMPLETED`。
+- 修复 Ontology `DOCUMENT_MODELING`、`DATA_SOURCE_MODELING` 等任务类型没有被识别为 modeling 模式的问题；现在会正确注入建模私有规则和建模步骤。建模 CSV 也会拒绝 `id,name,description` 等临时表头。建模 XLSX 不再建议用 locale 相关的 `soffice` 转 CSV，避免中文被替换成 `?`。
 - 全链路加固：对话任务上下文优先由服务端按 taskCode 重新读取，输出文件支持多种建模类型的动态映射，整合上传仅允许 expectedFiles/ok.csv，网页文件树和下载接口隐藏数据库密码及连接 helper。
 - 任务模式右侧文件树请求现在携带当前 `taskCode`，服务端会隐藏同一项目中其他 RM/MI 任务目录的文件；Agent 的最终回复仍必须以实际存在文件为准，不能把未生成文件写成“已成功生成”。
 - 文件树会对照当前任务 `expectedFiles` 提示实际缺失的输出文件，不会用任务声明或 Agent 文本虚构文件。

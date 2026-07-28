@@ -20,9 +20,24 @@ SOURCE_GROUPS = {
 }
 
 
+def normalize_task_type(task_type: str) -> str:
+    """Map Ontology execution-context task types to Agent modes.
+
+    The gateway uses values such as ``DOCUMENT_MODELING`` and
+    ``DATA_SOURCE_MODELING``; these must still receive the modeling knowledge
+    and instructions rather than being treated as an unknown mode.
+    """
+    raw = str(task_type or "").strip().lower()
+    if raw == "integration" or "integration" in raw or "disambigu" in raw:
+        return "integration"
+    if raw == "modeling" or "modeling" in raw or raw in {"model", "ontology"}:
+        return "modeling"
+    return raw
+
+
 def knowledge_filename(task_type: str, context: Optional[Mapping[str, object]] = None) -> str:
     """Return a safe relative Markdown path for a task mode."""
-    kind = str(task_type or "").strip().lower()
+    kind = normalize_task_type(task_type)
     if kind == "integration":
         return "integration/all_sources.md"
     if kind != "modeling":
@@ -58,7 +73,7 @@ def load_static_knowledge(directory: str | Path, task_type: str,
         except (OSError, UnicodeError):
             return ""
 
-    if str(task_type or "").strip().lower() == "modeling" and path.name != "all_sources.md":
+    if normalize_task_type(task_type) == "modeling" and path.name != "all_sources.md":
         common = read(root / "modeling" / "base.md")
         specific = read(path)
         return "\n\n---\n\n".join(part for part in (common, specific) if part)
