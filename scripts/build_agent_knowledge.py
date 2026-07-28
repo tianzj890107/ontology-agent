@@ -18,7 +18,8 @@ from xml.etree import ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIR = ROOT / "rules_goals"
+SOURCE_DIR = next((path for path in (ROOT / "rules", ROOT / "rules_goals")
+                   if path.is_dir()), ROOT / "rules")
 OUTPUT_DIR = ROOT / "agent_knowledge"
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
       "m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -127,7 +128,7 @@ def block(name: str, title: str | None = None) -> str:
     path = SOURCE_DIR / name
     heading = title or name
     return (f"## {heading}\n\n"
-            f"> 来源文件：`rules_goals/{name}`\n> SHA-256（前12位）：`{source_hash(path)}`\n\n"
+            f"> 来源文件：`{SOURCE_DIR.name}/{name}`\n> SHA-256（前12位）：`{source_hash(path)}`\n\n"
             f"{read_source(name)}")
 
 
@@ -136,7 +137,13 @@ def write(path: Path, content: str) -> None:
     path.write_text(content.rstrip() + "\n", encoding="utf-8")
 
 
-BASE_SOURCES = ["智能建模任务.docx", "数据模型建模规范-20260626.xlsx", "本体建模步骤拆解.xlsx"]
+BASE_SOURCES = [
+    "智能建模任务.docx",
+    "数据模型建模规范-20260626.xlsx",
+    "本体建模步骤拆解.xlsx",
+    "本体元模型.xlsx",
+    "本体元模型模板.xlsx",
+]
 SOURCE_DOCS = {
     "source_code": "源代码本体建模.docx",
     "system_page": "系统页面本体建模.docx",
@@ -147,15 +154,16 @@ SOURCE_DOCS = {
 
 
 def build() -> None:
-    write(OUTPUT_DIR / "README.md", """# Agent 静态知识库
+    write(OUTPUT_DIR / "README.md", f"""# Agent 静态知识库
 
-本目录是给 Ontology Agent 使用的静态 Markdown 知识库，由 `rules_goals/` 中的产品目标、规则文档和 Excel 规则表离线生成。
+本目录是给 Ontology Agent 使用的静态 Markdown 知识库，由 `{SOURCE_DIR.name}/` 中的产品目标、规则文档和 Excel 规则表离线生成。
 
 ## 使用方式
 
 - 运行服务只读取已经生成的 Markdown，不会在服务器实时解析 DOCX/XLSX，也不会修改本目录。
 - `integration.md` 用于智能消歧与整合。
 - `modeling/base.md` 用于所有智能建模任务；各 `modeling/*.md` 文件在此基础上补充对应输入源的专项规则。
+- `本体元模型.md`、`本体元模型模板.md` 和 `本体建模步骤拆解.md` 是单独可审阅的参考 Markdown；同样内容也已编入 `modeling/base.md`，由 system prompt 静态注入 Agent。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 
 ## 安全边界
@@ -165,6 +173,12 @@ def build() -> None:
 
     base = "# 智能建模任务：静态私有知识\n\n" + "\n\n".join(block(x) for x in BASE_SOURCES)
     write(OUTPUT_DIR / "modeling" / "base.md", base)
+    write(OUTPUT_DIR / "本体元模型.md",
+          "# 本体元模型：静态 Markdown\n\n" + block("本体元模型.xlsx"))
+    write(OUTPUT_DIR / "本体元模型模板.md",
+          "# 本体元模型模板：静态 Markdown\n\n" + block("本体元模型模板.xlsx"))
+    write(OUTPUT_DIR / "本体建模步骤拆解.md",
+          "# 本体建模步骤拆解：静态 Markdown\n\n" + block("本体建模步骤拆解.xlsx"))
     all_parts = [base] + [block(name) for name in SOURCE_DOCS.values()]
     write(OUTPUT_DIR / "modeling" / "all_sources.md",
           "# 智能建模任务：全部输入源静态私有知识\n\n" + "\n\n".join(all_parts))

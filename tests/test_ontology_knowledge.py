@@ -40,6 +40,11 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertNotIn("业务文档本体建模.docx", modeling)
         self.assertIn("# 智能消歧与整合", integration)
         self.assertIn("智能消歧与整合规则v0.1.docx", integration)
+        self.assertIn("本体元模型.xlsx", modeling)
+        self.assertIn("本体元模型模板.xlsx", modeling)
+        self.assertIn("本体建模步骤拆解.xlsx", modeling)
+        self.assertIn("本体元模型.xlsx", (ROOT / "agent_knowledge" / "本体元模型.md").read_text(encoding="utf-8"))
+        self.assertIn("本体元模型模板.xlsx", (ROOT / "agent_knowledge" / "本体元模型模板.md").read_text(encoding="utf-8"))
 
     def test_static_knowledge_is_outside_task_sandbox(self):
         self.assertFalse((ROOT / "agent_knowledge").is_relative_to(
