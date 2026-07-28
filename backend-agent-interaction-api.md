@@ -281,13 +281,15 @@ Content-Type: application/json
 }
 ```
 
-整合回调不传 `files`。`COMPLETED` 时，Ontology 后端按 `outputPrefix` 和九个固定文件名读取并导入结果。
+整合回调不传 `files`。`COMPLETED` 时，Ontology 后端按 `outputPrefix` 和当前 `expectedFiles` 读取并导入结果；如果上下文包含 `business_rules.csv`，它也属于本次强制结果文件，不能只生成前三列的建模模板格式。
 
 Agent 成功时还需上传：
 
 ```text
 ontology/{repositoryId}/integration-tasks/{taskCode}/agent-output/ok.csv
 ```
+
+`ok.csv` 是整合完成标记，不放入 `expectedFiles` 列表。Agent 必须先生成并验证全部 `expectedFiles`，最后再上传 `ok.csv`；未上传 `ok.csv` 或任一结果文件校验失败时，服务端不会发送 `COMPLETED` 回调。
 
 ## 6. 本体库信息接口
 

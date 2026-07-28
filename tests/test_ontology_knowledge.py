@@ -140,6 +140,28 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 ]),
                 {"logical_entities.csv", "entity_relations.csv"},
             )
+            bo_header = "业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
+            self.assertEqual(
+                server.validate_integration_csv(
+                    "business_objects.csv",
+                    (bo_header + 'BO1,采购订单,Purchase Order,"包含,头和行",事务数据\n').encode("utf-8"),
+                ),
+                [],
+            )
+            malformed = server.validate_integration_csv(
+                "business_objects.csv",
+                (bo_header + "BO1,采购订单,Purchase Order,包含,头和行,事务数据\n").encode("utf-8"),
+            )
+            self.assertTrue(malformed)
+            self.assertTrue(server.validate_integration_csv(
+                "business_rules.csv", "规则编码,规则名称,规则描述\nR1,规则,描述\n".encode("utf-8")
+            ))
+            self.assertEqual(server.validate_integration_csv(
+                "business_rules.csv", "规则编码,规则名称,分类,规则描述,来源内容\nR1,规则,约束规则,描述,源模型\n".encode("utf-8")
+            ), [])
+            relation_header = "关系编码,源逻辑实体编码,源逻辑实体名称,目标逻辑实体编码,目标逻辑实体名称,关系分类编码,关系分类,关系中文名称,关系英文名称,关系基数,反向关系中文名称,反向关系英文名称,关系描述,源关联属性编码,源关联属性英文名,源关联属性中文名,目标关联属性编码,目标关联属性英文名,目标关联属性中文名\n"
+            bad_relation = relation_header + "R1,E1,订单,E2,客户,REL,错误分类,属于,belongs,一对多,,,,,,,,,\n"
+            self.assertTrue(server.validate_integration_csv("entity_relations.csv", bad_relation.encode("utf-8")))
             empty = types.SimpleNamespace(conv=types.SimpleNamespace(messages=[]), log=[
                 {"type": "model_switch", "from": "a", "to": "b"},
                 {"type": "tool_use", "name": "Read"},

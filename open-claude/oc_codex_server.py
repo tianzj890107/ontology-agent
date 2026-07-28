@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import hashlib
 import hmac
 import io
@@ -195,6 +196,63 @@ _PARSE_ELEMENT_ALIASES = {
     "BUSINESS_OBJECT_RELATIONSHIP": "BUSINESS_OBJECT_RELATION",
     "术语": "TERM",
 }
+
+# Integration result CSV contract.  Keep this in the server as a final gate:
+# system-prompt instructions alone cannot prevent malformed CSV from being
+# uploaded and marked complete.
+_INTEGRATION_HEADERS = {
+    "business_objects.csv": ["业务对象编码", "业务对象名称", "业务对象英文名", "业务对象定义", "数据类别"],
+    "logical_entities.csv": ["业务对象编码", "业务对象名称", "逻辑实体编码", "逻辑实体名称", "逻辑实体英文名", "逻辑实体定义", "是否主逻辑实体", "数据类别"],
+    "business_attributes.csv": ["逻辑实体编码", "逻辑实体名称", "业务属性编码", "业务属性名称", "业务属性英文名称", "业务属性定义", "数据类型", "是否主键", "是否非空"],
+    "entity_relations.csv": ["关系编码", "源逻辑实体编码", "源逻辑实体名称", "目标逻辑实体编码", "目标逻辑实体名称", "关系分类编码", "关系分类", "关系中文名称", "关系英文名称", "关系基数", "反向关系中文名称", "反向关系英文名称", "关系描述", "源关联属性编码", "源关联属性英文名", "源关联属性中文名", "目标关联属性编码", "目标关联属性英文名", "目标关联属性中文名"],
+    "business_rules.csv": ["规则编码", "规则名称", "分类", "规则描述", "来源内容"],
+    "integration_report.csv": ["检核项", "问题类型", "涉及源模型", "处理结果", "说明"],
+    "merged_elements.csv": ["整合后名称", "元素类型", "原名称集合", "来源模型", "合并策略", "相似度"],
+    "pending_elements.csv": ["候选名称 A", "候选名称 B", "推荐名称", "元素类型", "来源模型", "相似度", "待确认原因"],
+    "conflict_elements.csv": ["元素名称", "冲突类型", "来源模型", "冲突描述", "来源内容"],
+    "missing_elements.csv": ["元素名称", "元素类型", "来源模型", "缺失说明"],
+}
+_INTEGRATION_RELATION_CATEGORIES = {"关联", "依赖", "继承", "组合", "聚合"}
+_INTEGRATION_CARDINALITIES = {"1:1", "1:N", "N:1", "M:N"}
+
+
+def validate_integration_csv(filename, blob):
+    """Return protocol errors for one integration CSV, or an empty list.
+
+    csv.reader is deliberately used instead of counting commas: quoted commas
+    and quoted newlines are valid CSV, while unquoted ones must be rejected.
+    """
+    name = os.path.basename(str(filename or "")).lower()
+    expected = _INTEGRATION_HEADERS.get(name)
+    if not expected:
+        return []
+    try:
+        text = bytes(blob).decode("utf-8-sig")
+    except (TypeError, UnicodeDecodeError):
+        return ["必须使用 UTF-8 CSV 编码"]
+    try:
+        rows = list(csv.reader(io.StringIO(text, newline="")))
+    except csv.Error as exc:
+        return [f"CSV 解析失败: {exc}"]
+    if not rows or rows[0] != expected:
+        actual = rows[0] if rows else []
+        return [f"表头不匹配，期望 {len(expected)} 列 {expected}，实际 {len(actual)} 列 {actual}"]
+    errors = []
+    width = len(expected)
+    for line_no, row in enumerate(rows[1:], 2):
+        if not row or all(not str(value).strip() for value in row):
+            continue
+        if len(row) != width:
+            errors.append(f"第 {line_no} 行应有 {width} 列，实际 {len(row)} 列；检查逗号字段是否使用双引号")
+            continue
+        if name == "entity_relations.csv":
+            category = row[6].strip()
+            cardinality = row[9].strip()
+            if category and category not in _INTEGRATION_RELATION_CATEGORIES:
+                errors.append(f"第 {line_no} 行关系分类“{category}”不在字典 {_INTEGRATION_RELATION_CATEGORIES} 中")
+            if cardinality and cardinality not in _INTEGRATION_CARDINALITIES:
+                errors.append(f"第 {line_no} 行关系基数“{cardinality}”不在字典 {_INTEGRATION_CARDINALITIES} 中")
+    return errors[:20]
 
 def parse_element_for_file(filename):
     """将输出文件名映射为 parseElement；未知文件也按规范化文件名推导。"""
@@ -1552,13 +1610,14 @@ class Handler(BaseHTTPRequestHandler):
         repo_id = str(data.get("repositoryId") or "").strip()
         task_id = str(data.get("taskId") or "").strip()
         ttype = str(data.get("taskType") or "").strip().lower()
+        integration_upload = ttype == "integration" or (not ttype and task_code.upper().startswith("MI"))
         proj = bind_mission_project(requested_project, repo_id, task_code, task_id)
         if repo_id and task_code and not proj:
             self._send_json({"error": "当前任务只能操作自己的项目目录"}, status=403)
             return
         # execution-context 是唯一许可来源；浏览器字段只作缓存，上传前强制刷新。
         context = fetch_execution_context(task_code, repo_id, ttype) if task_code else None
-        modeling_upload = ttype == "modeling" or (not ttype and not task_code.upper().startswith("MI"))
+        modeling_upload = not integration_upload
         if modeling_upload and task_code and not isinstance(context, dict):
             self._send_json({"error": "无法读取当前任务 execution-context，已拒绝上传和回写结果文件"}, status=502)
             return
@@ -1600,6 +1659,14 @@ class Handler(BaseHTTPRequestHandler):
             except OSError as e:
                 results.append({"name": name, "ok": False, "error": f"读取失败: {e}"})
                 continue
+            if integration_upload and name.lower() in _INTEGRATION_HEADERS:
+                csv_errors = validate_integration_csv(name, blob)
+                if csv_errors:
+                    results.append({
+                        "name": name, "ok": False,
+                        "error": "整合结果 CSV 协议校验失败: " + "；".join(csv_errors),
+                    })
+                    continue
             key = prefix + "/" + name
             ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
             try:
@@ -1618,10 +1685,28 @@ class Handler(BaseHTTPRequestHandler):
         ok_n = sum(1 for r in results if r.get("ok"))
         resp = {"ok": ok_n > 0, "uploaded": ok_n, "total": len(results),
                 "prefix": prefix, "bucket": cfg["bucket"], "results": results}
-        # 上传成功后回写报告(callback)。有 taskCode 且至少上传成功一个文件才回调。
+        # integration 只有全部 expectedFiles 已存在并且 ok.csv 已上传后才允许
+        # 回调 COMPLETED；不能因为先上传了一个 CSV 就把任务标记完成。
         if ok_n and task_code:
-            resp["callback"] = self._callback_after_upload(
-                cfg, task_code, repo_id, ttype, results, allowed_files, expected_files)
+            if integration_upload:
+                uploaded_names = {r.get("name") for r in results if r.get("ok")}
+                local_names = {
+                    os.path.basename(resolve_project_file(proj, name) or "")
+                    for name in expected_files | {"ok.csv"}
+                    if resolve_project_file(proj, name)
+                    and os.path.isfile(resolve_project_file(proj, name))
+                }
+                missing = sorted((set(expected_files) - local_names) | (set() if "ok.csv" in local_names else {"ok.csv"}))
+                if "ok.csv" in uploaded_names and not missing:
+                    resp["callback"] = self._callback_after_upload(
+                        cfg, task_code, repo_id, ttype, results, allowed_files, expected_files)
+                else:
+                    resp["callback"] = {"ok": False, "skipped": True,
+                                         "error": "未回写完成：必须先生成并上传全部 expectedFiles，最后上传 ok.csv；缺少: "
+                                                  + ", ".join(missing or ["ok.csv"])}
+            else:
+                resp["callback"] = self._callback_after_upload(
+                    cfg, task_code, repo_id, ttype, results, allowed_files, expected_files)
         self._send_json(resp)
 
     def _callback_after_upload(self, cfg, task_code, repo_id, ttype, results,
