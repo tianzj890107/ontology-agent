@@ -42,6 +42,7 @@
 ### 2. 当前任务上下文、输入文件和 Agent system prompt
 
 - 进入当前任务后自动展示该任务项目文件，不要求重复上传已经存在的文件。
+- 页面进入或仅查看当前任务信息时不再调用会改变任务状态的 `execution-context` 接口；只有点击开始任务或发送第一条消息时才读取上下文，因此单纯查看不会把任务标记为执行中，也不会阻止项目删除。
 - execution-context 中的任务名称、提示词、解析要素、目标输出文件、数据源/文档信息和项目文件清单，会写入 Agent system prompt。
 - 任务上下文中的 `objectKey`/文件 Key 会通过 FileServer 下载到项目的 `mission-input/` 目录，Agent 可以直接读取。
 - 数据库任务会把真实连接配置写入当前项目受保护的 `mission-input/.db_connection.json`；system prompt 只提供路径和 `URL.create()` 使用规则，避免密码脱敏成 `********` 或被特殊字符 `@` 破坏连接 URL。
