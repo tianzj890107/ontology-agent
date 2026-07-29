@@ -87,7 +87,9 @@ input,textarea,select{font-family:inherit;color:inherit}
 #sendbtn,#sendbtn2{margin-left:auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none;transition:width .15s,border-radius .15s}
 #sendbtn.start-mode,#sendbtn2.start-mode{width:auto;min-width:0;padding:0 14px;border-radius:17px;font-size:13px;font-weight:600;white-space:nowrap}
 #sendbtn:disabled,#sendbtn2:disabled{opacity:.3;cursor:default}
-.model-indicator{width:86px;height:24px;border:1px solid var(--border);border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:10px;font-weight:500;line-height:1;flex:none;margin-left:auto;background:transparent;cursor:default;overflow:hidden;white-space:nowrap}
+.model-indicator{width:auto;max-width:150px;height:24px;border:0;border-radius:0;display:flex;align-items:center;justify-content:center;gap:4px;color:var(--dim);font-size:10px;font-weight:500;line-height:1;flex:none;margin-left:auto;padding:2px 3px;background:transparent;cursor:help;overflow:hidden;white-space:nowrap}
+.model-indicator .model-short{max-width:112px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-indicator .model-caret{font-size:10px;color:var(--dimmer);line-height:1}
 .model-indicator + #sendbtn,.model-indicator + #sendbtn2{margin-left:0}
 .model-indicator:hover{background:#26262b}
 
@@ -410,7 +412,7 @@ body{background:var(--bg);color:var(--text)}
         <button class="cbtn compactable" data-compact-level="6" id="projbtn"><span class="btn-icon">📁</span><span id="projlabel" class="btn-label">选择项目</span> <span class="caret">▼</span></button>
         <button class="cbtn compactable" data-compact-level="1" id="filesbtn0" title="浏览项目文件"><span class="btn-icon">📂</span><span class="btn-label">文件</span></button>
         <button class="cbtn auto-btn compactable" data-compact-level="3" id="autook" title="打开后自动跳过“需要确认”,直接允许执行"><span class="btn-icon">⚡</span><span class="btn-label">自动确认:关</span></button>
-        <span class="model-indicator" id="modelhint" title="当前大语言模型">Q</span>
+        <span class="model-indicator" id="modelhint" title="当前大语言模型"><span class="model-gear">⚙</span><span class="model-short">模型</span><span class="model-caret">⌄</span></span>
         <button id="sendbtn" title="开始任务">↑</button>
       </div>
     </div>
@@ -439,7 +441,7 @@ body{background:var(--bg);color:var(--text)}
         <div class="crow">
           <button class="cbtn compactable" data-compact-level="4" id="attach2" title="上传文件到项目"><span class="btn-icon">📎</span><span class="btn-label">上传文件到项目</span></button>
           <button class="cbtn auto-btn compactable" data-compact-level="2" id="autook2" title="打开后自动跳过“需要确认”,直接允许执行"><span class="btn-icon">⚡</span><span class="btn-label">自动确认:关</span></button>
-          <span class="model-indicator" id="modelhint2" title="当前大语言模型">Q</span>
+          <span class="model-indicator" id="modelhint2" title="当前大语言模型"><span class="model-gear">⚙</span><span class="model-short">模型</span><span class="model-caret">⌄</span></span>
           <button id="sendbtn2" title="发送">↑</button>
         </div>
       </div>
@@ -1222,7 +1224,11 @@ function updateModelLabels(){
   const provider = String(META.provider || (cur && cur.provider) || "model").toLowerCase();
   for (const id of ["modelhint", "modelhint2"]){
     const el = $(id);
-    if (el){ el.textContent = shortModel; el.title = `${provider} · ${modelId}`; }
+    if (el){
+      const short = el.querySelector(".model-short");
+      if (short) short.textContent = shortModel;
+      el.title = `${provider} · ${modelId}`;
+    }
   }
   const settingsLabel = $("settings-model-label");
   if (settingsLabel) settingsLabel.textContent = label || "未选择";
