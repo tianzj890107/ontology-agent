@@ -1703,11 +1703,8 @@ async function showTree(){
   const j = await api(filesAPIPath(proj));
   const files = j.files || [];
   const body = $("pvbody");
-  if (!files.length){
-    $("pvdl").style.display = "none";
-    body.innerHTML = '<div class="pv-empty">项目还是空的。<br>让智能体生成一些文件,或用 📎 上传。</div>';
-    return;
-  }
+  const projectIsEmpty = !files.length;
+  if (projectIsEmpty) $("pvdl").style.display = "none";
   files.sort((a, b) => {
     const da = a.path.slice(0, a.path.lastIndexOf("/") + 1);
     const db = b.path.slice(0, b.path.lastIndexOf("/") + 1);
@@ -1755,7 +1752,9 @@ async function showTree(){
     }
     html += "</div></section>";
   }
-  body.innerHTML = missingNotice + html + "</div>";
+  const emptyProjectNotice = projectIsEmpty
+    ? '<div class="pv-empty">项目还是空的。<br>让智能体生成一些文件,或用 📎 上传。</div>' : "";
+  body.innerHTML = emptyProjectNotice + missingNotice + html + "</div>";
   body.querySelectorAll(".tree-folder-head").forEach(head => head.onclick = () => {
     const open = head.getAttribute("aria-expanded") === "true";
     head.setAttribute("aria-expanded", String(!open));
