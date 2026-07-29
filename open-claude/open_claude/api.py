@@ -100,6 +100,7 @@ def stream_message(
     tools: Optional[list[dict[str, Any]]] = None,
     temperature: Optional[float] = None,
     thinking_budget: Optional[int] = None,
+    api_key: Optional[str] = None,
 ) -> Generator[dict[str, Any], None, None]:
     """
     Stream a message from the API, yielding events as they arrive.
@@ -122,10 +123,11 @@ def stream_message(
     if provider != "anthropic":
         yield from openai_compat.stream(
             provider, model, messages, system_prompt, tools, max_tokens, temperature,
+            api_key=api_key,
         )
         return
 
-    client = client or _anthropic_client()
+    client = client or (anthropic.Anthropic(api_key=api_key) if api_key else _anthropic_client())
 
     # Optional sampling controls (extended thinking forces temperature=1 and
     # requires budget_tokens < max_tokens).
@@ -260,6 +262,7 @@ def complete(
     tools: Optional[list[dict[str, Any]]] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
+    api_key: Optional[str] = None,
 ) -> dict[str, Any]:
     """Provider-agnostic, non-streaming completion.
 
@@ -274,9 +277,10 @@ def complete(
     if provider != "anthropic":
         return openai_compat.send(
             provider, model, messages, system_prompt, tools, max_tokens, temperature,
+            api_key=api_key,
         )
 
-    client = client or _anthropic_client()
+    client = client or (anthropic.Anthropic(api_key=api_key) if api_key else _anthropic_client())
     kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,

@@ -109,6 +109,17 @@
 - 智能建模页面的 Agent 地址使用当前页面服务器主机名，服务器部署时不再错误连接访问者本机的 `127.0.0.1`。
 - Python 后端、模型调用和接口变更均需要重启后端；本轮任务项目隔离修改已重启并部署。
 
+### 6. 外部登录态与用户级模型密钥隔离
+
+- Agent 支持沿用外部本体平台登录态：入口可接收已验证的 HS256 `Authorization: Bearer JWT`，或在可信反向代理模式下接收 `X-User-Id`；入口响应写入签名 HttpOnly Cookie，后续前端请求不再需要暴露 Token。
+- 任务、历史会话、文件访问和结果上传按用户归属校验；旧版本没有归属的任务仅在该用户首次访问时迁移绑定，其他用户不能读取或操作。
+- `/api/apikey` 只保存当前用户自己的 Provider Key 到服务器权限为 600 的用户隔离文件；普通用户不再修改公共 `~/.claude/config.json`。`/api/admin/apikey` 仅管理员可维护服务器默认 Key，默认管理员由 `ONTOLOGY_ADMIN_USER_IDS` 配置。
+- Agent 每次模型调用按任务用户解析 Key 并传入 OpenAI-compatible/Anthropic 客户端，Qwen 不再回退到公共 Key；没有个人 Key 的普通用户会在执行前收到配置提示。
+- 模型选择也按用户保存，不再改变所有在线用户的会话模型；现有模型目录和 Qwen 同能力配额切换逻辑保留。
+- 按用户记录调用次数、Token 和估算费用，默认设置为团队测试用的高额度（1000 次 / 2000 万 Token / 500 美元每日），达到上限时服务端拒绝继续调用；额度不在普通 UI 展示。
+- 主要文件：`open-claude/oc_codex_server.py`、`open-claude/open_claude/api.py`、`open-claude/open_claude/openai_compat.py`、`open-claude/codex_web.html`、`.env.example`。
+- 类型：后端鉴权、密钥存储、模型调用和环境配置变更，需要重启后端；未调用 Qwen API。启用生产鉴权前必须在服务端配置 `ONTOLOGY_JWT_SECRET`，或明确启用 `ONTOLOGY_TRUST_PROXY_AUTH=true` 并由反向代理提供 `X-User-Id`。
+
 ## 当前最终版本
 
 - Git 分支：`20260727`

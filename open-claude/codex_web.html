@@ -569,6 +569,7 @@ async function api(path, opts){
   let body = null;
   try{ body = await r.json(); }catch(e){ body = {error: `接口返回异常(${r.status})`}; }
   if (!r.ok && !body.error) body.error = body.msg || `请求失败(${r.status})`;
+  if (r.status === 401) body.error = body.error || "未获取到外部本体平台登录态，请从本体平台进入";
   return body;
 }
 async function loadMeta(){

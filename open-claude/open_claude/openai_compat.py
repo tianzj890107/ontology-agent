@@ -20,7 +20,7 @@ from typing import Any, Generator, Optional
 from .config import PROVIDERS, get_api_key_for, get_provider_base_url
 
 
-def _client(provider: str):
+def _client(provider: str, api_key: str | None = None):
     """Build an OpenAI SDK client pointed at the provider's endpoint."""
     try:
         from openai import OpenAI
@@ -30,7 +30,7 @@ def _client(provider: str):
             "Install it with:  pip install openai"
         ) from e
 
-    key = get_api_key_for(provider)
+    key = api_key or get_api_key_for(provider)
     if not key:
         envs = ", ".join(PROVIDERS.get(provider, {}).get("env", [])) or "the provider API key"
         raise RuntimeError(f"No API key for provider '{provider}'. Set {envs}.")
@@ -164,10 +164,11 @@ def _usage_dict(u) -> dict[str, int]:
 
 def stream(provider: str, model: str, messages: list[dict[str, Any]], system_prompt: str,
            tools: Optional[list[dict[str, Any]]], max_tokens: Optional[int],
-           temperature: Optional[float], _allow_fallback: bool = True) -> Generator[dict[str, Any], None, None]:
+           temperature: Optional[float], _allow_fallback: bool = True,
+           api_key: str | None = None) -> Generator[dict[str, Any], None, None]:
     """Yield the same normalized events as api.stream_message, for OpenAI-style APIs."""
     try:
-        client = _client(provider)
+        client = _client(provider, api_key)
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": to_openai_messages(system_prompt, messages),
@@ -245,7 +246,8 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
         if _allow_fallback and provider == "qwen" and _is_quota_error(e):
             for fallback in _qwen_fallback_models(model):
                 events = list(stream(provider, fallback, messages, system_prompt, tools,
-                                     max_tokens, temperature, _allow_fallback=False))
+                                     max_tokens, temperature, _allow_fallback=False,
+                                     api_key=api_key))
                 failed = next((x for x in events if x.get("type") == "error"), None)
                 if failed and not any(x.get("type") == "message_end" for x in events):
                     continue
@@ -262,9 +264,9 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
 
 def send(provider: str, model: str, messages: list[dict[str, Any]], system_prompt: str,
          tools: Optional[list[dict[str, Any]]], max_tokens: Optional[int],
-         temperature: Optional[float]) -> dict[str, Any]:
+         temperature: Optional[float], api_key: str | None = None) -> dict[str, Any]:
     """Return {"content": [normalized blocks], "stop_reason", "usage"}."""
-    client = _client(provider)
+    client = _client(provider, api_key)
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": to_openai_messages(system_prompt, messages),

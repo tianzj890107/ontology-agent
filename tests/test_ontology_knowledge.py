@@ -1,8 +1,12 @@
 import unittest
 import importlib.util
 import json
+import os
 import tempfile
 import zipfile
+import base64
+import hashlib
+import hmac
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
@@ -164,6 +168,34 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertIsNone(
                 server.bind_mission_project("another-project", "1", "RM123456789")
             )
+            with tempfile.TemporaryDirectory() as auth_tmp:
+                old_paths = (server._USER_KEYS_PATH, server._USER_SETTINGS_PATH,
+                             server._AUTH_SECRET_PATH, server._USAGE_PATH)
+                old_jwt_secret = os.environ.get("ONTOLOGY_JWT_SECRET")
+                try:
+                    server._USER_KEYS_PATH = str(Path(auth_tmp) / "keys.json")
+                    server._USER_SETTINGS_PATH = str(Path(auth_tmp) / "settings.json")
+                    server._AUTH_SECRET_PATH = str(Path(auth_tmp) / "cookie.secret")
+                    server._USAGE_PATH = str(Path(auth_tmp) / "usage.json")
+                    server.set_user_api_key("u1", "qwen", "key-one")
+                    server.set_user_api_key("u2", "qwen", "key-two")
+                    self.assertEqual(server.user_api_key("u1", "qwen"), "key-one")
+                    self.assertEqual(server.user_api_key("u2", "qwen"), "key-two")
+                    self.assertIsNone(server.user_api_key("u3", "qwen"))
+                    os.environ["ONTOLOGY_JWT_SECRET"] = "test-secret"
+                    enc = lambda value: base64.urlsafe_b64encode(value).decode().rstrip("=")
+                    header, payload = enc(b'{"alg":"HS256"}'), enc(b'{"sub":"u1"}')
+                    signing = f"{header}.{payload}"
+                    signature = enc(hmac.new(b"test-secret", signing.encode(), hashlib.sha256).digest())
+                    token = f"{signing}.{signature}"
+                    self.assertEqual(server.external_user_id({"Authorization": "Bearer " + token}), "u1")
+                finally:
+                    (server._USER_KEYS_PATH, server._USER_SETTINGS_PATH,
+                     server._AUTH_SECRET_PATH, server._USAGE_PATH) = old_paths
+                    if old_jwt_secret is None:
+                        os.environ.pop("ONTOLOGY_JWT_SECRET", None)
+                    else:
+                        os.environ["ONTOLOGY_JWT_SECRET"] = old_jwt_secret
             self.assertEqual(
                 server.normalize_expected_files([
                     {"filename": "logical_entities.csv"},

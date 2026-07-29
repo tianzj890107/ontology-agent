@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import csv
 import hashlib
 import hmac
@@ -36,6 +37,7 @@ import mimetypes
 import os
 import posixpath
 import re
+import secrets
 import shutil
 import ssl
 import sys
@@ -77,6 +79,241 @@ _PROJECT_NAME_RE = re.compile(r"^[\w\-.一-鿿]{1,64}$")
 
 # taskCode: 字母数字与 - _(用于路径拼接前的白名单校验,防注入/穿越)。
 _TASK_CODE_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+# External platform identity / per-user provider credentials.  The Agent never
+# persists a raw JWT; only a stable user id (or an opaque token fingerprint) is
+# used as the namespace for tasks, keys and usage counters.
+_AUTH_COOKIE = "ontology_agent_user"
+_AUTH_SECRET_PATH = os.path.join(os.path.expanduser("~"), ".claude", "ontology-agent-auth.secret")
+_USER_KEYS_PATH = os.path.join(os.path.expanduser("~"), ".claude", "ontology-agent-user-keys.json")
+_USER_SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".claude", "ontology-agent-user-settings.json")
+_USAGE_PATH = os.path.join(os.path.expanduser("~"), ".claude", "ontology-agent-user-usage.json")
+_AUTH_LOCK = threading.RLock()
+_USAGE_LOCK = threading.RLock()
+
+
+def _auth_secret():
+    configured = os.environ.get("ONTOLOGY_AUTH_COOKIE_SECRET", "").strip()
+    if configured:
+        return configured.encode("utf-8")
+    try:
+        os.makedirs(os.path.dirname(_AUTH_SECRET_PATH), exist_ok=True)
+        if not os.path.isfile(_AUTH_SECRET_PATH):
+            with open(_AUTH_SECRET_PATH, "w", encoding="ascii") as fh:
+                fh.write(secrets.token_urlsafe(48))
+            try:
+                os.chmod(_AUTH_SECRET_PATH, 0o600)
+            except OSError:
+                pass
+        return open(_AUTH_SECRET_PATH, encoding="ascii").read().strip().encode("utf-8")
+    except OSError:
+        return b"ontology-agent-local-auth-secret"
+
+
+def _safe_user_id(value):
+    value = str(value or "").strip()
+    if not value or len(value) > 256:
+        return ""
+    return re.sub(r"[^A-Za-z0-9_.:@\-]", "_", value)[:160]
+
+
+def _decode_jwt_payload(token):
+    try:
+        part = token.split(".")[1]
+        part += "=" * (-len(part) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(part.encode("ascii")).decode("utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (IndexError, ValueError, TypeError, json.JSONDecodeError, UnicodeError, binascii.Error):
+        return {}
+
+
+def _jwt_user_id(token):
+    """Validate HS256 JWT when a secret is configured; otherwise use trusted proxy identity."""
+    secret = os.environ.get("ONTOLOGY_JWT_SECRET", "").encode("utf-8")
+    parts = str(token or "").split(".")
+    if secret and len(parts) == 3:
+        try:
+            header = json.loads(base64.urlsafe_b64decode(parts[0] + "=" * (-len(parts[0]) % 4)))
+            payload = _decode_jwt_payload(token)
+            if header.get("alg") != "HS256":
+                return ""
+            signing = (parts[0] + "." + parts[1]).encode("ascii")
+            expected = base64.urlsafe_b64encode(hmac.new(secret, signing, hashlib.sha256).digest()).decode().rstrip("=")
+            if not hmac.compare_digest(expected, parts[2]):
+                return ""
+            exp = payload.get("exp")
+            if exp is not None and float(exp) < time.time():
+                return ""
+            return _safe_user_id(payload.get("sub") or payload.get("user_id") or payload.get("uid"))
+        except (ValueError, TypeError, KeyError, UnicodeError, json.JSONDecodeError, binascii.Error):
+            return ""
+    # A trusted platform proxy may pass an opaque access token without making
+    # the Agent depend on its signing algorithm.  Do not persist the token.
+    if os.environ.get("ONTOLOGY_TRUST_PROXY_AUTH", "").strip().lower() in {"1", "true", "yes", "on"}:
+        payload = _decode_jwt_payload(token)
+        subject = _safe_user_id(payload.get("sub") or payload.get("user_id") or payload.get("uid"))
+        if subject:
+            return subject
+        return "token:" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
+    return ""
+
+
+def _signed_cookie(user_id):
+    value = base64.urlsafe_b64encode(str(user_id).encode("utf-8")).decode().rstrip("=")
+    sig = hmac.new(_auth_secret(), value.encode("ascii"), hashlib.sha256).hexdigest()
+    return value + "." + sig
+
+
+def _cookie_user(headers):
+    raw = headers.get("Cookie", "")
+    for item in raw.split(";"):
+        key, sep, value = item.strip().partition("=")
+        if key != _AUTH_COOKIE or not sep:
+            continue
+        try:
+            encoded, sig = value.rsplit(".", 1)
+            expected = hmac.new(_auth_secret(), encoded.encode("ascii"), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected, sig):
+                return ""
+            decoded = encoded + "=" * (-len(encoded) % 4)
+            return _safe_user_id(base64.urlsafe_b64decode(decoded).decode("utf-8"))
+        except (ValueError, UnicodeError, binascii.Error):
+            return ""
+    return ""
+
+
+def external_user_id(headers):
+    """Resolve platform identity from JWT or a trusted reverse-proxy header."""
+    auth = str(headers.get("Authorization", ""))
+    if auth.lower().startswith("bearer "):
+        user = _jwt_user_id(auth[7:].strip())
+        if user:
+            return user
+    if os.environ.get("ONTOLOGY_TRUST_PROXY_AUTH", "").strip().lower() in {"1", "true", "yes", "on"}:
+        user = _safe_user_id(headers.get("X-User-Id") or headers.get("X-User-Name"))
+        if user:
+            return user
+    return _cookie_user(headers)
+
+
+def _read_json_file(path, default):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            value = json.load(fh)
+        return value if isinstance(value, type(default)) else default
+    except (OSError, ValueError, TypeError):
+        return default
+
+
+def _write_private_json(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temp = path + ".tmp-" + secrets.token_hex(6)
+    with open(temp, "w", encoding="utf-8") as fh:
+        json.dump(value, fh, ensure_ascii=False, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(temp, path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def user_api_key(user_id, provider):
+    user_id = _safe_user_id(user_id)
+    provider = str(provider or "").strip().lower()
+    if not user_id or not provider:
+        return None
+    with _AUTH_LOCK:
+        data = _read_json_file(_USER_KEYS_PATH, {})
+        entry = data.get(user_id) if isinstance(data, dict) else None
+        if isinstance(entry, dict) and entry.get(provider):
+            return str(entry[provider])
+    # Only explicitly configured admin identities may use the server fallback
+    # key; ordinary users must provide their own provider key.
+    admins = {x.strip() for x in os.environ.get("ONTOLOGY_ADMIN_USER_IDS", "admin").split(",") if x.strip()}
+    return get_api_key_for(provider) if user_id in admins else None
+
+
+def set_user_api_key(user_id, provider, key):
+    with _AUTH_LOCK:
+        data = _read_json_file(_USER_KEYS_PATH, {})
+        data.setdefault(user_id, {})
+        if key:
+            data[user_id][provider] = key
+        else:
+            data[user_id].pop(provider, None)
+        if not data[user_id]:
+            data.pop(user_id, None)
+        _write_private_json(_USER_KEYS_PATH, data)
+
+
+def user_model(user_id):
+    """Return the model selected by this user, falling back to the server default."""
+    uid = _safe_user_id(user_id)
+    if uid:
+        with _AUTH_LOCK:
+            data = _read_json_file(_USER_SETTINGS_PATH, {})
+            model = data.get(uid, {}).get("model") if isinstance(data.get(uid), dict) else None
+            if model and any(str(item.get("id")) == str(model) for item in AVAILABLE_MODELS):
+                return str(model)
+    return get_model()
+
+
+def set_user_model(user_id, model_id):
+    model_id = str(model_id or "").strip()
+    if not model_id or not any(str(item.get("id")) == model_id for item in AVAILABLE_MODELS):
+        raise ValueError("未知模型")
+    uid = _safe_user_id(user_id)
+    if not uid:
+        raise ValueError("缺少用户身份")
+    with _AUTH_LOCK:
+        data = _read_json_file(_USER_SETTINGS_PATH, {})
+        data.setdefault(uid, {})["model"] = model_id
+        _write_private_json(_USER_SETTINGS_PATH, data)
+    with TASKS_LOCK:
+        for task in TASKS.values():
+            if task.user_id == uid:
+                task.conv.model = model_id
+    return model_id
+
+
+def user_is_admin(user_id):
+    admins = {x.strip() for x in os.environ.get("ONTOLOGY_ADMIN_USER_IDS", "admin").split(",") if x.strip()}
+    return str(user_id or "") in admins
+
+
+def check_user_budget(user_id):
+    """High, server-side safety ceiling; not shown in the normal UI."""
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    limits = {
+        "calls": int(os.environ.get("ONTOLOGY_USER_DAILY_CALL_LIMIT", "1000")),
+        "tokens": int(os.environ.get("ONTOLOGY_USER_DAILY_TOKEN_LIMIT", "20000000")),
+        "costUsd": float(os.environ.get("ONTOLOGY_USER_DAILY_COST_USD", "500")),
+    }
+    with _USAGE_LOCK:
+        data = _read_json_file(_USAGE_PATH, {})
+        entry = data.setdefault(str(user_id), {}).setdefault(day, {"calls": 0, "tokens": 0, "costUsd": 0.0})
+        for key in ("calls", "tokens", "costUsd"):
+            if float(entry.get(key, 0)) >= limits[key]:
+                return False, "当前用户当日使用额度已达到上限"
+    return True, ""
+
+
+def record_user_usage(user_id, usage, model):
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    input_tokens = int((usage or {}).get("input_tokens", 0) or 0)
+    output_tokens = int((usage or {}).get("output_tokens", 0) or 0)
+    total = input_tokens + output_tokens
+    rate = float(os.environ.get("ONTOLOGY_COST_PER_MILLION_USD", "0.5"))
+    with _USAGE_LOCK:
+        data = _read_json_file(_USAGE_PATH, {})
+        entry = data.setdefault(str(user_id), {}).setdefault(day, {"calls": 0, "tokens": 0, "costUsd": 0.0})
+        entry["calls"] = int(entry.get("calls", 0)) + 1
+        entry["tokens"] = int(entry.get("tokens", 0)) + total
+        entry["costUsd"] = round(float(entry.get("costUsd", 0)) + total / 1_000_000 * rate, 6)
+        entry["lastModel"] = str(model or "")
+        _write_private_json(_USAGE_PATH, data)
 
 
 # Ontology 网关默认地址与应用标识(可用环境变量 / config.json 覆盖)。
@@ -352,7 +589,7 @@ def fileserver_preview_url(cfg, file_url, object_key):
     return f"{cfg['preview_base']}/file/preview/{cfg['bucket']}/{object_key.lstrip('/')}"
 
 
-def ontology_task_callback(kind, task_code, repo_id, payload):
+def ontology_task_callback(kind, task_code, repo_id, payload, user_id=""):
     """POST /intelligent/{kind}/tasks/{taskCode}/callback,回写 Agent 状态与文件。
     返回 {ok, error?, resp?}。走与 execution-context 同一网关(带 X-App-Id)。"""
     base = ontology_api_base()
@@ -365,6 +602,8 @@ def ontology_task_callback(kind, task_code, repo_id, payload):
     }
     if repo_id:
         headers["X-Ontology-Repository-Id"] = str(repo_id)
+    if user_id:
+        headers["X-User-Id"] = str(user_id)
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -381,7 +620,7 @@ def ontology_task_callback(kind, task_code, repo_id, payload):
     return {"ok": True, "resp": payload_resp}
 
 
-def fetch_execution_context(task_code, repo_id="", task_type=""):
+def fetch_execution_context(task_code, repo_id="", task_type="", user_id=""):
     """上传前从平台重新读取 execution-context，确保许可范围是最新且可信的。"""
     code = str(task_code or "").strip()
     if not code:
@@ -394,6 +633,8 @@ def fetch_execution_context(task_code, repo_id="", task_type=""):
         headers = {"X-App-Id": ontology_app_id(), "Accept": "application/json"}
         if repo_id:
             headers["X-Ontology-Repository-Id"] = str(repo_id)
+        if user_id:
+            headers["X-User-Id"] = str(user_id)
         try:
             req = urllib.request.Request(url, method="GET", headers=headers)
             with urllib.request.urlopen(req, timeout=15) as resp:
@@ -406,7 +647,7 @@ def fetch_execution_context(task_code, repo_id="", task_type=""):
     return None
 
 
-def cached_mission_context(repository_id: str, task_code: str) -> dict | None:
+def cached_mission_context(repository_id: str, task_code: str, user_id: str = "") -> dict | None:
     """Read the last trusted execution-context persisted for this mission.
 
     The Ontology gateway deliberately rejects a second execution-context read
@@ -423,6 +664,8 @@ def cached_mission_context(repository_id: str, task_code: str) -> dict | None:
         matches = [t for t in TASKS.values()
                    if str(t.repository_id or "") == repository_id
                    and str(t.task_code or "") == task_code
+                   and (not user_id or not getattr(t, "user_id", "")
+                        or getattr(t, "user_id", "") == user_id)
                    and isinstance(t.mission_context, dict)
                    and t.mission_context]
         if not matches:
@@ -1127,13 +1370,15 @@ def resolve_project_file(project: str, rel: str) -> str | None:
 class Task:
     def __init__(self, project: str, cwd: str, repository_id: str = "",
                  task_code: str = "", task_type: str = "", mission_context: dict | None = None,
-                 resume_session_id: str | None = None, task_id: str | None = None):
+                 resume_session_id: str | None = None, task_id: str | None = None,
+                 user_id: str = ""):
         self.id = task_id or uuid.uuid4().hex[:12]
         self.project = project
         self.cwd = cwd
         self.repository_id = repository_id
         self.task_code = task_code
         self.task_type = task_type
+        self.user_id = _safe_user_id(user_id)
         self.title = "新任务"
         self.created = time.time()
         self.updated = self.created
@@ -1155,7 +1400,7 @@ class Task:
         self.conv = Conversation(cwd, permission_mode="default",
                                  resume_session_id=resume_session_id,
                                  profile=AgentProfile(
-                                     model=get_model(),
+                                     model=user_model(self.user_id),
                                      style="始终使用简体中文回复用户;代码、命令、文件名等技术标识除外。"))
         self.conv.permissions._prompt_user = self._web_prompt_user
         p = self.conv.profile
@@ -1412,12 +1657,26 @@ class Task:
         turn_text: list[str] = []
         stop_reason = "end_turn"
 
+        provider = get_model_provider(conv.model)
+        api_key = user_api_key(self.user_id, provider)
+        if not api_key and provider != "anthropic":
+            message = "当前用户未配置该模型提供方的 API Key，请在“LLM模型参数”中配置自己的 Key"
+            self.log.append({"type": "error", "error": message})
+            emit({"type": "error", "error": message})
+            return "error"
+        allowed, budget_error = check_user_budget(self.user_id)
+        if not allowed:
+            self.log.append({"type": "error", "error": budget_error})
+            emit({"type": "error", "error": budget_error})
+            return "error"
+
         gen = stream_message(
             conv.client, conv.messages, conv.system_prompt,
             model=conv.model, tools=conv.tool_schemas,
             max_tokens=conv.profile.max_tokens,
             temperature=conv.profile.temperature,
             thinking_budget=conv.profile.thinking_budget if conv.profile.thinking else None,
+            api_key=api_key,
         )
         for ev in gen:
             t = ev["type"]
@@ -1449,6 +1708,8 @@ class Task:
                     cache_read=u.get("cache_read_input_tokens", 0),
                     cache_creation=u.get("cache_creation_input_tokens", 0),
                 )
+                if self.user_id:
+                    record_user_usage(self.user_id, u, conv.model)
             elif t == "model_switch":
                 conv.model = ev.get("to") or conv.model
                 self.log.append(ev)
@@ -1486,7 +1747,8 @@ def persist_tasks():
         for t in TASKS.values():
             rows.append({**t.summary(), "log": t.log[-10000:],
                          "missionContext": _mask_mission_secrets(t.mission_context),
-                         "sessionId": getattr(t.conv.session, "session_id", "")})
+                         "sessionId": getattr(t.conv.session, "session_id", ""),
+                         "userId": getattr(t, "user_id", "")})
     # Lock must cover both write and replace. Locking only the temporary-path
     # assignment still allowed concurrent turns to overwrite/corrupt the state.
     with TASKS_STATE_LOCK:
@@ -1524,7 +1786,8 @@ def restore_tasks():
                      str(row.get("taskCode") or ""), str(row.get("taskType") or ""),
                      row.get("missionContext") if isinstance(row.get("missionContext"), dict) else None,
                      resume_session_id=str(row.get("sessionId") or "") or None,
-                     task_id=str(row.get("id") or "") or None)
+                     task_id=str(row.get("id") or "") or None,
+                     user_id=str(row.get("userId") or ""))
             t.title = str(row.get("title") or "新任务")
             t.created = float(row.get("created") or time.time())
             t.updated = float(row.get("updated") or t.created)
@@ -1541,7 +1804,7 @@ def mission_project_name(repository_id: str, task_code: str) -> str:
 
 
 def mission_bound_project(repository_id: str, task_code: str,
-                          task_id: str = "") -> str | None:
+                          task_id: str = "", user_id: str = "") -> str | None:
     """Return the only project allowed for an ontology mission.
 
     New sessions use the deterministic mission-* directory.  Persisted sessions
@@ -1555,46 +1818,58 @@ def mission_bound_project(repository_id: str, task_code: str,
             or not _TASK_CODE_RE.fullmatch(task_code)):
         return None
     matches = []
+    has_foreign_match = False
     with TASKS_LOCK:
         if task_id:
             task = TASKS.get(task_id)
+            if (task and task.repository_id == repository_id and task.task_code == task_code
+                    and task.user_id and user_id and task.user_id != user_id):
+                return None
             if (task and task.repository_id == repository_id
                     and task.task_code == task_code and task.project
+                    and (not user_id or not task.user_id or task.user_id == user_id)
                     and project_path(task.project)):
                 return task.project
         for task in TASKS.values():
             if task.repository_id == repository_id and task.task_code == task_code:
+                if task.user_id and user_id and task.user_id != user_id:
+                    has_foreign_match = True
+                    continue
+                if not (not user_id or not task.user_id or task.user_id == user_id):
+                    continue
                 project = str(task.project or "")
                 if project and project_path(project):
                     matches.append(task)
     if matches:
         return max(matches, key=lambda t: t.updated).project
+    if has_foreign_match:
+        return None
     return mission_project_name(repository_id, task_code)
 
 
 def bind_mission_project(project: str, repository_id: str = "",
-                         task_code: str = "", task_id: str = "") -> str | None:
+                         task_code: str = "", task_id: str = "", user_id: str = "") -> str | None:
     """Bind a request to its mission project; ordinary requests are unchanged."""
     project = str(project or "").strip()
     repository_id = str(repository_id or "").strip()
     task_code = str(task_code or "").strip()
     if not (repository_id and task_code):
         return project
-    bound = mission_bound_project(repository_id, task_code, task_id)
+    bound = mission_bound_project(repository_id, task_code, task_id, user_id)
     if not bound or (project and project != bound):
         return None
     return bound
 
 
 def create_task(project: str, repository_id: str = "", task_code: str = "",
-                task_type: str = "") -> Task | None:
+                task_type: str = "", user_id: str = "") -> Task | None:
     if not project and repository_id and task_code:
         project = mission_project_name(repository_id, task_code)
         os.makedirs(os.path.join(SANDBOX_DIR, project), exist_ok=True)
     cwd = project_path(project)
     if not cwd:
         return None
-    task = Task(project, cwd, repository_id, task_code, task_type)
+    task = Task(project, cwd, repository_id, task_code, task_type, user_id=user_id)
     with TASKS_LOCK:
         TASKS[task.id] = task
     persist_tasks()
@@ -1649,11 +1924,47 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def _current_user(self):
+        if hasattr(self, "_user_id"): return self._user_id
+        self._user_id = external_user_id(self.headers)
+        # A platform JWT/header is only needed on the mission entry request;
+        # retain the verified subject in a signed, HttpOnly browser cookie.
+        if self._user_id and not _cookie_user(self.headers):
+            self._auth_cookie_to_set = _signed_cookie(self._user_id)
+        return self._user_id
+
+    def _require_user(self):
+        user = self._current_user()
+        if user:
+            return user
+        self._send_json({"error": "未获取到外部本体平台登录态，请携带有效 Authorization JWT 或 X-User-Id"}, status=401)
+        return None
+
+    def _owned_task(self, task_id, claim_legacy=True):
+        user = self._require_user()
+        if not user:
+            return None
+        task = TASKS.get(task_id)
+        if not task:
+            self._send_json({"error": "任务不存在"}, status=404)
+            return None
+        if task.user_id and task.user_id != user:
+            self._send_json({"error": "无权访问其他用户的任务"}, status=403)
+            return None
+        if claim_legacy and not task.user_id:
+            task.user_id = user
+            task.conv.model = user_model(user)
+            persist_tasks()
+        return task
+
     def _send_json(self, obj, status=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        cookie = getattr(self, "_auth_cookie_to_set", "")
+        if cookie:
+            self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; HttpOnly; SameSite=Lax")
         self.end_headers()
         self.wfile.write(body)
 
@@ -1677,6 +1988,10 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         qs = parse_qs(parsed.query)
+        if path.startswith("/api/") and not self._require_user():
+            return
+        if path in ("/mission", "/merge") and not self._require_user():
+            return
         if path in ("/", "/index.html"):
             self._serve_html()
         elif path == "/mission":
@@ -1695,11 +2010,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/mission/task":
             self._handle_mission_task(qs)
         elif path == "/api/files":
+            user = self._current_user()
             requested_project = (qs.get("project") or [""])[0]
             repository_id = (qs.get("repositoryId") or [""])[0]
             task_code = (qs.get("taskCode") or [""])[0].strip()
             task_id = (qs.get("taskId") or [""])[0].strip()
-            project = bind_mission_project(requested_project, repository_id, task_code, task_id)
+            project = bind_mission_project(requested_project, repository_id, task_code, task_id, user)
             if repository_id and task_code and not project:
                 self._send_json({"error": "当前任务只能访问自己的项目目录"}, status=403)
                 return
@@ -1713,27 +2029,34 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/p/"):
             self._serve_project_file(path, qs)
         elif path == "/api/meta":
+            user = self._current_user()
+            model = user_model(user)
             self._send_json({
-                "model": get_model(),
-                "provider": get_model_provider(get_model()),
+                "model": model,
+                "provider": get_model_provider(model),
                 "models": [{"id": m["id"], "label": m["label"],
                             "provider": m.get("provider", "anthropic")}
                            for m in AVAILABLE_MODELS],
                 "providers": [{"id": pid, "label": spec.get("label", pid),
-                               "hasKey": bool(get_api_key_for(pid))}
-                              for pid, spec in PROVIDERS.items()],
+                               "hasKey": bool(user_api_key(user, pid))}
+                               for pid, spec in PROVIDERS.items()],
                 "params": current_params(),
                 "sandbox": SANDBOX_DIR,
                 "projects": list_projects(),
+                "user": {"id": user, "isAdmin": user_is_admin(user)},
             })
         elif path == "/api/projects":
             self._send_json({"projects": list_projects()})
         elif path == "/api/tasks":
+            user = self._current_user()
             query = parse_qs(urlparse(self.path).query)
             repository_id = (query.get("repositoryId") or [""])[0]
             task_code = (query.get("taskCode") or [""])[0]
             with TASKS_LOCK:
                 items = [t for t in TASKS.values()
+                         if (t.user_id == user or
+                             (not t.user_id and repository_id and task_code and
+                              t.repository_id == repository_id and t.task_code == task_code))
                          if (not repository_id or t.repository_id == repository_id)
                          and (not task_code or t.task_code == task_code)]
                 items.sort(key=lambda t: t.updated, reverse=True)
@@ -1741,16 +2064,18 @@ class Handler(BaseHTTPRequestHandler):
         else:
             m = re.match(r"^/api/tasks/([0-9a-f]+)$", path)
             if m:
-                task = TASKS.get(m.group(1))
-                if not task:
-                    self._send_json({"error": "task not found"}, status=404)
-                    return
+                task = self._owned_task(m.group(1))
+                if not task: return
                 self._send_json({**task.summary(), "log": task.log})
                 return
             self.send_error(404)
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/") and not self._require_user():
+            return
+        if path in ("/mission", "/merge") and not self._require_user():
+            return
         if path == "/mission":
             # 专属任务处理模式入口:POST repositoryId + taskCode(JSON 或表单),
             # 返回注入了 mission 上下文的页面。
@@ -1776,6 +2101,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"error": msg}, status=400)
         elif path == "/api/tasks":
+            user = self._current_user()
             data = self._read_body()
             repository_id = str(data.get("repositoryId") or "")
             task_code = str(data.get("taskCode") or "")
@@ -1786,19 +2112,26 @@ class Handler(BaseHTTPRequestHandler):
             if task_code and not _TASK_CODE_RE.fullmatch(task_code):
                 self._send_json({"error": "任务编码格式无效"}, status=400)
                 return
-            task = create_task(str(data.get("project") or ""), repository_id, task_code, task_type)
+            task = create_task(str(data.get("project") or ""), repository_id, task_code, task_type, user)
             if not task:
                 self._send_json({"error": "项目不存在或不在沙箱内"}, status=400)
                 return
             self._send_json(task.summary())
         elif path == "/api/model":
+            user = self._current_user()
             data = self._read_body()
             mid = data.get("model", "")
             if mid:
-                set_model(mid)
-            self._send_json({"ok": True, "model": get_model()})
+                try:
+                    set_user_model(user, mid)
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, status=400)
+                    return
+            self._send_json({"ok": True, "model": user_model(user)})
         elif path == "/api/apikey":
             self._handle_set_apikey()
+        elif path == "/api/admin/apikey":
+            self._handle_set_default_apikey()
         elif path == "/api/params":
             try:
                 self._send_json(set_params(self._read_body()))
@@ -1815,10 +2148,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             m = re.match(r"^/api/tasks/([0-9a-f]+)/approve$", path)
             if m:
-                task = TASKS.get(m.group(1))
+                task = self._owned_task(m.group(1))
                 data = self._read_body()
                 if not task:
-                    self._send_json({"error": "任务不存在"}, status=404)
+                    return
                 elif task.resolve_approval(str(data.get("id") or ""), bool(data.get("approved"))):
                     self._send_json({"ok": True})
                 else:
@@ -1841,7 +2174,8 @@ class Handler(BaseHTTPRequestHandler):
         repository_id = (qs.get("repositoryId") or [""])[0]
         task_code = (qs.get("taskCode") or [""])[0].strip()
         task_id = (qs.get("taskId") or [""])[0].strip()
-        project = bind_mission_project(requested_project, repository_id, task_code, task_id)
+        project = bind_mission_project(requested_project, repository_id, task_code, task_id,
+                                       self._current_user())
         if repository_id and task_code and not project:
             self.send_error(403)
             return
@@ -1876,7 +2210,8 @@ class Handler(BaseHTTPRequestHandler):
         repository_id = (qs.get("repositoryId") or [""])[0]
         task_code = (qs.get("taskCode") or [""])[0].strip()
         task_id = (qs.get("taskId") or [""])[0].strip()
-        proj = bind_mission_project(requested_project, repository_id, task_code, task_id)
+        proj = bind_mission_project(requested_project, repository_id, task_code, task_id,
+                                    self._current_user())
         if repository_id and task_code and not proj:
             self.send_error(403)
             return
@@ -1946,12 +2281,14 @@ class Handler(BaseHTTPRequestHandler):
         task_id = str(data.get("taskId") or "").strip()
         ttype = normalize_task_type(data.get("taskType") or "")
         integration_upload = ttype == "integration" or (not ttype and task_code.upper().startswith("MI"))
-        proj = bind_mission_project(requested_project, repo_id, task_code, task_id)
+        proj = bind_mission_project(requested_project, repo_id, task_code, task_id,
+                                    self._current_user())
         if repo_id and task_code and not proj:
             self._send_json({"error": "当前任务只能操作自己的项目目录"}, status=403)
             return
         # execution-context 是唯一许可来源；浏览器字段只作缓存，上传前强制刷新。
-        context = fetch_execution_context(task_code, repo_id, ttype) if task_code else None
+        context = fetch_execution_context(task_code, repo_id, ttype,
+                                          self._current_user()) if task_code else None
         modeling_upload = not integration_upload
         if modeling_upload and task_code and not isinstance(context, dict):
             self._send_json({"error": "无法读取当前任务 execution-context，已拒绝上传和回写结果文件"}, status=502)
@@ -2095,7 +2432,7 @@ class Handler(BaseHTTPRequestHandler):
             payload["files"] = files
         else:
             payload["files"] = None
-        out = ontology_task_callback(kind, task_code, repo_id, payload)
+        out = ontology_task_callback(kind, task_code, repo_id, payload, self._current_user())
         out["kind"] = kind
         out["reported"] = len(payload.get("files") or [])
         return out
@@ -2107,7 +2444,8 @@ class Handler(BaseHTTPRequestHandler):
         repository_id = str(data.get("repositoryId") or "")
         task_code = str(data.get("taskCode") or "")
         task_id = str(data.get("taskId") or "")
-        project = bind_mission_project(requested_project, repository_id, task_code, task_id)
+        project = bind_mission_project(requested_project, repository_id, task_code, task_id,
+                                       self._current_user())
         if repository_id and task_code and not project:
             self._send_json({"error": "当前任务只能上传到自己的项目目录"}, status=403)
             return
@@ -2218,6 +2556,8 @@ class Handler(BaseHTTPRequestHandler):
                 headers = {"X-App-Id": app_id, "Accept": "application/json"}
                 if repo:
                     headers["X-Ontology-Repository-Id"] = repo
+                if self._current_user():
+                    headers["X-User-Id"] = self._current_user()
                 req = urllib.request.Request(url, method="GET", headers=headers)
                 with urllib.request.urlopen(req, timeout=15) as resp:
                     payload = json.loads(resp.read().decode("utf-8"))
@@ -2245,7 +2585,7 @@ class Handler(BaseHTTPRequestHandler):
         # endpoint again (the gateway returns “任务已成功，不能再次执行”).  The
         # context was persisted locally when the task was started, so expose
         # that trusted snapshot for read-only task information and file browsing.
-        cached = cached_mission_context(repo, code)
+        cached = cached_mission_context(repo, code, self._current_user())
         if cached:
             cached_kind = normalize_task_type(cached.get("taskType"))
             if cached_kind not in ("modeling", "integration"):
@@ -2257,8 +2597,27 @@ class Handler(BaseHTTPRequestHandler):
                         status=502)
 
     def _handle_set_apikey(self):
-        """POST /api/apikey {provider, key} —— 保存/清除某个模型提供方的密钥。
-        写入 ~/.claude/config.json 的 api_keys,并同步进程环境变量,立即生效。"""
+        """POST /api/apikey {provider, key} —— 保存当前用户自己的密钥。"""
+        user = self._current_user()
+        data = self._read_body()
+        provider = str(data.get("provider") or "").strip().lower()
+        key = str(data.get("key") or "").strip()
+        if provider not in PROVIDERS:
+            self._send_json({"error": "未知的模型提供方"}, status=400)
+            return
+        try:
+            set_user_api_key(user, provider, key)
+        except Exception as e:
+            self._send_json({"error": f"保存失败: {e}"}, status=500)
+            return
+        self._send_json({"ok": True, "provider": provider, "hasKey": bool(key)})
+
+    def _handle_set_default_apikey(self):
+        """POST /api/admin/apikey —— 仅管理员可维护服务器默认密钥。"""
+        user = self._current_user()
+        if not user_is_admin(user):
+            self._send_json({"error": "只有管理员可以配置系统默认 Key"}, status=403)
+            return
         data = self._read_body()
         provider = str(data.get("provider") or "").strip().lower()
         key = str(data.get("key") or "").strip()
@@ -2267,22 +2626,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             cfg = load_config()
-            keys = cfg.get("api_keys")
-            if not isinstance(keys, dict):
-                keys = {}
-            if key:
-                keys[provider] = key
-            else:
-                keys.pop(provider, None)
+            keys = cfg.get("api_keys") if isinstance(cfg.get("api_keys"), dict) else {}
+            if key: keys[provider] = key
+            else: keys.pop(provider, None)
             cfg["api_keys"] = keys
-            get_config_path().write_text(
-                json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-            # env 优先级最高,同步写入以便本进程内所有客户端立即读到
-            for env in PROVIDERS[provider].get("env", []):
-                if key:
-                    os.environ[env] = key
-                else:
-                    os.environ.pop(env, None)
+            get_config_path().write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
             self._send_json({"error": f"保存失败: {e}"}, status=500)
             return
@@ -2306,11 +2654,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        cookie = getattr(self, "_auth_cookie_to_set", "")
+        if cookie:
+            self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; HttpOnly; SameSite=Lax")
         self.end_headers()
         self.wfile.write(body)
 
     def _handle_send(self, task_id: str):
-        task = TASKS.get(task_id)
+        task = self._owned_task(task_id)
+        if not task:
+            return
         data = self._read_body()
         text = (data.get("message") or "").strip()
         display_text = (data.get("displayMessage") or "").strip()
@@ -2320,7 +2673,8 @@ class Handler(BaseHTTPRequestHandler):
             client_context = data.get("missionContext") if isinstance(data.get("missionContext"), dict) else None
             # 任务绑定后，服务端重新读取 execution-context，避免浏览器篡改任务规则/输出范围。
             server_context = fetch_execution_context(
-                task.task_code, task.repository_id, task.task_type) if task.task_code else None
+                task.task_code, task.repository_id, task.task_type,
+                task.user_id) if task.task_code else None
             if isinstance(server_context, dict):
                 task.set_mission_context(server_context)
                 persist_tasks()
@@ -2334,6 +2688,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
+        cookie = getattr(self, "_auth_cookie_to_set", "")
+        if cookie:
+            self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; HttpOnly; SameSite=Lax")
         self.end_headers()
 
         def emit(obj):
