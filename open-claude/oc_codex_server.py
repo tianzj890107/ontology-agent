@@ -900,13 +900,14 @@ def extract_xlsx_to_csv(source_path, output_dir):
                     "name": sheet_name,
                     "csv": os.path.relpath(csv_path, os.path.dirname(os.path.dirname(source_path))).replace("\\", "/"),
                     "rows": rows,
+                    "dataRows": max(rows - 1, 0),
                     "columns": columns,
                 })
         manifest = {
             "source": os.path.relpath(source_path, os.path.dirname(os.path.dirname(source_path))).replace("\\", "/"),
             "format": "xlsx",
             "sheets": manifest_sheets,
-            "instructions": "逐个工作表使用 CSV 分块读取；rows 是实际非空行数，不得只读取前几行。",
+            "instructions": "逐个工作表使用 CSV 分块读取；rows 是含表头的实际非空行数，dataRows 是去掉首行表头后的数据行数，不得只读取前几行。",
         }
         with open(manifest_path, "w", encoding="utf-8") as fh:
             json.dump(manifest, fh, ensure_ascii=False, indent=2)
@@ -933,8 +934,11 @@ def prepare_mission_spreadsheets(cwd):
         if os.path.isfile(manifest_path):
             try:
                 with open(manifest_path, encoding="utf-8") as fh:
-                    manifests.append(json.load(fh))
-                continue
+                    cached = json.load(fh)
+                if (isinstance(cached, dict)
+                        and all("dataRows" in sheet for sheet in (cached.get("sheets") or []))):
+                    manifests.append(cached)
+                    continue
             except (OSError, ValueError, TypeError):
                 pass
         manifest, error = extract_xlsx_to_csv(source, output_dir)
@@ -1217,7 +1221,7 @@ class Task:
             safe["agentSpreadsheetInstructions"] = (
                 "Excel 原文件是二进制证据，禁止直接使用 Read 读取 .xlsx/.xlsm。"
                 "服务端已按工作表提取为 UTF-8 CSV 和 manifest.json；先读取 manifest，再按工作表 CSV 分块处理。"
-                "必须统计并处理 manifest 中每个工作表的全部 rows，不能只读取前 5/20/2000 行。"
+                "必须统计并处理 manifest 中每个工作表的全部 rows/dataRows，不能只读取前 5/20/2000 行。"
             )
             text_model = preferred_text_model()
             current_model = str(self.conv.model or "")

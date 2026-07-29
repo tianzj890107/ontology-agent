@@ -147,6 +147,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 manifest, error = server.extract_xlsx_to_csv(xlsx, Path(tmp) / "sheets")
                 self.assertIsNone(error)
                 self.assertEqual(manifest["sheets"][0]["rows"], 2)
+                self.assertEqual(manifest["sheets"][0]["dataRows"], 1)
                 csv_path = Path(tmp) / "sheets" / "01-物理表清单.csv"
                 self.assertIn("采购订单", csv_path.read_text(encoding="utf-8"))
                 binary = Path(tmp) / "binary.xlsx"
