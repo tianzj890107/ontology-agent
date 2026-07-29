@@ -443,6 +443,71 @@ body{font-family:"PingFang SC","SF Pro Display",-apple-system,"Segoe UI",sans-se
 #feedcol > .audit::before{content:"⌕";border-color:#8fa5b7;color:#667f94;font-size:11px;text-align:center;line-height:12px}
 #feedcol > .tool::before{content:"⚙";border-color:#9eafbe;color:#70869a;font-size:9px;text-align:center;line-height:12px}
 #feedcol > .appr::before{content:"!";border-color:#b8a792;color:#8d765e;font-size:11px;text-align:center;line-height:12px}
+
+/* 与外层本体平台统一：主操作使用平台蓝，智能体状态使用平台橙，次要操作使用白底蓝边。 */
+#newtask,
+#sendbtn,#sendbtn2,
+#btnminio,.tree-tools .tree-act,
+.pkey-row button,.btn-pri,
+.appr .abtns .aok{
+  background:linear-gradient(135deg,#2563eb,#1e40af);
+  color:#fff;
+  border:0;
+  border-radius:10px;
+  font-weight:600;
+  box-shadow:0 2px 8px rgba(37,99,235,.25);
+}
+#newtask:hover,
+#sendbtn:hover,#sendbtn2:hover,
+#btnminio:hover,.tree-tools .tree-act:hover,
+.pkey-row button:hover,.btn-pri:hover,
+.appr .abtns .aok:hover{
+  background:#1d4ed8;
+  color:#fff;
+  transform:translateY(-1px);
+  box-shadow:0 4px 12px rgba(37,99,235,.35);
+}
+#newtask{border-radius:10px}
+#sendbtn,#sendbtn2{box-shadow:0 2px 8px rgba(37,99,235,.25)}
+#sendbtn.start-mode,#sendbtn2.start-mode{border-radius:10px;padding:0 16px}
+#btnminio,.tree-tools .tree-act{padding:6px 12px;border-radius:8px;font-size:12px}
+.pkey-row button{border-radius:8px}
+.btn-pri{border-radius:8px}
+
+.auto-task-btn,.cbtn.auto-btn.on,.auto-task-btn.on{
+  color:#c2410c;
+  background:#fff7ed;
+  border:1px solid #fed7aa;
+  border-radius:8px;
+  font-weight:600;
+}
+.auto-task-btn:hover,.cbtn.auto-btn.on:hover,.auto-task-btn.on:hover{
+  color:#9a3412;
+  background:#ffedd5;
+  border-color:#fdba74;
+}
+.appr .abtns .aok{border-radius:8px}
+.appr .abtns .ano,.btn-ghost{
+  background:#fff;
+  color:#1e40af;
+  border:1px solid #bfdbfe;
+  border-radius:8px;
+}
+.appr .abtns .ano:hover,.btn-ghost:hover{
+  background:#eff6ff;
+  color:#1e3a8a;
+}
+.menu-trigger,#sidebar-settings,#side-missioninfo{
+  background:#fff;
+  color:#1e40af;
+  border-color:#bfdbfe;
+}
+.menu-trigger:hover,#sidebar-settings:hover,#side-missioninfo:hover{
+  background:#eff6ff;
+  color:#1e3a8a;
+}
+.cbtn{border-color:#bfdbfe;color:#1e40af;background:#fff}
+.cbtn:hover{background:#eff6ff;color:#1e3a8a}
 </style>
 </head>
 <body>
