@@ -414,6 +414,25 @@ body{font-family:"PingFang SC","SF Pro Display",-apple-system,"Segoe UI",sans-se
 #side-missioninfo:hover{background:#e3ebf0}
 .mi-grid .v .tag,.mi-sec .tag{border-color:#c4d0da !important}
 .model-indicator:hover{background:#e5e8eb;color:#536b80}
+/* ThoughtChain 风格：将思考、审计、工具执行和确认统一为一条可追踪时间线。 */
+#feedcol > .think,#feedcol > .audit,#feedcol > .tool,#feedcol > .appr{
+  position:relative;margin-left:22px;border-radius:12px;
+}
+#feedcol > .think::before,#feedcol > .audit::before,#feedcol > .tool::before,#feedcol > .appr::before{
+  content:"";position:absolute;left:-22px;top:13px;width:16px;height:16px;border:2px solid #aebdca;border-radius:50%;background:#f5f7fb;box-sizing:border-box;z-index:2;
+}
+#feedcol > .think::after,#feedcol > .audit::after,#feedcol > .tool::after,#feedcol > .appr::after{
+  content:"";position:absolute;left:-15px;top:29px;bottom:-16px;width:2px;background:#d7dee4;
+}
+#feedcol > .think:last-child::after,#feedcol > .audit:last-child::after,#feedcol > .tool:last-child::after,#feedcol > .appr:last-child::after{display:none}
+#feedcol > .think{border:1px solid #e0e5e9;border-left:1px solid #e0e5e9;padding:9px 12px;color:#667786;background:#f7f8fa;font-size:12.5px}
+#feedcol > .audit{border-left:3px solid #7892a9;background:#f7f8fa;padding:9px 12px}
+#feedcol > .tool{background:#fff;border-color:#e0e5e9;overflow:visible}
+#feedcol > .appr{background:#f5f1ec;border-color:#c7b9aa}
+#feedcol > .think::before{content:"✦";border-color:#9eafbe;color:#70869a;font-size:9px;text-align:center;line-height:12px}
+#feedcol > .audit::before{content:"⌕";border-color:#8fa5b7;color:#667f94;font-size:11px;text-align:center;line-height:12px}
+#feedcol > .tool::before{content:"⚙";border-color:#9eafbe;color:#70869a;font-size:9px;text-align:center;line-height:12px}
+#feedcol > .appr::before{content:"!";border-color:#b8a792;color:#8d765e;font-size:11px;text-align:center;line-height:12px}
 </style>
 </head>
 <body>
