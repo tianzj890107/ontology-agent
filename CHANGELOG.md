@@ -71,6 +71,8 @@
 - 点击空任务的开始按钮时，用户对话区只显示“请直接开始执行当前任务”；完整的执行约束仍发送给 LLM，并在服务端历史日志中保持同样的短显示文本。
 - 首页和任务对话框的回形针按钮显示“上传文件到项目”；参数按钮统一显示“LLM模型参数”。
 - 同一上下文不重复下载；同名远程文件按对象 Key 区分；`agent-output` 结果文件不会被当作输入文件下载。
+- Excel 输入在进入 Agent 前由服务端用流式 XLSX XML 解析生成每个工作表的 UTF-8 CSV 和 `manifest.json`；Agent 禁止直接 `Read` 二进制 `.xlsx/.xlsm/.xls`，大表按工作表分块处理并依据 manifest 的完整行数校验。
+- Qwen 表格/文本建模任务检测到视觉模型时，优先切换到 `.env` 中的 `QWEN_TEXT_MODEL`；视觉模型仅用于图片或扫描图纸类输入。
 - 主要接口：`GET /api/mission/task`、`POST /api/tasks/{id}/send`、FileServer `/file/preview/{bucket}/{objectKey}`。
 
 ### 3. 任务工作台和文件预览体验

@@ -2,6 +2,7 @@ import unittest
 import importlib.util
 import json
 import tempfile
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
@@ -12,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-claude"))
 
 from open_claude.ontology_knowledge import knowledge_filename, load_static_knowledge, normalize_task_type
+from open_claude.tools import execute_read
 
 
 class StaticKnowledgeContractTests(unittest.TestCase):
@@ -117,6 +119,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         config.get_model = lambda: "test"
         config.get_model_provider = lambda model: "test"
         config.load_config = lambda: {}
+        config.resolve_model = lambda model: model
         for name, module in zip(names, (repl, profile, api, config)):
             sys.modules[name] = module
         try:
@@ -135,6 +138,20 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 server.build_tool_audit("Read", {"file_path": "input.csv", "limit": 5})["severity"],
                 "warning",
             )
+            with tempfile.TemporaryDirectory() as tmp:
+                xlsx = Path(tmp) / "input.xlsx"
+                with zipfile.ZipFile(xlsx, "w") as zf:
+                    zf.writestr("xl/workbook.xml", '''<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="物理表清单" sheetId="1" r:id="rId1"/></sheets></workbook>''')
+                    zf.writestr("xl/_rels/workbook.xml.rels", '''<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="worksheet"/></Relationships>''')
+                    zf.writestr("xl/worksheets/sheet1.xml", '''<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>表名</t></is></c><c r="B1" t="inlineStr"><is><t>说明</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>采购订单</t></is></c><c r="B2" t="inlineStr"><is><t>业务表</t></is></c></row></sheetData></worksheet>''')
+                manifest, error = server.extract_xlsx_to_csv(xlsx, Path(tmp) / "sheets")
+                self.assertIsNone(error)
+                self.assertEqual(manifest["sheets"][0]["rows"], 2)
+                csv_path = Path(tmp) / "sheets" / "01-物理表清单.csv"
+                self.assertIn("采购订单", csv_path.read_text(encoding="utf-8"))
+                binary = Path(tmp) / "binary.xlsx"
+                binary.write_bytes(b"PK\x03\x04" + b"\x00" * 32)
+                self.assertIn("不能使用 Read", execute_read({"file_path": str(binary)}, tmp))
             handler = object.__new__(server.Handler)
             self.assertEqual(handler._mission_from("1", "RM123456789", "modeling")["taskCode"],
                              "RM123456789")

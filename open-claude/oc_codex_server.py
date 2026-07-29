@@ -34,6 +34,7 @@ import io
 import json
 import mimetypes
 import os
+import posixpath
 import re
 import shutil
 import ssl
@@ -45,6 +46,7 @@ import urllib.error
 import urllib.request
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -61,6 +63,7 @@ from open_claude.config import (
     get_model,
     get_model_provider,
     load_config,
+    resolve_model,
 )
 from open_claude.ontology_knowledge import load_static_knowledge, normalize_task_type
 
@@ -663,7 +666,7 @@ def build_modeling_instructions(context):
     """建模步骤表的非敏感执行外壳；具体步骤和规范来自服务端私有文档。"""
     return """你正在执行智能建模任务。服务端已加载私有建模目标、步骤表和建模规范，必须按步骤表执行：
 1. 先识别当前任务的输入来源、建模范围和 execution-context.parseElements，只执行相关输出类型。
-2. 必须读取输入文件的全部有效行和全部相关工作表；不要只读取前几行就开始建模。XLSX 文件不要用受服务器 locale 影响的 `soffice --convert-to csv` 转换，避免中文被替换成 `?`；应直接读取原始 XLSX（用 Python zip/XML 或可用的表格库），并先检查文本是否出现成片 `?` 替换。
+2. 必须读取输入文件的全部有效行和全部相关工作表；不要只读取前几行就开始建模。`.xlsx/.xlsm` 是二进制文件，禁止使用 Read 直接读取；优先读取服务端生成的 `manifest.json` 和各工作表 UTF-8 CSV，并按工作表分块处理、累计全量结果。若没有预提取视图，才使用 Python zip/XML 或可用的表格库解析原始 XLSX；不要用受服务器 locale 影响的 `soffice --convert-to csv`，避免中文被替换成 `?`。
 3. 只执行标记为“能AI化”的步骤；标记为“否”或“暂不做”的步骤不得伪造完成，应明确列为人工后续项。
 4. 规则中要求主键、关系、基数、归属、命名或定义时，必须保留来源证据；无法从输入确认时标记待确认/缺失，不得编造。
 5. 结果 CSV 必须沿用 `本体元模型模板` 的精确表头和字段顺序；例如 `business_objects.csv` 使用“业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别”，`logical_entities.csv` 使用对应的八列逻辑实体表头，不能用 `id,name,description` 这类临时字段替代。
@@ -756,6 +759,200 @@ def build_tool_audit(name, tool_input):
         return {"type": "audit", "severity": "info", "title": "结果变更",
                 "detail": f"{name} 文件：{path or '未提供路径'}；之后必须重新读取并校验实际内容。"}
     return None
+
+
+_XLSX_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def _xlsx_local(tag):
+    return str(tag).rsplit("}", 1)[-1]
+
+
+def _xlsx_col_index(ref):
+    """Convert an A1-style column reference into a zero-based index."""
+    letters = re.match(r"[A-Za-z]+", str(ref or ""))
+    if not letters:
+        return 0
+    value = 0
+    for char in letters.group(0).upper():
+        value = value * 26 + ord(char) - ord("A") + 1
+    return value - 1
+
+
+def _xlsx_text(element):
+    return "".join(str(node.text or "") for node in element.iter()
+                   if _xlsx_local(node.tag) == "t")
+
+
+def _xlsx_shared_strings(zf):
+    values = []
+    try:
+        with zf.open("xl/sharedStrings.xml") as source:
+            for _, element in ET.iterparse(source, events=("end",)):
+                if _xlsx_local(element.tag) == "si":
+                    values.append(_xlsx_text(element))
+                    element.clear()
+    except KeyError:
+        pass
+    return values
+
+
+def _xlsx_sheet_paths(zf):
+    """Return workbook sheet names and XML paths without loading sheet data."""
+    workbook = ET.fromstring(zf.read("xl/workbook.xml"))
+    rels = {}
+    try:
+        rel_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+        for rel in rel_root:
+            if _xlsx_local(rel.tag) != "Relationship":
+                continue
+            rel_id = rel.attrib.get("Id") or rel.attrib.get("id")
+            target = rel.attrib.get("Target") or ""
+            if not rel_id or not target:
+                continue
+            if target.startswith("/"):
+                target = target.lstrip("/")
+            else:
+                target = posixpath.normpath(posixpath.join("xl", target))
+            rels[rel_id] = target
+    except KeyError:
+        return []
+    result = []
+    for sheet in workbook.iter():
+        if _xlsx_local(sheet.tag) != "sheet":
+            continue
+        name = sheet.attrib.get("name") or "Sheet"
+        rel_id = sheet.attrib.get("{" + _XLSX_REL_NS + "}id") or sheet.attrib.get("r:id")
+        target = rels.get(rel_id)
+        if target and target in zf.namelist():
+            result.append((name, target))
+    return result
+
+
+def _xlsx_cell_value(cell, shared_strings):
+    cell_type = cell.attrib.get("t") or ""
+    if cell_type == "inlineStr":
+        return _xlsx_text(cell)
+    value = ""
+    for child in cell:
+        if _xlsx_local(child.tag) == "v":
+            value = child.text or ""
+            break
+    if cell_type == "s":
+        try:
+            return shared_strings[int(value)]
+        except (ValueError, IndexError):
+            return value
+    if cell_type == "b":
+        return "TRUE" if value == "1" else "FALSE" if value == "0" else value
+    return value
+
+
+def _safe_sheet_filename(name, index):
+    safe = re.sub(r"[^\w\-.一-鿿]+", "_", str(name or "Sheet")).strip("._") or "Sheet"
+    return f"{index:02d}-{safe[:100]}.csv"
+
+
+def extract_xlsx_to_csv(source_path, output_dir):
+    """Stream every XLSX worksheet into UTF-8 CSV files plus a manifest.
+
+    This deliberately uses the XLSX XML package instead of ``Read`` on the
+    binary ZIP file.  Sheet rows are written as they are parsed, so a workbook
+    with thousands or hundreds of thousands of rows does not become one huge
+    model message.
+    """
+    if os.path.splitext(source_path)[1].lower() not in {".xlsx", ".xlsm"}:
+        return None, "仅支持解析 .xlsx/.xlsm；该输入不是 Open XML 表格"
+    os.makedirs(output_dir, exist_ok=True)
+    manifest_path = os.path.join(output_dir, "manifest.json")
+    try:
+        with zipfile.ZipFile(source_path) as zf:
+            shared = _xlsx_shared_strings(zf)
+            sheets = _xlsx_sheet_paths(zf)
+            if not sheets:
+                return None, "XLSX 中没有可读取的工作表"
+            manifest_sheets = []
+            for index, (sheet_name, sheet_path) in enumerate(sheets, 1):
+                filename = _safe_sheet_filename(sheet_name, index)
+                csv_path = os.path.join(output_dir, filename)
+                rows = 0
+                columns = 0
+                with zf.open(sheet_path) as source, open(csv_path, "w", encoding="utf-8", newline="") as target:
+                    writer = csv.writer(target, lineterminator="\n")
+                    for _, element in ET.iterparse(source, events=("end",)):
+                        if _xlsx_local(element.tag) != "row":
+                            continue
+                        cells = {}
+                        for cell in element:
+                            if _xlsx_local(cell.tag) != "c":
+                                continue
+                            ref = cell.attrib.get("r") or ""
+                            cells[_xlsx_col_index(ref)] = _xlsx_cell_value(cell, shared)
+                        if cells:
+                            width = max(cells) + 1
+                            columns = max(columns, width)
+                            values = [cells.get(col, "") for col in range(width)]
+                            writer.writerow(values)
+                            if any(str(value).strip() for value in values):
+                                rows += 1
+                        element.clear()
+                manifest_sheets.append({
+                    "name": sheet_name,
+                    "csv": os.path.relpath(csv_path, os.path.dirname(os.path.dirname(source_path))).replace("\\", "/"),
+                    "rows": rows,
+                    "columns": columns,
+                })
+        manifest = {
+            "source": os.path.relpath(source_path, os.path.dirname(os.path.dirname(source_path))).replace("\\", "/"),
+            "format": "xlsx",
+            "sheets": manifest_sheets,
+            "instructions": "逐个工作表使用 CSV 分块读取；rows 是实际非空行数，不得只读取前几行。",
+        }
+        with open(manifest_path, "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, ensure_ascii=False, indent=2)
+        return manifest, None
+    except (OSError, zipfile.BadZipFile, ET.ParseError, KeyError, ValueError) as exc:
+        return None, f"XLSX 解析失败: {exc}"
+
+
+def prepare_mission_spreadsheets(cwd):
+    """Prepare manifests/CSV views for all mission-input XLSX files."""
+    input_dir = os.path.join(cwd, "mission-input")
+    if not os.path.isdir(input_dir):
+        return [], []
+    manifests, errors = [], []
+    for name in sorted(os.listdir(input_dir)):
+        if not name.lower().endswith((".xlsx", ".xlsm")):
+            continue
+        source = os.path.join(input_dir, name)
+        if not os.path.isfile(source):
+            continue
+        stem = os.path.splitext(name)[0]
+        output_dir = os.path.join(input_dir, stem + "-sheets")
+        manifest_path = os.path.join(output_dir, "manifest.json")
+        if os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, encoding="utf-8") as fh:
+                    manifests.append(json.load(fh))
+                continue
+            except (OSError, ValueError, TypeError):
+                pass
+        manifest, error = extract_xlsx_to_csv(source, output_dir)
+        if manifest:
+            manifests.append(manifest)
+        elif error:
+            errors.append({"source": os.path.relpath(source, cwd).replace("\\", "/"), "error": error})
+    return manifests, errors
+
+
+def preferred_text_model():
+    """Return the configured Qwen text model for non-visual spreadsheet work."""
+    if os.environ.get("LLM_PROVIDER", "").strip().lower() != "qwen":
+        return None
+    candidate = os.environ.get("QWEN_TEXT_MODEL", "").strip()
+    if not candidate:
+        candidate = next((x.strip() for x in os.environ.get("QWEN_TEXT_MODELS", "").split(",") if x.strip()), "")
+    return resolve_model(candidate) if candidate else None
 
 
 def download_mission_files(cfg, context, cwd):
@@ -1011,6 +1208,29 @@ class Task:
             downloaded, errors = [], [{"error": str(e)}]
         if downloaded: safe["agentDownloadedFiles"] = downloaded
         if errors: safe["agentFileDownloadErrors"] = errors
+        try:
+            spreadsheet_manifests, spreadsheet_errors = prepare_mission_spreadsheets(self.cwd)
+        except Exception as e:
+            spreadsheet_manifests, spreadsheet_errors = [], [{"error": str(e)}]
+        if spreadsheet_manifests:
+            safe["agentSpreadsheetManifests"] = spreadsheet_manifests
+            safe["agentSpreadsheetInstructions"] = (
+                "Excel 原文件是二进制证据，禁止直接使用 Read 读取 .xlsx/.xlsm。"
+                "服务端已按工作表提取为 UTF-8 CSV 和 manifest.json；先读取 manifest，再按工作表 CSV 分块处理。"
+                "必须统计并处理 manifest 中每个工作表的全部 rows，不能只读取前 5/20/2000 行。"
+            )
+            text_model = preferred_text_model()
+            current_model = str(self.conv.model or "")
+            vision_models = {x.strip() for x in os.environ.get("QWEN_VISION_MODELS", "").split(",") if x.strip()}
+            is_vision = current_model in vision_models or current_model.startswith(("qwen3-vl", "qwen-vl"))
+            if text_model and is_vision and text_model != current_model:
+                self.conv.model = text_model
+                safe["agentModelRouting"] = (
+                    f"当前输入是表格/文本任务，已从视觉模型切换到文本模型 {text_model}；"
+                    "仅包含图片或扫描图纸时才使用视觉模型。"
+                )
+        if spreadsheet_errors:
+            safe["agentSpreadsheetErrors"] = spreadsheet_errors
         # 上下文本身不变时可以复用 system prompt，但输入文件下载失败不能
         # 被指纹短路永久记住；下一轮应允许对象存储恢复后重新尝试。
         if errors:

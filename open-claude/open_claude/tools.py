@@ -181,6 +181,18 @@ def execute_read(params: dict[str, Any], cwd: str) -> str:
     if os.path.isdir(file_path):
         return f"Error: {file_path} is a directory, not a file. Use Bash with 'ls' to list directories."
 
+    # XLSX/XLSM are ZIP/XML binaries, not line-oriented text.  Returning their
+    # raw bytes can explode the model context (and produces no usable table
+    # semantics).  Mission tasks prepare UTF-8 worksheet CSVs and a manifest;
+    # force the Agent toward those views instead of allowing a giant binary
+    # Read result.
+    if os.path.splitext(file_path)[1].lower() in {".xlsx", ".xlsm", ".xls"}:
+        stem = os.path.splitext(file_path)[0]
+        manifest = stem + "-sheets/manifest.json"
+        return (f"Error: 不能使用 Read 直接读取二进制 Excel 文件: {file_path}\n"
+                f"请读取工作表清单: {manifest}，再按其中的 UTF-8 CSV 分块处理；"
+                "如果清单不存在，请使用 Python 表格解析库或 zip/XML 解析并统计全部行。")
+
     try:
         with open(file_path, "r", encoding="utf-8", errors="replace") as f:
             all_lines = f.readlines()
