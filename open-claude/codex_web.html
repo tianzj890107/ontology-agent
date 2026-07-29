@@ -508,6 +508,54 @@ body{font-family:"PingFang SC","SF Pro Display",-apple-system,"Segoe UI",sans-se
 }
 .cbtn{border-color:#bfdbfe;color:#1e40af;background:#fff}
 .cbtn:hover{background:#eff6ff;color:#1e3a8a}
+
+/* 消息中的链接、标签和事件状态也沿用本体平台语义色，避免出现发白的灰蓝/灰绿色。 */
+.msg-asst a,.filelink{color:#1d4ed8;text-decoration-color:#93c5fd}
+.msg-asst a:hover,.filelink:hover{color:#1e3a8a;text-decoration-color:#2563eb}
+.mi-grid .v .tag,.mi-sec .tag{
+  background:#dbeafe !important;
+  color:#1d4ed8 !important;
+  border-color:#93c5fd !important;
+}
+.fchip{background:#eff6ff;border-color:#93c5fd;color:#1e40af}
+.fchip b{color:#1e3a8a}
+.ares.yes,.tool .thead .st.ok{color:#15803d}
+.ares.no,.tool .thead .st.err,.term .errout{color:#b91c1c}
+.dot.working{background:#f97316}
+.tool .thead .st.run,#taskhead .spin{color:#c2410c}
+.msg-err{color:#b91c1c;background:#fef2f2;border-color:#fecaca}
+.audit{
+  border-color:#bfdbfe;
+  border-left-color:#2563eb;
+  background:#fff;
+  color:#475569;
+}
+.audit .audit-title{color:#1d4ed8}
+.audit.warning{
+  border-color:#fed7aa;
+  border-left-color:#f97316;
+  background:#fff7ed;
+  color:#9a3412;
+}
+.audit.warning .audit-title{color:#c2410c}
+.tool{border-color:#bfdbfe;background:#fff}
+.tool .thead{color:#475569}
+.tool .thead:hover{background:#eff6ff}
+.tool .thead .st.run{color:#c2410c}
+.tool .thead .st.ok{color:#15803d}
+.tool .thead .st.err{color:#b91c1c}
+.diff .add{background:rgba(22,163,74,.16);color:#15803d}
+.diff .del{background:rgba(220,38,38,.12);color:#b91c1c}
+/* ThoughtChain 节点使用平台蓝/橙/绿，不再使用低对比度灰色节点。 */
+#feedcol > .think::before{border-color:#60a5fa;color:#2563eb;background:#dbeafe}
+#feedcol > .audit::before{border-color:#60a5fa;color:#1d4ed8;background:#dbeafe}
+#feedcol > .tool::before{border-color:#86efac;color:#15803d;background:#dcfce7}
+#feedcol > .appr::before{border-color:#fdba74;color:#c2410c;background:#ffedd5}
+#feedcol > .think::after,#feedcol > .audit::after,#feedcol > .tool::after,#feedcol > .appr::after{background:#93c5fd}
+#feedcol > .think{border-color:#bfdbfe;color:#475569;background:#fff}
+#feedcol > .audit{border-left-color:#2563eb;background:#fff}
+#feedcol > .tool{border-color:#bbf7d0;background:#fff}
+#feedcol > .appr{border-color:#fed7aa;background:#fff7ed}
 </style>
 </head>
 <body>
