@@ -41,7 +41,7 @@ input,textarea,select{font-family:inherit;color:inherit}
 .dot.error{background:var(--red)}
 @keyframes pulse{50%{opacity:.35}}
 .chip{border:1px solid var(--border);border-radius:4px;padding:0 5px;font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
-#sandboxnote{padding:10px 16px;border-top:1px solid var(--border);font-size:10.5px;color:var(--dimmer);line-height:1.5;word-break:break-all}
+#sandboxnote{margin-top:auto;flex:none;padding:10px 16px;border-top:1px solid var(--border);font-size:10.5px;color:var(--dimmer);line-height:1.5;word-break:break-all}
 #sidebar-settings{margin:8px 12px;padding:9px 12px;border:1px solid var(--border);border-radius:9px;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim);text-align:left}
 #sidebar-settings:hover{background:#202024;color:var(--text)}
 .empty-side{padding:14px 16px;color:var(--dimmer);font-size:12px}
@@ -260,19 +260,20 @@ input,textarea,select{font-family:inherit;color:inherit}
 .sidebar-section-toggle .arrow{transition:transform .15s}
 .sidebar-section-toggle[aria-expanded="true"] .arrow{transform:rotate(180deg)}
 #tasklist.collapsed{display:none}
-#side-current-mission{display:none;border-top:1px solid var(--border);padding:10px 12px}
+#side-current-mission{display:none;flex:1 1 auto;min-height:0;overflow:hidden;flex-direction:column;border-top:1px solid var(--border);padding:10px 12px}
 .side-current-title{font-size:11px;color:var(--dimmer);margin:0 4px 7px}
 #side-missioninfo{display:flex;flex-direction:column;align-items:flex-start;gap:5px;width:100%;padding:9px 10px;border:1px solid #bfdbfe;border-radius:8px;background:#eff6ff;color:#1d4ed8;text-align:left}
 #side-missioninfo:hover{background:#dbeafe}
 #side-mission-label{font-size:12px;font-weight:600;line-height:1.4}
 #side-mission-meta{font-size:10.5px;color:#64748b;line-height:1.4;word-break:break-all}
-#side-missionbody{margin-top:8px;max-height:52vh;overflow:auto;padding:0 4px 2px}
+#side-missionbody{margin-top:8px;flex:1 1 auto;min-height:0;max-height:none;overflow:auto;padding:0 4px 2px}
 #side-missionbody .mi-grid{grid-template-columns:86px 1fr;gap:5px 8px}
 #side-missionbody .mi-grid .k{font-size:10.5px}
 #side-missionbody .mi-grid .v{font-size:10.5px;line-height:1.45}
 #side-missionbody .mi-grid .v .tag{font-size:10px;padding:1px 5px;margin-right:2px}
 #side-missionbody .mi-sec{margin-top:9px;padding-top:8px}
 #side-missionbody .mi-sec h4{font-size:10.5px;margin-bottom:5px}
+#side-missionbody .mi-grid .k{min-width:0;overflow-wrap:anywhere;word-break:break-word;white-space:normal}
 .mi-grid .v{color:var(--text)}
 .mi-grid .v .tag{background:#fff;border-color:#bfdbfe;color:#334155}
 .mi-sec{background:transparent}
@@ -1801,6 +1802,10 @@ const MI_LABELS = {
   selectedTables:"选中数据表", databaseSourceId:"数据源 ID",
   fileSourceId:"文件源 ID", fileType:"文件类型", objectKey:"对象存储 Key",
   semanticSimilarityThreshold:"语义相似度阈值", items:"条目", mode:"模式",
+  generateAlignmentReport:"生成对齐报告", generate_alignment_report:"生成对齐报告",
+  autoMergeStrategy:"自动合并策略", auto_merge_strategy:"自动合并策略",
+  alignmentStrategy:"对齐策略", mergeStrategy:"整合策略",
+  conflictResolutionStrategy:"冲突处理策略", pendingConfirmationStrategy:"待确认策略",
 };
 const MI_SECTION_LABELS = {
   database:"数据源", document:"文档", sourceModels:"来源模型",
@@ -1892,7 +1897,7 @@ function initMission(){
   const label = `📋 ${MISSION_MODE_LABEL} · 当前任务信息`;
   const meta = `taskCode: ${MISSION.taskCode} · 本体库 ${MISSION.repositoryId}`;
   // 左侧当前任务卡默认展开;首页原有任务栏保留兼容但不再重复显示。
-  $("side-current-mission").style.display = "block";
+  $("side-current-mission").style.display = "flex";
   $("side-mission-label").textContent = label;
   $("side-mission-meta").textContent = meta;
   $("side-missionbody").innerHTML = '<div class="mi-loading">正在获取任务信息…</div>';
