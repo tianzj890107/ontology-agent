@@ -374,6 +374,47 @@ body{background:var(--bg);color:var(--text)}
 .mi-sec{background:transparent !important;min-width:0}
 .mi-err{color:#94a3b8 !important;font-size:11px !important;line-height:1.5;padding:8px 0;white-space:normal;overflow-wrap:anywhere;background:transparent !important}
 </style>
+<style id="ui-spec-overrides">
+/* AI 工艺对话 UI 规范：保留当前布局，仅统一低饱和状态色和文字层级。 */
+:root{
+  --accent:#5f7f9d;
+  --green:#718f7d;
+  --red:#a5767b;
+  --amber:#9b8269;
+}
+body{font-family:"PingFang SC","SF Pro Display",-apple-system,"Segoe UI",sans-serif;font-size:14px}
+.msg-user{background:#dce6ef;color:#334b61}
+.msg-asst{font-size:14px;font-weight:400;color:#334155}
+.msg-asst a,.filelink{color:#5f7f9d}
+.msg-asst a:hover,.filelink:hover{color:#496b89}
+#sendbtn,#sendbtn2{background:#b47b5d;color:#fff}
+#sendbtn:hover,#sendbtn2:hover{background:#bf896d}
+.dot.working,.tool .thead .st.run,#taskhead .spin{color:#8b755f}
+.spinner{border-color:rgba(155,130,105,.28);border-top-color:#9b8269}
+.msg-err{color:#8f6268;background:#f5eeee;border-color:#d6bfc2}
+.appr{border-color:#c7b9aa;background:#f5f1ec}
+.appr .ahead{color:#8d6e63}
+.appr .abtns .aok{background:#718f7d;color:#fff}
+.appr .abtns .aok:hover{background:#819d8c}
+.ares.yes,.tool .thead .st.ok{color:#718f7d}
+.ares.no,.tool .thead .st.err,.term .errout{color:#a5767b}
+.audit{border-left-color:#7892a9}
+.audit.warning{border-left-color:#9b8269;background:#f3eee8;color:#806e5f}
+.audit.warning .audit-title{color:#806e5f}
+.term .cmd{color:#66839c}
+.diff .add{background:rgba(113,143,125,.12);color:#5f806b}
+.diff .del{background:rgba(165,118,123,.12);color:#92646b}
+.auto-task-btn.on,.cbtn.auto-btn.on{color:#526d5d;background:#cbd8cf;border-color:#a8bbae}
+.auto-task-btn.on:hover,.cbtn.auto-btn.on:hover{color:#526d5d;background:#cbd8cf;border-color:#a8bbae}
+.pkey-h .set{color:#718f7d}
+.pkey-h .unset{color:#a5767b}
+.tree-tools .tree-act{background:#6b879f}
+.tree-tools .tree-act:hover{background:#7894ab}
+#side-missioninfo{border-color:#c4d0da;background:#edf2f5;color:#5b7895}
+#side-missioninfo:hover{background:#e3ebf0}
+.mi-grid .v .tag,.mi-sec .tag{border-color:#c4d0da !important}
+.model-indicator:hover{background:#e5e8eb;color:#536b80}
+</style>
 </head>
 <body>
 
