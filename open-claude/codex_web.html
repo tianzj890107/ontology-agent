@@ -1724,6 +1724,9 @@ async function showTree(){
     if (!groups.has(dir)) groups.set(dir, []);
     groups.get(dir).push(f);
   }
+  // 即使当前没有直接放在根目录的文件，也保留“项目根目录”入口；
+  // 这样只有 mission-input/mission-output 子目录时也能看到项目根目录。
+  if (!groups.has("")) groups.set("", []);
   const dirs = [...groups.keys()].sort((a, b) => {
     if (!a) return -1;
     if (!b) return 1;
@@ -1741,7 +1744,10 @@ async function showTree(){
   for (const dir of dirs){
     const groupId = "folder-" + (dir || "root").replace(/[^a-zA-Z0-9_-]/g, "_");
     const open = !!dir; // 根目录通常是工作杂项,任务/ID 子目录默认展开
-    html += `<section class="tree-folder"><button class="tree-folder-head" data-folder="${esc(groupId)}" aria-expanded="${open}"><span class="arrow">▶</span><span>📁 ${esc(dir || "项目根目录")}${dir ? "/" : ""}</span><span class="tree-count">(${groups.get(dir).length})</span></button><div class="tree-folder-body${open ? "" : " collapsed"}" data-folder-body="${esc(groupId)}">`;
+    const folderLabel = dir === "mission-input" ? "📥 输入文件" :
+      dir === "mission-output" ? "📤 输出文件" :
+      `📁 ${esc(dir || "项目根目录")}${dir ? "/" : ""}`;
+    html += `<section class="tree-folder"><button class="tree-folder-head" data-folder="${esc(groupId)}" aria-expanded="${open}"><span class="arrow">▶</span><span>${folderLabel}</span><span class="tree-count">(${groups.get(dir).length})</span></button><div class="tree-folder-body${open ? "" : " collapsed"}" data-folder-body="${esc(groupId)}">`;
     for (const f of groups.get(dir)){
       const i = f.path.lastIndexOf("/");
       const name = i < 0 ? f.path : f.path.slice(i + 1);

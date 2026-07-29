@@ -885,6 +885,75 @@ def ensure_mission_reference_files(cwd):
     return result
 
 
+def mission_output_dir(cwd: str) -> str:
+    """Return the stable local output folder for an ontology mission."""
+    return os.path.join(cwd, "mission-output")
+
+
+def ensure_mission_output_files(cwd, context=None) -> list[str]:
+    """Keep mission result files in one visible ``mission-output`` folder.
+
+    Older turns were instructed with the remote ``outputPrefix`` and could
+    therefore create files below ``ontology/.../agent-output`` in the local
+    project.  The remote prefix is only an object-storage destination; local
+    files need a stable, selectable location.  Move known result files from
+    legacy nested paths into ``mission-output`` while retaining their basename
+    (the callback protocol is filename-based).
+    """
+    output_dir = mission_output_dir(cwd)
+    os.makedirs(output_dir, exist_ok=True)
+    if not isinstance(context, dict):
+        return []
+    expected = normalize_expected_files(context.get("expectedFiles"))
+    task_type = normalize_task_type(context.get("taskType") or "")
+    if task_type == "integration":
+        expected.add("ok.csv")
+    if not expected:
+        return []
+    moved = []
+    skip_dirs = set(_SKIP_DIRS) | {"mission-input", "mission-output"}
+    candidates = {}
+    try:
+        for root, dirs, files in os.walk(cwd):
+            dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
+            for fn in files:
+                if fn not in expected:
+                    continue
+                source = os.path.join(root, fn)
+                if os.path.islink(source) or not os.path.isfile(source):
+                    continue
+                # Prefer an explicit agent-output path over an unrelated file
+                # with the same expected basename elsewhere in the project.
+                rel = os.path.relpath(source, cwd).replace("\\", "/")
+                rank = (0 if "agent-output" in rel else 1,
+                        0 if "modeling-tasks" in rel or "integration-tasks" in rel else 1,
+                        len(rel))
+                if fn not in candidates or rank < candidates[fn][0]:
+                    candidates[fn] = (rank, source)
+    except OSError:
+        return moved
+    for fn, (_, source) in candidates.items():
+        target = os.path.join(output_dir, fn)
+        if os.path.realpath(source) == os.path.realpath(target):
+            continue
+        try:
+            if os.path.isfile(target):
+                # Keep the newer copy when both legacy and normalized paths
+                # exist, then remove the duplicate legacy result.
+                if os.path.getmtime(source) > os.path.getmtime(target):
+                    os.replace(source, target)
+                else:
+                    os.unlink(source)
+            else:
+                os.replace(source, target)
+            moved.append(os.path.relpath(target, cwd).replace("\\", "/"))
+        except OSError:
+            # A failed normalization must not make the task itself fail; the
+            # original file remains available for the normal preview path.
+            continue
+    return moved
+
+
 def load_private_goals_and_rules(task_type, context=None):
     """只读取已离线生成的 Markdown；服务运行时绝不解析 DOCX/XLSX。"""
     text = load_static_knowledge(STATIC_KNOWLEDGE_DIR, task_type, context)
@@ -941,6 +1010,9 @@ def build_mission_output_instructions(context):
     allowed_text = ", ".join(allowed_elements) or "（execution-context 未提供，必须先获取后再生成）"
     return (
         "最终回复格式是任务交接协议，必须遵守：完成任务后，最终回复的最后一段必须严格包含以下结构；"
+        "本地项目中的所有结果文件必须写入项目根目录的 mission-output/ 文件夹（例如 "
+        "mission-output/business_objects.csv）。execution-context.outputPrefix 只是后续上传到对象存储的远程路径，"
+        "不能把 ontology/.../agent-output 作为本地项目中的嵌套工作目录，也不能把结果文件放进 mission-input/。"
         "先确认文件确实存在，再统计 CSV 去掉表头后的实际数据行数，禁止使用预计数量或编造数量。\n\n"
         f"本任务 execution-context 允许的解析要素仅为：{allowed_text}。只能生成、上传和回写这些要素对应的文件；"
         "未选中的解析类型严禁创建或上传（例如未包含 RULE 时绝对不能生成 business_rules.csv），不能根据文件名自行扩大范围。\n\n"
@@ -1422,9 +1494,14 @@ class Task:
             return
         self.mission_context = context
         self._mission_context_fingerprint = fingerprint
-        safe = _mask_mission_secrets(json.loads(json.dumps(context, ensure_ascii=False, default=str)))
         effective_task_type = normalize_task_type(
             context.get("taskType") or self.task_type or "")
+        # Keep local result files separate from the remote ontology output
+        # prefix and from input/reference material before exposing the project
+        # file list to the Agent and the web preview.
+        output_context = {**context, "taskType": effective_task_type}
+        ensure_mission_output_files(self.cwd, output_context)
+        safe = _mask_mission_secrets(json.loads(json.dumps(context, ensure_ascii=False, default=str)))
         if effective_task_type in ("modeling", "integration"):
             # execution-context 有时不回显 taskType，但任务入口已明确模式；不能因此漏掉整合规则。
             safe["taskType"] = effective_task_type
@@ -1440,6 +1517,7 @@ class Task:
         elif effective_task_type == "modeling":
             safe["agentModelingInstructions"] = build_modeling_instructions(safe)
         safe["agentOutputInstructions"] = build_mission_output_instructions(safe)
+        safe["agentOutputDirectory"] = "mission-output"
         db_config_path = write_mission_database_config(context, self.cwd)
         if db_config_path:
             verify_path = ensure_database_helpers(self.cwd, db_config_path)
@@ -1642,6 +1720,8 @@ class Task:
             finally:
                 self._rec = None
                 flush_text()
+                if self.mission_context:
+                    ensure_mission_output_files(self.cwd, self.mission_context)
                 self.updated = time.time()
                 try: persist_tasks()
                 except Exception: pass
