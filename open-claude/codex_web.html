@@ -87,11 +87,11 @@ input,textarea,select{font-family:inherit;color:inherit}
 #sendbtn,#sendbtn2{margin-left:auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none;transition:width .15s,border-radius .15s}
 #sendbtn.start-mode,#sendbtn2.start-mode{width:auto;min-width:0;padding:0 14px;border-radius:17px;font-size:13px;font-weight:600;white-space:nowrap}
 #sendbtn:disabled,#sendbtn2:disabled{opacity:.3;cursor:default}
-.model-indicator{width:auto;max-width:150px;height:24px;border:0;border-radius:0;display:flex;align-items:center;justify-content:center;gap:4px;color:var(--dim);font-size:10px;font-weight:500;line-height:1;flex:none;margin-left:auto;padding:2px 3px;background:transparent;cursor:help;overflow:hidden;white-space:nowrap}
+.model-indicator{width:auto;max-width:150px;height:24px;border:0;border-radius:7px;display:flex;align-items:center;justify-content:center;gap:4px;color:var(--dim);font-size:10px;font-weight:500;line-height:1;flex:none;margin-left:auto;padding:2px 5px;background:transparent;cursor:pointer;overflow:hidden;white-space:nowrap}
 .model-indicator .model-short{max-width:112px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .model-indicator .model-caret{font-size:10px;color:var(--dimmer);line-height:1}
 .model-indicator + #sendbtn,.model-indicator + #sendbtn2{margin-left:0}
-.model-indicator:hover{background:#26262b}
+.model-indicator:hover{background:#e5e7eb;color:#475569}
 
 /* dropdown popovers */
 .pop{position:fixed;z-index:60;background:#212125;border:1px solid var(--border);border-radius:10px;padding:6px;min-width:210px;max-height:320px;overflow-y:auto;box-shadow:0 12px 32px rgba(0,0,0,.5);display:none}
@@ -1193,7 +1193,7 @@ function placePop(pop, anchor){
 }
 function closePops(){ document.querySelectorAll(".pop").forEach(p => p.classList.remove("open")); }
 document.addEventListener("click", e => {
-  if (!e.target.closest(".pop") && !e.target.closest(".cbtn") && !e.target.closest(".menu-trigger")) closePops();
+  if (!e.target.closest(".pop") && !e.target.closest(".cbtn") && !e.target.closest(".menu-trigger") && !e.target.closest(".model-indicator")) closePops();
 });
 
 function updateProjLabel(){ $("projlabel").textContent = SELECTED_PROJECT || "选择项目"; }
@@ -1759,6 +1759,9 @@ $("newtask").onclick = newTaskAction;
 $("sidebar-settings").onclick = e => { e.stopPropagation(); openSettingsPop(); };
 $("attach1").onclick = $("attach2").onclick = e => { e.stopPropagation(); $("fpick").click(); };
 $("projbtn").onclick = e => { e.stopPropagation(); closePops(); openProjPop(); };
+for (const id of ["modelhint", "modelhint2"]){
+  $(id).onclick = e => { e.stopPropagation(); closePops(); openModelPop($(id)); };
+}
 $("settings-model").onclick = e => { e.stopPropagation(); closePops(); openModelPop($("settings-model")); };
 $("settings-param").onclick = e => { e.stopPropagation(); closePops(); fillParamPanel(); placePop($("pop-param"), $("settings-param")); };
 
