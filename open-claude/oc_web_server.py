@@ -40,6 +40,7 @@ from open_claude.config import (
     get_max_tokens,
     get_model,
     get_model_provider,
+    validate_inference_params,
 )
 from open_claude.profile import load_profile
 from open_claude.sessions import SessionStore
@@ -112,18 +113,16 @@ class Bridge:
         """Patch inference parameters; only provided keys are changed."""
         with self.lock:
             p = self.conv.profile
-            if "temperature" in data:
-                v = data["temperature"]
-                p.temperature = None if v in (None, "") else max(0.0, min(2.0, float(v)))
-            if "max_tokens" in data:
-                v = data["max_tokens"]
-                p.max_tokens = None if v in (None, "") else max(1, int(v))
-            if "thinking" in data:
-                p.thinking = bool(data["thinking"])
-            if "thinking_budget" in data:
-                v = data["thinking_budget"]
-                if v not in (None, ""):
-                    p.thinking_budget = max(1024, int(v))
+            updated = validate_inference_params(data, {
+                "temperature": p.temperature,
+                "max_tokens": p.max_tokens,
+                "thinking": p.thinking,
+                "thinking_budget": p.thinking_budget,
+            })
+            p.temperature = updated["temperature"]
+            p.max_tokens = updated["max_tokens"]
+            p.thinking = updated["thinking"]
+            p.thinking_budget = updated["thinking_budget"]
         return self.params()
 
     def reset(self):

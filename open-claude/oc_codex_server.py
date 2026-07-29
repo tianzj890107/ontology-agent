@@ -68,6 +68,7 @@ from open_claude.config import (
     get_model_provider,
     load_config,
     resolve_model,
+    validate_inference_params,
 )
 from open_claude.ontology_knowledge import load_static_knowledge, normalize_task_type
 
@@ -75,6 +76,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(SCRIPT_DIR, "codex_web.html")
 SANDBOX_DIR = os.path.join(SCRIPT_DIR, "sandbox")
 STATIC_KNOWLEDGE_DIR = os.path.join(SCRIPT_DIR, "..", "agent_knowledge")
+MAX_JSON_BODY_BYTES = 32 * 1024 * 1024
+MAX_MISSION_ENTRY_BYTES = 1 * 1024 * 1024
 
 # Project names: letters/digits/CJK plus - _ . (no separators, no traversal).
 _PROJECT_NAME_RE = re.compile(r"^[\w\-.一-鿿]{1,64}$")
@@ -2127,18 +2130,15 @@ def current_params() -> dict:
 
 
 def set_params(data: dict) -> dict:
-    if "temperature" in data:
-        v = data["temperature"]
-        PARAM_DEFAULTS["temperature"] = None if v in (None, "") else max(0.0, min(2.0, float(v)))
-    if "max_tokens" in data:
-        v = data["max_tokens"]
-        PARAM_DEFAULTS["max_tokens"] = None if v in (None, "") else max(1, int(v))
-    if "thinking" in data:
-        PARAM_DEFAULTS["thinking"] = bool(data["thinking"])
-    if "thinking_budget" in data:
-        v = data["thinking_budget"]
-        if v not in (None, ""):
-            PARAM_DEFAULTS["thinking_budget"] = max(1024, int(v))
+    """Validate and apply inference parameters atomically.
+
+    The previous implementation mutated the global defaults as it parsed each
+    field.  A malformed later field could therefore leave a partially applied
+    request (and ``NaN`` could reach an SDK).  Parse into a copy first, then
+    update live conversations only after every supplied value is valid.
+    """
+    updated = validate_inference_params(data, PARAM_DEFAULTS)
+    PARAM_DEFAULTS.update(updated)
     with TASKS_LOCK:
         for task in TASKS.values():
             p = task.conv.profile
@@ -2165,6 +2165,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    @staticmethod
+    def _requires_auth(path: str) -> bool:
+        """Return whether a route can expose task/project data.
+
+        ``/p/...`` serves raw files and must have the same authentication gate
+        as the JSON APIs.  Previously only ``/api/*`` was checked, so anyone
+        who guessed a project/file URL could bypass the UI-level permission
+        boundary.
+        """
+        return (path.startswith("/api/") or path.startswith("/p/")
+                or path in ("/mission", "/merge"))
 
     def _current_user(self):
         if hasattr(self, "_user_id"): return self._user_id
@@ -2223,7 +2235,7 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0) or 0)
         except (TypeError, ValueError):
             return {}
-        if not length:
+        if length <= 0 or length > MAX_JSON_BODY_BYTES:
             return {}
         raw = self.rfile.read(length)
         try:
@@ -2238,9 +2250,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         qs = parse_qs(parsed.query)
-        if path.startswith("/api/") and not self._require_user():
-            return
-        if path in ("/mission", "/merge") and not self._require_user():
+        if self._requires_auth(path) and not self._require_user():
             return
         if path in ("/", "/index.html"):
             self._serve_html()
@@ -2323,9 +2333,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path.startswith("/api/") and not self._require_user():
-            return
-        if path in ("/mission", "/merge") and not self._require_user():
+        if self._requires_auth(path) and not self._require_user():
             return
         if path == "/mission":
             # 专属任务处理模式入口:POST repositoryId + taskCode(JSON 或表单),
@@ -2763,8 +2771,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _read_mission_post(self) -> dict:
         """读取 POST /mission 的 body:支持 JSON 与表单编码两种。"""
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        if not length:
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            return {}
+        if length <= 0 or length > MAX_MISSION_ENTRY_BYTES:
             return {}
         raw = self.rfile.read(length)
         ctype = (self.headers.get("Content-Type") or "").lower()
@@ -2793,7 +2804,7 @@ class Handler(BaseHTTPRequestHandler):
         if repo and not re.fullmatch(r"[A-Za-z0-9_\-]{1,128}", repo):
             self._send_json({"error": "本体库 ID 格式非法"}, status=400)
             return
-        if not _TASK_CODE_RE.match(code):
+        if not _TASK_CODE_RE.fullmatch(code):
             self._send_json({"error": "taskCode 格式非法"}, status=400)
             return
         # 文档中唯一按 taskCode 取任务信息的接口是 execution-context;智能建模与
@@ -2888,7 +2899,7 @@ class Handler(BaseHTTPRequestHandler):
             if key: keys[provider] = key
             else: keys.pop(provider, None)
             cfg["api_keys"] = keys
-            get_config_path().write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            _write_private_json(str(get_config_path()), cfg)
         except Exception as e:
             self._send_json({"error": f"保存失败: {e}"}, status=500)
             return

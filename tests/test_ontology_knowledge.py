@@ -17,10 +17,31 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-claude"))
 
 from open_claude.ontology_knowledge import knowledge_filename, load_static_knowledge, normalize_task_type
+from open_claude import config as open_claude_config
 from open_claude.tools import execute_read
 
 
 class StaticKnowledgeContractTests(unittest.TestCase):
+    def test_malformed_config_and_token_limit_fallbacks(self):
+        original_path = open_claude_config.get_config_path
+        original_max = os.environ.get("CLAUDE_MAX_TOKENS")
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text("[1, 2, 3]", encoding="utf-8")
+            open_claude_config.get_config_path = lambda: config_path
+            try:
+                self.assertEqual(open_claude_config.load_config(), {})
+                os.environ["CLAUDE_MAX_TOKENS"] = "not-a-number"
+                self.assertEqual(open_claude_config.get_max_tokens(), 32768)
+                os.environ["CLAUDE_MAX_TOKENS"] = "-1"
+                self.assertEqual(open_claude_config.get_max_tokens(), 32768)
+            finally:
+                open_claude_config.get_config_path = original_path
+                if original_max is None:
+                    os.environ.pop("CLAUDE_MAX_TOKENS", None)
+                else:
+                    os.environ["CLAUDE_MAX_TOKENS"] = original_max
+
     def test_task_modes_select_fixed_files(self):
         self.assertEqual(knowledge_filename("integration"), "integration/all_sources.md")
         self.assertEqual(normalize_task_type("DOCUMENT_MODELING"), "modeling")
@@ -124,6 +145,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         config.get_model_provider = lambda model: "test"
         config.load_config = lambda: {}
         config.resolve_model = lambda model: model
+        config.validate_inference_params = open_claude_config.validate_inference_params
         for name, module in zip(names, (repl, profile, api, config)):
             sys.modules[name] = module
         try:
@@ -132,6 +154,20 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             server = importlib.util.module_from_spec(spec)
             assert spec.loader is not None
             spec.loader.exec_module(server)
+            self.assertTrue(server.Handler._requires_auth("/api/meta"))
+            self.assertTrue(server.Handler._requires_auth("/p/project/private.csv"))
+            self.assertFalse(server.Handler._requires_auth("/"))
+            original_params = dict(server.PARAM_DEFAULTS)
+            try:
+                with self.assertRaises(ValueError):
+                    server.set_params({"temperature": 1.0, "max_tokens": "not-a-number"})
+                self.assertEqual(server.PARAM_DEFAULTS, original_params)
+                self.assertEqual(server.set_params({"temperature": "1.25", "thinking": "false"})["temperature"], 1.25)
+                with self.assertRaises(ValueError):
+                    server.set_params({"temperature": "nan"})
+            finally:
+                server.PARAM_DEFAULTS.clear()
+                server.PARAM_DEFAULTS.update(original_params)
             self.assertIn("执行审计摘要", server.build_modeling_instructions({}))
             self.assertIn("规则文件名和章节标题", server.build_integration_instructions({}))
             self.assertEqual(
@@ -161,6 +197,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertEqual(handler._mission_from("1", "RM123456789", "modeling")["taskCode"],
                              "RM123456789")
             self.assertIsNone(handler._mission_from("1", "</script><script>alert(1)</script>", "modeling"))
+            self.assertIsNone(handler._mission_from("1", "RM123456789/extra", "modeling"))
             # Mission requests no longer accept a task-code-shaped project
             # directory.  The server resolves the shared workspace from
             # persisted task metadata (or creates a stable repository

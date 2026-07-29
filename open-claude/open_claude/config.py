@@ -1,6 +1,7 @@
 """Configuration management for Open Claude."""
 
 import json
+import math
 import os
 import platform
 import re
@@ -65,7 +66,8 @@ def load_config() -> dict[str, Any]:
     path = get_config_path()
     if path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
         except (json.JSONDecodeError, OSError):
             pass
     return {}
@@ -283,8 +285,62 @@ def get_model() -> str:
 def get_max_tokens() -> int:
     val = os.environ.get("CLAUDE_MAX_TOKENS")
     if val:
-        return int(val)
+        try:
+            parsed = int(val)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            pass
     return 32768
+
+
+def validate_inference_params(data: dict, current: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Validate an inference-parameter patch without mutating the caller.
+
+    Both web adapters expose the same parameter contract.  Keeping the parser
+    here prevents one surface from accepting values (for example ``NaN`` or a
+    string ``"false"``) that the other surface rejects.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("参数必须是 JSON 对象")
+    updated = dict(current or {})
+    if "temperature" in data:
+        value = data["temperature"]
+        if value in (None, ""):
+            updated["temperature"] = None
+        else:
+            value = float(value)
+            if not math.isfinite(value) or not 0.0 <= value <= 2.0:
+                raise ValueError("temperature 必须是 0 到 2 之间的有限数字")
+            updated["temperature"] = value
+    if "max_tokens" in data:
+        value = data["max_tokens"]
+        if value in (None, ""):
+            updated["max_tokens"] = None
+        else:
+            value = int(value)
+            if value < 1:
+                raise ValueError("max_tokens 必须是正整数")
+            updated["max_tokens"] = value
+    if "thinking" in data:
+        value = data["thinking"]
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                value = True
+            elif normalized in {"false", "0", "no", "off"}:
+                value = False
+            else:
+                raise ValueError("thinking 必须是布尔值")
+        elif not isinstance(value, bool):
+            raise ValueError("thinking 必须是布尔值")
+        updated["thinking"] = value
+    if "thinking_budget" in data and data["thinking_budget"] not in (None, ""):
+        value = int(data["thinking_budget"])
+        if value < 1024:
+            raise ValueError("thinking_budget 不能小于 1024")
+        updated["thinking_budget"] = value
+    return updated
 
 
 def get_environment_info() -> dict[str, str]:
