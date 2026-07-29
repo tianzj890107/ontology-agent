@@ -196,6 +196,13 @@ def external_user_id(headers):
     return _cookie_user(headers)
 
 
+def _local_dev_auth_enabled() -> bool:
+    """Allow direct server testing only when explicitly enabled by .env."""
+    return os.environ.get("ONTOLOGY_ALLOW_LOCAL_DEV_AUTH", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 def _read_json_file(path, default):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -2007,6 +2014,14 @@ class Handler(BaseHTTPRequestHandler):
     def _current_user(self):
         if hasattr(self, "_user_id"): return self._user_id
         self._user_id = external_user_id(self.headers)
+        # Direct access to the development server has no platform proxy to
+        # attach Authorization/X-User-Id.  When explicitly enabled, issue a
+        # random browser-scoped identity so refreshes remain usable without
+        # merging different browsers into one shared user.  Production keeps
+        # this disabled and requires the external platform login state.
+        if not self._user_id and _local_dev_auth_enabled():
+            self._user_id = _safe_user_id("local:" + secrets.token_urlsafe(18))
+            self._auth_cookie_to_set = _signed_cookie(self._user_id)
         # A platform JWT/header is only needed on the mission entry request;
         # retain the verified subject in a signed, HttpOnly browser cookie.
         if self._user_id and not _cookie_user(self.headers):
@@ -2044,7 +2059,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         cookie = getattr(self, "_auth_cookie_to_set", "")
         if cookie:
-            self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; HttpOnly; SameSite=Lax")
+            self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax")
         self.end_headers()
         self.wfile.write(body)
 
@@ -2736,7 +2751,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         cookie = getattr(self, "_auth_cookie_to_set", "")
         if cookie:
-            self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; HttpOnly; SameSite=Lax")
+            self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax")
         self.end_headers()
         self.wfile.write(body)
 
@@ -2770,7 +2785,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         cookie = getattr(self, "_auth_cookie_to_set", "")
         if cookie:
-            self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; HttpOnly; SameSite=Lax")
+            self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax")
         self.end_headers()
 
         def emit(obj):
