@@ -1637,6 +1637,15 @@ function missionExpectedFiles(){
   return value ? (String(value).match(/[A-Za-z][A-Za-z0-9_-]*\.csv/g) || []) : [];
 }
 
+function isInternalMissionInputFile(path){
+  const parts = String(path || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts[0] !== "mission-input") return false;
+  const name = parts[parts.length - 1] || "";
+  // Excel 工作表拆分 CSV 和 manifest 是 Agent 的内部解析视图，
+  // 保留在磁盘供 Agent 读取，但不在用户文件树中重复展示。
+  return name === "manifest.json" || parts.slice(1).some(p => p.endsWith("-sheets"));
+}
+
 /* Agent 消息里经常只返回输出文件名,而实际文件位于任务输出目录。
  * 预览首次 404 时,在当前项目文件清单中按完整路径/后缀/唯一文件名兜底定位。 */
 async function findPreviewPath(proj, rel){
@@ -1701,7 +1710,7 @@ async function showTree(){
   $("pvdl").onclick = downloadSelected;
   $("pvtitle").textContent = proj + " / 项目文件";
   const j = await api(filesAPIPath(proj));
-  const files = j.files || [];
+  const files = (j.files || []).filter(f => !isInternalMissionInputFile(f.path));
   const body = $("pvbody");
   const projectIsEmpty = !files.length;
   if (projectIsEmpty) $("pvdl").style.display = "none";
