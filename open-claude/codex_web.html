@@ -42,6 +42,8 @@ input,textarea,select{font-family:inherit;color:inherit}
 @keyframes pulse{50%{opacity:.35}}
 .chip{border:1px solid var(--border);border-radius:4px;padding:0 5px;font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
 #sandboxnote{padding:10px 16px;border-top:1px solid var(--border);font-size:10.5px;color:var(--dimmer);line-height:1.5;word-break:break-all}
+#sidebar-settings{margin:8px 12px;padding:9px 12px;border:1px solid var(--border);border-radius:9px;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--dim);text-align:left}
+#sidebar-settings:hover{background:#202024;color:var(--text)}
 .empty-side{padding:14px 16px;color:var(--dimmer);font-size:12px}
 
 /* ============ main ============ */
@@ -85,6 +87,9 @@ input,textarea,select{font-family:inherit;color:inherit}
 #sendbtn,#sendbtn2{margin-left:auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#111;display:flex;align-items:center;justify-content:center;font-size:15px;flex:none;transition:width .15s,border-radius .15s}
 #sendbtn.start-mode,#sendbtn2.start-mode{width:auto;min-width:0;padding:0 14px;border-radius:17px;font-size:13px;font-weight:600;white-space:nowrap}
 #sendbtn:disabled,#sendbtn2:disabled{opacity:.3;cursor:default}
+.model-indicator{width:24px;height:24px;border:1px solid var(--border);border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:11px;font-weight:700;line-height:1;flex:none;margin-left:auto;background:transparent;cursor:default}
+.model-indicator + #sendbtn,.model-indicator + #sendbtn2{margin-left:0}
+.model-indicator:hover{background:#26262b}
 
 /* dropdown popovers */
 .pop{position:fixed;z-index:60;background:#212125;border:1px solid var(--border);border-radius:10px;padding:6px;min-width:210px;max-height:320px;overflow-y:auto;box-shadow:0 12px 32px rgba(0,0,0,.5);display:none}
@@ -384,6 +389,7 @@ body{background:var(--bg);color:var(--text)}
     </button>
     <div id="side-missionbody"><div class="mi-loading">正在获取任务信息…</div></div>
   </div>
+  <button id="sidebar-settings" class="menu-trigger" title="模型与参数设置"><span>⚙</span><span>设置</span></button>
   <div id="sandboxnote">沙箱模式:智能体拥有完整工具(命令、读写、搜索),但只能操作 <b id="sbpath">sandbox/</b> 下的项目文件夹。</div>
 </div>
 
@@ -401,9 +407,8 @@ body{background:var(--bg);color:var(--text)}
         <button class="cbtn compactable" data-compact-level="5" id="attach1" title="上传文件到项目"><span class="btn-icon">📎</span><span class="btn-label">上传文件到项目</span></button>
         <button class="cbtn compactable" data-compact-level="6" id="projbtn"><span class="btn-icon">📁</span><span id="projlabel" class="btn-label">选择项目</span> <span class="caret">▼</span></button>
         <button class="cbtn compactable" data-compact-level="1" id="filesbtn0" title="浏览项目文件"><span class="btn-icon">📂</span><span class="btn-label">文件</span></button>
-        <button class="cbtn compactable" data-compact-level="2" id="modelbtn"><span class="btn-icon">⚙</span><span id="modellabel" class="btn-label">模型</span> <span class="caret">▼</span></button>
-        <button class="cbtn compactable" data-compact-level="4" id="parambtn"><span class="btn-icon">⚗</span><span class="btn-label">LLM模型参数</span></button>
         <button class="cbtn auto-btn compactable" data-compact-level="3" id="autook" title="打开后自动跳过“需要确认”,直接允许执行"><span class="btn-icon">⚡</span><span class="btn-label">自动确认:关</span></button>
+        <span class="model-indicator" id="modelhint" title="当前大语言模型">Q</span>
         <button id="sendbtn" title="开始任务">↑</button>
       </div>
     </div>
@@ -431,9 +436,8 @@ body{background:var(--bg);color:var(--text)}
         <div class="chips" id="chips2"></div>
         <div class="crow">
           <button class="cbtn compactable" data-compact-level="4" id="attach2" title="上传文件到项目"><span class="btn-icon">📎</span><span class="btn-label">上传文件到项目</span></button>
-          <button class="cbtn compactable" data-compact-level="1" id="modelbtn2"><span class="btn-icon">⚙</span><span id="modellabel2" class="btn-label">模型</span> <span class="caret">▼</span></button>
-          <button class="cbtn compactable" data-compact-level="3" id="parambtn2"><span class="btn-icon">⚗</span><span class="btn-label">LLM模型参数</span></button>
           <button class="cbtn auto-btn compactable" data-compact-level="2" id="autook2" title="打开后自动跳过“需要确认”,直接允许执行"><span class="btn-icon">⚡</span><span class="btn-label">自动确认:关</span></button>
+          <span class="model-indicator" id="modelhint2" title="当前大语言模型">Q</span>
           <button id="sendbtn2" title="发送">↑</button>
         </div>
       </div>
@@ -462,6 +466,11 @@ body{background:var(--bg);color:var(--text)}
 
 <!-- popovers -->
 <div class="pop" id="pop-proj"></div>
+<div class="pop" id="pop-settings" style="min-width:240px">
+  <div class="head">设置</div>
+  <button class="item setting-item" id="settings-model"><span class="chk">◉</span><span>大语言模型</span><span id="settings-model-label" style="margin-left:auto;color:var(--dimmer);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span><span>›</span></button>
+  <button class="item setting-item" id="settings-param"><span class="chk">⚗</span><span>大语言模型参数</span><span>›</span></button>
+</div>
 <div class="pop" id="pop-model"></div>
 <div class="pop" id="pop-param" style="min-width:270px">
   <div class="head">推理参数(全局生效)</div>
@@ -1180,7 +1189,7 @@ function placePop(pop, anchor){
 }
 function closePops(){ document.querySelectorAll(".pop").forEach(p => p.classList.remove("open")); }
 document.addEventListener("click", e => {
-  if (!e.target.closest(".pop") && !e.target.closest(".cbtn")) closePops();
+  if (!e.target.closest(".pop") && !e.target.closest(".cbtn") && !e.target.closest(".menu-trigger")) closePops();
 });
 
 function updateProjLabel(){ $("projlabel").textContent = SELECTED_PROJECT || "选择项目"; }
@@ -1206,8 +1215,19 @@ function openProjPop(){
 function updateModelLabels(){
   const cur = (META.models || []).find(m => m.id === META.model);
   const label = cur ? cur.label : META.model;
-  $("modellabel").textContent = label;
-  $("modellabel2").textContent = label;
+  const provider = String(META.provider || (cur && cur.provider) || "model").toLowerCase();
+  const initial = provider === "qwen" ? "Q" : provider === "anthropic" ? "A" : provider.slice(0,1).toUpperCase();
+  for (const id of ["modelhint", "modelhint2"]){
+    const el = $(id);
+    if (el){ el.textContent = initial || "·"; el.title = `${provider} · ${label || "当前模型"}`; }
+  }
+  const settingsLabel = $("settings-model-label");
+  if (settingsLabel) settingsLabel.textContent = label || "未选择";
+}
+function openSettingsPop(){
+  closePops();
+  updateModelLabels();
+  placePop($("pop-settings"), $("sidebar-settings"));
 }
 function openModelPop(anchor){
   const pop = $("pop-model");
@@ -1727,12 +1747,11 @@ for (const id of ["input", "input2"]){
 $("sendbtn").onclick = handleHomeSend;
 $("sendbtn2").onclick = handleTaskSend;
 $("newtask").onclick = newTaskAction;
+$("sidebar-settings").onclick = e => { e.stopPropagation(); openSettingsPop(); };
 $("attach1").onclick = $("attach2").onclick = e => { e.stopPropagation(); $("fpick").click(); };
 $("projbtn").onclick = e => { e.stopPropagation(); closePops(); openProjPop(); };
-$("modelbtn").onclick = e => { e.stopPropagation(); closePops(); openModelPop($("modelbtn")); };
-$("modelbtn2").onclick = e => { e.stopPropagation(); closePops(); openModelPop($("modelbtn2")); };
-$("parambtn").onclick = e => { e.stopPropagation(); closePops(); fillParamPanel(); placePop($("pop-param"), $("parambtn")); };
-$("parambtn2").onclick = e => { e.stopPropagation(); closePops(); fillParamPanel(); placePop($("pop-param"), $("parambtn2")); };
+$("settings-model").onclick = e => { e.stopPropagation(); closePops(); openModelPop($("settings-model")); };
+$("settings-param").onclick = e => { e.stopPropagation(); closePops(); fillParamPanel(); placePop($("pop-param"), $("settings-param")); };
 
 /* ---------------- 专属任务处理模式(当前任务信息) ---------------- */
 const MISSION = (window.__MISSION__ && window.__MISSION__.taskCode) ? window.__MISSION__ : null;

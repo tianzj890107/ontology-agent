@@ -120,6 +120,14 @@
 - 主要文件：`open-claude/oc_codex_server.py`、`open-claude/open_claude/api.py`、`open-claude/open_claude/openai_compat.py`、`open-claude/codex_web.html`、`.env.example`。
 - 类型：后端鉴权、密钥存储、模型调用和环境配置变更，需要重启后端；未调用 Qwen API。启用生产鉴权前必须在服务端配置 `ONTOLOGY_JWT_SECRET`，或明确启用 `ONTOLOGY_TRUST_PROXY_AUTH=true` 并由反向代理提供 `X-User-Id`。
 
+### 7. 模型与参数入口调整
+
+- 输入对话框移除“大语言模型”和“大语言模型参数”两个独立按钮，避免工具栏过于拥挤。
+- 左侧栏新增“设置”入口，模型选择和参数面板统一从这里打开，交互更接近常见聊天产品布局。
+- 输入框底部仅保留当前模型的小型提示图标，并靠右放置在发送按钮左侧；图标悬停可查看完整模型和提供方名称。
+- 主要文件：`open-claude/codex_web.html`。
+- 类型：前端静态资源变更，刷新浏览器即可生效；无需重启后端。
+
 ## 当前最终版本
 
 - Git 分支：`20260727`
