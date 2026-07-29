@@ -101,6 +101,8 @@ input,textarea,select{font-family:inherit;color:inherit}
 .pop .item .chk{width:14px;color:var(--green);flex:none}
 .pop .sep{height:1px;background:var(--border);margin:5px 4px}
 .pop .head{padding:6px 10px 4px;font-size:11px;color:var(--dimmer)}
+.pop .model-param-item{position:sticky;bottom:-6px;margin:0 -6px -6px;padding:9px 16px;background:var(--panel);border-top:1px solid var(--border);border-radius:0 0 9px 9px;color:var(--dim);z-index:1}
+.pop .model-param-item:hover{background:#f1f5f9;color:var(--text)}
 
 /* params popover */
 .prow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 10px;font-size:12.5px}
@@ -381,7 +383,7 @@ body{background:var(--bg);color:var(--text)}
     <div class="tag">本体智能体</div>
   </div>
   <button id="newtask">✚&nbsp; 新任务</button>
-  <button id="sidebar-settings" class="menu-trigger" title="模型与参数设置"><span>⚙</span><span>设置</span></button>
+  <button id="sidebar-settings" class="menu-trigger" title="大语言模型设置"><span>⚙</span><span>大语言模型设置</span></button>
   <div class="history-section">
     <button class="sidebar-section-toggle" id="history-toggle" aria-expanded="false">历史任务 <span class="arrow">⌄</span></button>
     <div id="tasklist" class="collapsed"><div class="empty-side">还没有任务。<br>选择一个项目开始吧。</div></div>
@@ -1242,6 +1244,7 @@ function openModelPop(anchor){
   for (const m of (META.models || [])){
     h += `<div class="item" data-m="${esc(m.id)}"><span class="chk">${m.id === META.model ? "✓" : ""}</span>${esc(m.label)}</div>`;
   }
+  h += '<div class="sep"></div><div class="item model-param-item" id="model-param-item"><span class="chk">⚗</span><span>模型参数选择</span><span style="margin-left:auto">›</span></div>';
   pop.innerHTML = h;
   pop.querySelectorAll(".item[data-m]").forEach(el => el.onclick = async () => {
     const j = await api("/api/model", {method:"POST", headers:{"Content-Type":"application/json"},
@@ -1253,6 +1256,13 @@ function openModelPop(anchor){
     }
     updateModelLabels(); closePops();
   });
+  const paramItem = pop.querySelector("#model-param-item");
+  if (paramItem) paramItem.onclick = e => {
+    e.stopPropagation();
+    fillParamPanel();
+    placePop($("pop-param"), anchor);
+    pop.classList.remove("open");
+  };
   placePop(pop, anchor);
 }
 
