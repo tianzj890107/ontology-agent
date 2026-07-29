@@ -14,9 +14,11 @@ open_claude/tools.py). The CLI is unaffected: it never sets that variable and
 keeps operating on whatever folder it was launched in.
 
 Concepts:
-  - project = a folder under sandbox/ (create new ones from the UI)
-  - task    = one conversation bound to a project (its own Conversation,
-              session recording under <project>/.open-claude via SessionStore)
+  - project = a shared workspace folder under sandbox/ (create new ones from the UI)
+  - task    = one conversation with its own directory under
+              <project>/tasks/<taskCode>/; legacy root-bound tasks remain readable
+  - project-shared/ inside a task contains a copied view of project-level files;
+                task outputs stay in that task's mission-output/
 
 Run:
     python oc_codex_server.py [--port 47313]
@@ -1386,6 +1388,79 @@ def project_path(name: str) -> str | None:
     return p if os.path.isdir(p) else None
 
 
+def mission_workspace_name(repository_id: str) -> str:
+    """Stable workspace name when the external platform sends no projectId."""
+    raw = f"ontology-workspace-{repository_id}"
+    return re.sub(r"[^\w\-.一-鿿]", "_", raw)[:64]
+
+
+def task_workspace_rel(task_code: str) -> str:
+    code = re.sub(r"[^\w\-.一-鿿]", "_", str(task_code or "").strip())
+    return os.path.join("tasks", code)
+
+
+def task_workspace_path(workspace: str, task_code: str, create: bool = True) -> str | None:
+    """Resolve a task directory below a project workspace."""
+    root = project_path(workspace)
+    if not root or not task_code:
+        return None
+    path = os.path.realpath(os.path.join(root, task_workspace_rel(task_code)))
+    if not (path.startswith(root + os.sep) and path != root):
+        return None
+    if create:
+        os.makedirs(path, exist_ok=True)
+    return path if os.path.isdir(path) else None
+
+
+def mission_workspace_for(repository_id: str, requested: str = "",
+                          user_id: str = "") -> str:
+    """Choose a project workspace without treating taskCode as its identity."""
+    requested = str(requested or "").strip()
+    if requested and project_path(requested):
+        return requested
+    with TASKS_LOCK:
+        candidates = []
+        for task in TASKS.values():
+            if str(task.repository_id or "") != str(repository_id or ""):
+                continue
+            if user_id and task.user_id and task.user_id != user_id:
+                continue
+            candidate = str(getattr(task, "workspace", "")
+                            or getattr(task, "project", "") or "").strip()
+            if not candidate or candidate.startswith("mission-"):
+                continue
+            if project_path(candidate):
+                candidates.append((float(task.updated or 0), candidate))
+        if candidates:
+            return max(candidates)[1]
+    name = mission_workspace_name(repository_id)
+    if not project_path(name):
+        os.makedirs(os.path.join(SANDBOX_DIR, name), exist_ok=True)
+    return name
+
+
+def ensure_workspace_shared_files(workspace: str, task_cwd: str) -> list[str]:
+    """Expose top-level project files under the task's public reference scope."""
+    root = project_path(workspace)
+    if not root or not task_cwd:
+        return []
+    shared = os.path.join(task_cwd, "project-shared")
+    os.makedirs(shared, exist_ok=True)
+    copied = []
+    try:
+        for entry in os.scandir(root):
+            if not entry.is_file() or entry.name.startswith(".") or not is_web_visible_file(entry.name):
+                continue
+            target = os.path.join(shared, entry.name)
+            if (not os.path.isfile(target)
+                    or os.path.getmtime(entry.path) > os.path.getmtime(target)):
+                shutil.copy2(entry.path, target)
+            copied.append(os.path.relpath(target, task_cwd).replace("\\", "/"))
+    except OSError:
+        pass
+    return copied
+
+
 _SKIP_DIRS = {".git", ".open-claude", "node_modules", "__pycache__", ".venv", "venv"}
 _WEB_HIDDEN_FILES = {".db_connection.json", ".env", ".env.local", "credentials.json",
                     "db_connection.py", "verify_database.py"}
@@ -1434,6 +1509,11 @@ def resolve_project_file(project: str, rel: str) -> str | None:
     what actually enforces the boundary.
     """
     base = project_path(project)
+    return resolve_file_in_base(base, rel)
+
+
+def resolve_file_in_base(base: str | None, rel: str) -> str | None:
+    """Resolve a relative file path under an already selected task cwd."""
     if not base or not rel:
         return None
     p = os.path.realpath(os.path.join(base, rel))
@@ -1450,10 +1530,13 @@ class Task:
     def __init__(self, project: str, cwd: str, repository_id: str = "",
                  task_code: str = "", task_type: str = "", mission_context: dict | None = None,
                  resume_session_id: str | None = None, task_id: str | None = None,
-                 user_id: str = ""):
+                 user_id: str = "", workspace: str = "",
+                 task_workspace_relpath: str = ""):
         self.id = task_id or uuid.uuid4().hex[:12]
         self.project = project
+        self.workspace = workspace or project
         self.cwd = cwd
+        self.task_workspace_relpath = task_workspace_relpath or ""
         self.repository_id = repository_id
         self.task_code = task_code
         self.task_type = task_type
@@ -1513,6 +1596,24 @@ class Task:
             # execution-context 有时不回显 taskType，但任务入口已明确模式；不能因此漏掉整合规则。
             safe["taskType"] = effective_task_type
         reference_files = ensure_mission_reference_files(self.cwd)
+        shared_files = (ensure_workspace_shared_files(self.workspace, self.cwd)
+                        if self.task_workspace_relpath else [])
+        safe["agentWorkspace"] = {
+            "projectWorkspace": self.workspace,
+            "taskWorkspace": self.task_workspace_relpath or "legacy project root",
+            "taskWorkingDirectory": self.task_workspace_relpath or ".",
+        }
+        safe["agentWorkspaceInstructions"] = (
+            "当前任务工作目录是任务专属目录；项目公共资料只读参考，位于 project-shared/。"
+            "所有新生成、修改和回写准备文件必须留在当前任务目录，尤其是 mission-output/；"
+            "不要把本任务结果写到项目根目录或其他任务目录。"
+        )
+        if shared_files:
+            safe["agentSharedFiles"] = shared_files
+            safe["agentSharedFilesInstructions"] = (
+                "项目公共资料已复制到当前任务的 project-shared/，仅作为项目级参考输入使用；"
+                "当前任务的新增/修改结果必须写入任务自己的 mission-output/，不要覆盖 project-shared/。"
+            )
         if reference_files:
             safe["agentReferenceFiles"] = reference_files
             safe["agentReferenceInstructions"] = (
@@ -1636,7 +1737,9 @@ class Task:
         return {"id": self.id, "project": self.project, "title": self.title,
                 "status": self.status, "created": self.created, "updated": self.updated,
                 "repositoryId": self.repository_id, "taskCode": self.task_code,
-                "taskType": self.task_type, "hasConversation": self.has_conversation()}
+                "taskType": self.task_type, "workspace": self.workspace,
+                "taskWorkspace": self.task_workspace_relpath,
+                "hasConversation": self.has_conversation()}
 
     def has_conversation(self) -> bool:
         """Whether this task has a real user/assistant conversation.
@@ -1835,7 +1938,9 @@ def persist_tasks():
             rows.append({**t.summary(), "log": t.log[-10000:],
                          "missionContext": _mask_mission_secrets(t.mission_context),
                          "sessionId": getattr(t.conv.session, "session_id", ""),
-                         "userId": getattr(t, "user_id", "")})
+                         "userId": getattr(t, "user_id", ""),
+                         "workspace": getattr(t, "workspace", getattr(t, "project", "")),
+                         "taskWorkspace": getattr(t, "task_workspace_relpath", "")})
     # Lock must cover both write and replace. Locking only the temporary-path
     # assignment still allowed concurrent turns to overwrite/corrupt the state.
     with TASKS_STATE_LOCK:
@@ -1866,7 +1971,14 @@ def restore_tasks():
     for row in rows:
         if not isinstance(row, dict): continue
         project = str(row.get("project") or "")
+        workspace = str(row.get("workspace") or project)
+        task_rel = str(row.get("taskWorkspace") or "").replace("\\", "/").strip("/")
         cwd = project_path(project)
+        workspace_root = project_path(workspace)
+        if task_rel and workspace_root:
+            candidate = os.path.realpath(os.path.join(workspace_root, task_rel))
+            if candidate.startswith(workspace_root + os.sep) and os.path.isdir(candidate):
+                cwd = candidate
         if not cwd: continue
         try:
             t = Task(project, cwd, str(row.get("repositoryId") or ""),
@@ -1874,7 +1986,10 @@ def restore_tasks():
                      row.get("missionContext") if isinstance(row.get("missionContext"), dict) else None,
                      resume_session_id=str(row.get("sessionId") or "") or None,
                      task_id=str(row.get("id") or "") or None,
-                     user_id=str(row.get("userId") or ""))
+                     user_id=str(row.get("userId") or ""),
+                     workspace=workspace, task_workspace_relpath=task_rel)
+            if task_rel:
+                ensure_workspace_shared_files(workspace, cwd)
             t.title = str(row.get("title") or "新任务")
             t.created = float(row.get("created") or time.time())
             t.updated = float(row.get("updated") or t.created)
@@ -1894,9 +2009,8 @@ def mission_bound_project(repository_id: str, task_code: str,
                           task_id: str = "", user_id: str = "") -> str | None:
     """Return the only project allowed for an ontology mission.
 
-    New sessions use the deterministic mission-* directory.  Persisted sessions
-    are preferred so older tasks created with a compatible project name keep
-    working after a restart.
+    Persisted task metadata is preferred.  New sessions use one stable workspace
+    per repository, never a task-code-shaped project directory.
     """
     repository_id = str(repository_id or "").strip()
     task_code = str(task_code or "").strip()
@@ -1931,7 +2045,7 @@ def mission_bound_project(repository_id: str, task_code: str,
         return max(matches, key=lambda t: t.updated).project
     if has_foreign_match:
         return None
-    return mission_project_name(repository_id, task_code)
+    return mission_workspace_for(repository_id, "", user_id)
 
 
 def bind_mission_project(project: str, repository_id: str = "",
@@ -1948,15 +2062,56 @@ def bind_mission_project(project: str, repository_id: str = "",
     return bound
 
 
+def mission_task_cwd(project: str, repository_id: str = "", task_code: str = "",
+                     task_id: str = "", user_id: str = "") -> str | None:
+    """Resolve the task workspace directory for mission file operations."""
+    if not (repository_id and task_code):
+        return project_path(project)
+    # ``project`` is retained for API compatibility.  Mission ownership is
+    # determined from repository/task/user metadata, never from a client
+    # supplied task-code-shaped directory name.
+    bound = mission_bound_project(repository_id, task_code, task_id, user_id)
+    if not bound:
+        return None
+    with TASKS_LOCK:
+        if task_id:
+            task = TASKS.get(task_id)
+            if task and task.project == bound and task.repository_id == repository_id and task.task_code == task_code:
+                if task.cwd and os.path.isdir(task.cwd):
+                    return task.cwd
+        matching = [t for t in TASKS.values()
+                    if t.project == bound and t.repository_id == repository_id
+                    and t.task_code == task_code
+                    and (not user_id or not t.user_id or t.user_id == user_id)]
+    if matching:
+        current = max(matching, key=lambda t: t.updated)
+        if current.cwd and os.path.isdir(current.cwd):
+            return current.cwd
+    task_dir = task_workspace_path(bound, task_code, create=False)
+    return task_dir
+
+
 def create_task(project: str, repository_id: str = "", task_code: str = "",
                 task_type: str = "", user_id: str = "") -> Task | None:
-    if not project and repository_id and task_code:
-        project = mission_project_name(repository_id, task_code)
-        os.makedirs(os.path.join(SANDBOX_DIR, project), exist_ok=True)
-    cwd = project_path(project)
+    workspace = str(project or "").strip()
+    task_rel = ""
+    if repository_id and task_code:
+        # The browser's project field is deliberately not authoritative for a
+        # mission.  Resolve the workspace from the persisted task/repository
+        # binding so a caller cannot move a task into another sandbox project.
+        workspace = mission_bound_project(repository_id, task_code, "", user_id)
+        if not workspace:
+            return None
+        cwd = task_workspace_path(workspace, task_code, create=True)
+        task_rel = task_workspace_rel(task_code).replace("\\", "/")
+        if cwd:
+            ensure_workspace_shared_files(workspace, cwd)
+    else:
+        cwd = project_path(workspace)
     if not cwd:
         return None
-    task = Task(project, cwd, repository_id, task_code, task_type, user_id=user_id)
+    task = Task(workspace, cwd, repository_id, task_code, task_type, user_id=user_id,
+                workspace=workspace, task_workspace_relpath=task_rel)
     with TASKS_LOCK:
         TASKS[task.id] = task
     persist_tasks()
@@ -2114,11 +2269,12 @@ class Handler(BaseHTTPRequestHandler):
             if repository_id and task_code and not project:
                 self._send_json({"error": "当前任务只能访问自己的项目目录"}, status=403)
                 return
-            base = project_path(project)
+            base = mission_task_cwd(project, repository_id, task_code, task_id, user)
             if not base:
                 self._send_json({"error": "项目不存在"}, status=404)
             else:
-                self._send_json({"files": list_project_files(base, task_code)})
+                self._send_json({"project": project, "workspace": project,
+                                 "files": list_project_files(base, task_code)})
         elif path == "/api/download":
             self._handle_download(qs)
         elif path.startswith("/p/"):
@@ -2274,7 +2430,9 @@ class Handler(BaseHTTPRequestHandler):
         if repository_id and task_code and not project:
             self.send_error(403)
             return
-        f = resolve_project_file(project, m.group(2)) if m else None
+        base = mission_task_cwd(project, repository_id, task_code, task_id,
+                                self._current_user())
+        f = resolve_file_in_base(base, m.group(2)) if m else None
         if not f or not os.path.isfile(f):
             self.send_error(404)
             return
@@ -2310,18 +2468,20 @@ class Handler(BaseHTTPRequestHandler):
         if repository_id and task_code and not proj:
             self.send_error(403)
             return
-        if not project_path(proj):
+        base = mission_task_cwd(proj, repository_id, task_code, task_id,
+                                self._current_user())
+        if not base:
             self.send_error(404)
             return
         picked = []
-        visible = ({x["path"] for x in list_project_files(project_path(proj), task_code)}
+        visible = ({x["path"] for x in list_project_files(base, task_code)}
                    if task_code else None)
         for rel in (qs.get("path") or []):
             if not is_web_visible_file(rel):
                 continue
             if visible is not None and str(rel).replace("\\", "/").lstrip("/") not in visible:
                 continue
-            f = resolve_project_file(proj, rel)
+            f = resolve_file_in_base(base, rel)
             if f and os.path.isfile(f):
                 picked.append((str(rel).replace("\\", "/").lstrip("/"), f))
         if not picked:
@@ -2399,7 +2559,9 @@ class Handler(BaseHTTPRequestHandler):
         if task_code and not allowed_files:
             self._send_json({"error": "无法确认当前任务 execution-context 的解析要素，已拒绝上传和回写结果文件"}, status=422)
             return
-        if not project_path(proj):
+        base = mission_task_cwd(proj, repo_id, task_code, task_id,
+                                self._current_user())
+        if not base:
             self._send_json({"error": "项目不存在"}, status=400)
             return
         if not prefix:
@@ -2411,7 +2573,7 @@ class Handler(BaseHTTPRequestHandler):
         cfg = minio_config()
         results = []
         for rel in paths:
-            f = resolve_project_file(proj, str(rel))
+            f = resolve_file_in_base(base, str(rel))
             name = os.path.basename(f) if f else os.path.basename(str(rel))
             if name not in allowed_files:
                 results.append({"name": name, "ok": False,
@@ -2466,10 +2628,10 @@ class Handler(BaseHTTPRequestHandler):
             if integration_upload:
                 uploaded_names = {r.get("name") for r in results if r.get("ok")}
                 local_names = {
-                    os.path.basename(resolve_project_file(proj, name) or "")
+                    os.path.basename(resolve_file_in_base(base, name) or "")
                     for name in expected_files | {"ok.csv"}
-                    if resolve_project_file(proj, name)
-                    and os.path.isfile(resolve_project_file(proj, name))
+                    if resolve_file_in_base(base, name)
+                    and os.path.isfile(resolve_file_in_base(base, name))
                 }
                 missing = sorted((set(expected_files) - local_names) | (set() if "ok.csv" in local_names else {"ok.csv"}))
                 if "ok.csv" in uploaded_names and not missing:
@@ -2544,7 +2706,8 @@ class Handler(BaseHTTPRequestHandler):
         if repository_id and task_code and not project:
             self._send_json({"error": "当前任务只能上传到自己的项目目录"}, status=403)
             return
-        base = project_path(project)
+        base = mission_task_cwd(project, repository_id, task_code, task_id,
+                                self._current_user())
         name = os.path.basename(str(data.get("name") or "")).strip()
         if not base:
             self._send_json({"error": "项目不存在"}, status=400)

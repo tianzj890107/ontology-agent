@@ -161,13 +161,40 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertEqual(handler._mission_from("1", "RM123456789", "modeling")["taskCode"],
                              "RM123456789")
             self.assertIsNone(handler._mission_from("1", "</script><script>alert(1)</script>", "modeling"))
-            self.assertEqual(
-                server.bind_mission_project("mission-1-RM123456789", "1", "RM123456789"),
-                "mission-1-RM123456789",
+            # Mission requests no longer accept a task-code-shaped project
+            # directory.  The server resolves the shared workspace from
+            # persisted task metadata (or creates a stable repository
+            # workspace), so an unknown fake project is rejected.
+            self.assertIsNone(
+                server.bind_mission_project("mission-1-RM123456789", "1", "RM123456789")
             )
             self.assertIsNone(
                 server.bind_mission_project("another-project", "1", "RM123456789")
             )
+            with tempfile.TemporaryDirectory() as workspace_tmp:
+                old_sandbox, old_tasks = server.SANDBOX_DIR, server.TASKS
+                try:
+                    server.SANDBOX_DIR = workspace_tmp
+                    server.TASKS = {}
+                    workspace = Path(workspace_tmp) / "ontology-workspace-1"
+                    task_dir = workspace / "tasks" / "RM123456789"
+                    task_dir.mkdir(parents=True)
+                    (workspace / "public.csv").write_text("id\n1\n", encoding="utf-8")
+                    existing = types.SimpleNamespace(
+                        repository_id="1", task_code="RM123456789", user_id="u1",
+                        project="ontology-workspace-1", workspace="ontology-workspace-1",
+                        cwd=str(task_dir), updated=1,
+                    )
+                    server.TASKS = {"task-1": existing}
+                    self.assertEqual(
+                        server.mission_task_cwd("", "1", "RM123456789", "task-1", "u1"),
+                        str(task_dir),
+                    )
+                    self.assertIsNone(
+                        server.mission_task_cwd("", "1", "RM123456789", "task-1", "u2")
+                    )
+                finally:
+                    server.SANDBOX_DIR, server.TASKS = old_sandbox, old_tasks
             with tempfile.TemporaryDirectory() as auth_tmp:
                 old_paths = (server._USER_KEYS_PATH, server._USER_SETTINGS_PATH,
                              server._AUTH_SECRET_PATH, server._USAGE_PATH)

@@ -855,7 +855,9 @@ async function openTask(id){
   $("home").style.display = "none";
   $("taskview").style.display = "flex";
   $("headtitle").textContent = t.title;
-  $("headproj").textContent = t.project;
+  $("headproj").textContent = t.workspace
+    ? `${t.workspace}${t.taskWorkspace ? " / " + t.taskWorkspace : ""}`
+    : t.project;
   setWorking(t.status === "working");
   const col = $("feedcol");
   col.innerHTML = "";
@@ -1227,7 +1229,9 @@ async function startTask(){
   $("home").style.display = "none";
   $("taskview").style.display = "flex";
   $("headtitle").textContent = text.slice(0, 48);
-  $("headproj").textContent = t.project;
+  $("headproj").textContent = t.workspace
+    ? `${t.workspace}${t.taskWorkspace ? " / " + t.taskWorkspace : ""}`
+    : t.project;
   $("feedcol").innerHTML = "";
   toolCards = {}; approvalCards = {}; streamEl = null;
   renderTaskList();
@@ -1588,18 +1592,15 @@ async function uploadPending(project){
 }
 
 /* ---------------- right preview panel ---------------- */
-const PV = {mode: "tree", file: null, showSrc: false};
+const PV = {mode: "tree", file: null, showSrc: false, project: null};
 const IMG_EXT = new Set(["png","jpg","jpeg","gif","webp","svg","ico","bmp"]);
 
-function missionProjectName(){
-  return MISSION ? `mission-${MISSION.repositoryId}-${MISSION.taskCode}` : null;
-}
 function pvProject(){
   if (ACTIVE) return ACTIVE.project;
-  // Even before the persisted conversation is restored, the mission has one
-  // deterministic project.  This lets the task page show existing files
-  // immediately instead of requiring a new conversation or an upload.
-  return MISSION ? missionProjectName() : SELECTED_PROJECT;
+  if (PV.project) return PV.project;
+  // Before a task is restored, let the server resolve the repository's shared
+  // workspace.  Do not expose a task-code-shaped fake project to the browser.
+  return MISSION ? "" : SELECTED_PROJECT;
 }
 function previewOpen(){ return $("preview").classList.contains("open"); }
 function setPreviewResizer(){
@@ -1699,7 +1700,7 @@ function csvTableHTML(text, sep){
 
 async function showTree(){
   const proj = pvProject();
-  if (!proj) return;
+  if (!proj && !MISSION) return;
   $("preview").classList.add("open");
   setPreviewResizer();
   PV.mode = "tree"; PV.file = null;
@@ -1708,8 +1709,9 @@ async function showTree(){
   $("pvopen").style.display = "none";
   $("pvdl").style.display = "";
   $("pvdl").onclick = downloadSelected;
-  $("pvtitle").textContent = proj + " / 项目文件";
+  $("pvtitle").textContent = (proj || "当前任务工作空间") + " / 项目文件";
   const j = await api(filesAPIPath(proj));
+  if (j && j.project) PV.project = j.project;
   const files = (j.files || []).filter(f => !isInternalMissionInputFile(f.path));
   const body = $("pvbody");
   const projectIsEmpty = !files.length;
@@ -1752,6 +1754,7 @@ async function showTree(){
     const open = !!dir; // 根目录通常是工作杂项,任务/ID 子目录默认展开
     const folderLabel = dir === "mission-input" ? "📥 mission-input/" :
       dir === "mission-output" ? "📤 mission-output/" :
+      dir === "project-shared" ? "📚 项目公共文件/" :
       `📁 ${esc(dir || "项目根目录")}${dir ? "/" : ""}`;
     html += `<section class="tree-folder"><button class="tree-folder-head" data-folder="${esc(groupId)}" aria-expanded="${open}"><span class="arrow">▶</span><span>${folderLabel}</span><span class="tree-count">(${groups.get(dir).length})</span></button><div class="tree-folder-body${open ? "" : " collapsed"}" data-folder-body="${esc(groupId)}">`;
     for (const f of groups.get(dir)){
@@ -2088,8 +2091,9 @@ const MISSION_MODE_LABEL =
 
 function initMission(){
   if (!MISSION) return;
-  // 本体任务的项目由 repositoryId + taskCode 唯一决定，不允许在任务页切换
-  // 到全局沙箱中的其他项目；普通 Agent 页面仍保留项目选择器。
+  // 本体任务由 repositoryId + taskCode 绑定到服务端解析出的项目工作区和
+  // 当前任务目录，不允许在任务页切换到全局沙箱中的其他项目；普通 Agent
+  // 页面仍保留项目选择器。
   SELECTED_PROJECT = null;
   $("projbtn").style.display = "none";
   $("filesbtn0").style.display = "none";
