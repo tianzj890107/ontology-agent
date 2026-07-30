@@ -231,6 +231,13 @@
 - 主要文件：`open-claude/oc_codex_server.py`。
 - 类型：Python 后端变更，需要重启服务。
 
+### 18. 文件目录折叠与目录全选
+
+- 文件面板按目录显示时，项目根目录默认折叠；其余目录保持展开，可随时点击目录标题切换。
+- `mission-input` 和 `mission-output` 标题前增加“全选/取消全选”按钮，可一次选择该目录下的全部文件后下载。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
+- 类型：前端静态资源变更，刷新页面即可，无需重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。

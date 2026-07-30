@@ -213,17 +213,39 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
   );
 }
 
-function FilePanel({ open, files, loading, selected, onSelect, onOpen, onDownload, onClose, onRefresh, mission }) {
+function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onClose, onRefresh, mission }) {
+  const [collapsedDirs, setCollapsedDirs] = useState(() => new Set([""]));
   const groups = useMemo(() => {
     const map = new Map();
     files.forEach((file) => { const dir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : ""; if (!map.has(dir)) map.set(dir, []); map.get(dir).push(file); });
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [files]);
+  const toggleDir = (dir) => setCollapsedDirs((current) => {
+    const next = new Set(current);
+    if (next.has(dir)) next.delete(dir); else next.add(dir);
+    return next;
+  });
+  const groupLabel = (dir) => dir === "mission-input" ? "📥 mission-input/"
+    : dir === "mission-output" ? "📤 mission-output/"
+    : dir === "project-shared" ? "📚 项目公共文件/" : `📁 ${dir || "项目根目录"}`;
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" onClick={onRefresh}>⟳</Button><Button size="small" onClick={onClose}>✕</Button></div>
     <div className="file-actions"><Button size="small" disabled={!selected.length} onClick={onDownload}>⬇ 下载所选</Button>{mission && <span className="panel-note">当前任务范围</span>}</div>
-    {loading ? <Spin /> : !files.length ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => <div className="file-group" key={dir || "root"}><div className="file-group-title">{dir === "mission-input" ? "📥 mission-input/" : dir === "mission-output" ? "📤 mission-output/" : dir === "project-shared" ? "📚 项目公共文件/" : `📁 ${dir || "项目根目录"}`} <span>({items.length})</span></div>{items.map((file) => <div className="file-row" key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{file.path.split("/").pop()}</button><small>{file.sizeLabel || file.size}</small></div>)}</div>)}</div>}
+    {loading ? <Spin /> : !files.length ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => {
+      const collapsed = collapsedDirs.has(dir);
+      const selectableFolder = dir === "mission-input" || dir === "mission-output";
+      const paths = items.map((file) => file.path);
+      const allSelected = paths.length > 0 && paths.every((path) => selected.includes(path));
+      return <div className="file-group" key={dir || "root"}>
+        <div className="file-group-title">
+          {selectableFolder && <Button size="small" className="file-group-select" onClick={() => onSelectGroup(paths)}>{allSelected ? "取消全选" : "全选"}</Button>}
+          <button type="button" className="file-group-toggle" onClick={() => toggleDir(dir)} aria-expanded={!collapsed}>{collapsed ? "›" : "⌄"} {groupLabel(dir)}</button>
+          <span>({items.length})</span>
+        </div>
+        {!collapsed && items.map((file) => <div className="file-row" key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{file.path.split("/").pop()}</button><small>{file.sizeLabel || file.size}</small></div>)}
+      </div>;
+    })}</div>}
   </aside>;
 }
 
@@ -393,7 +415,7 @@ function App() {
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
         </section>}
       </main>
-      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onOpen={openFile} onDownload={download} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />
+      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
       {preview && <Modal open title={preview.path} footer={null} width="80vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
