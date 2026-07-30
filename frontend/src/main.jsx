@@ -96,19 +96,31 @@ function eventDescription(event) {
   return event.text || "";
 }
 
-function ThoughtEvent({ event, onApprove }) {
+function EventFileText({ text, files, onFile }) {
+  const source = String(text || "");
+  const paths = (files || []).map((file) => file.path).filter(Boolean).sort((a, b) => b.length - a.length);
+  if (!paths.length || !onFile) return <>{source}</>;
+  const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(${paths.map(escapeRegExp).join("|")})`, "g");
+  return <>{source.split(pattern).map((part, index) => paths.includes(part)
+    ? <button type="button" className="event-file-link" key={`${part}-${index}`} onClick={() => onFile(part)}>{part}</button>
+    : <React.Fragment key={index}>{part}</React.Fragment>)}</>;
+}
+
+function ThoughtEvent({ event, onApprove, files, onFile }) {
   const kind = event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
   const icon = event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
   const item = {
     key: event.id || `${event.type}-${event.name || "event"}-${event.text || ""}`,
     title: eventTitle(event),
-    description: eventDescription(event),
+    description: <EventFileText text={eventDescription(event).slice(0, 240)} files={files} onFile={onFile} />,
+    content: <div className="thought-detail"><EventFileText text={eventDescription(event)} files={files} onFile={onFile} /></div>,
     status: eventStatus(event),
     icon: <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>,
   };
   return (
     <div className={`chain-event chain-event-${kind}`}>
-      <ThoughtChain items={[item]} />
+      <ThoughtChain items={[item]} collapsible={true} />
       {event.type === "approval_request" && (
         <div className="approval-actions">
           <Button type="primary" size="small" onClick={() => onApprove(event.id, true)}>允许执行</Button>
@@ -135,14 +147,14 @@ function AssistantText({ text }) {
   );
 }
 
-function EventFeed({ events, onApprove }) {
+function EventFeed({ events, onApprove, files, onFile }) {
   return (
     <div className="feed-list">
       {events.map((event, index) => {
         if (event.type === "user") return <div className="user-message" key={`${index}-user`}>{event.text}</div>;
         if (["text", "assistant"].includes(event.type)) return <div className="assistant-message" key={`${index}-assistant`}><AssistantText text={event.text} /></div>;
         if (event.type === "done") return <div className="done-note" key={`${index}-done`}>本轮执行结束 · {event.status || "完成"}</div>;
-        return <ThoughtEvent event={event} onApprove={onApprove} key={`${index}-${event.id || event.type}`} />;
+        return <ThoughtEvent event={event} onApprove={onApprove} files={files} onFile={onFile} key={`${index}-${event.id || event.type}`} />;
       })}
     </div>
   );
@@ -218,7 +230,7 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
   );
 }
 
-function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onClose, onRefresh, mission }) {
+function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onClose, onRefresh, mission, focusPath }) {
   const [collapsedDirs, setCollapsedDirs] = useState(() => new Set([""]));
   const groups = useMemo(() => {
     const map = new Map();
@@ -233,6 +245,11 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   const groupLabel = (dir) => dir === "mission-input" ? "📥 mission-input/"
     : dir === "mission-output" ? "📤 mission-output/"
     : dir === "project-shared" ? "📚 项目公共文件/" : `📁 ${dir || "项目根目录"}`;
+  useEffect(() => {
+    if (!focusPath) return;
+    const dir = focusPath.includes("/") ? focusPath.slice(0, focusPath.lastIndexOf("/")) : "";
+    setCollapsedDirs((current) => { const next = new Set(current); next.delete(dir); return next; });
+  }, [focusPath]);
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" onClick={onRefresh}>⟳</Button><Button size="small" onClick={onClose}>✕</Button></div>
@@ -248,7 +265,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
           <button type="button" className="file-group-toggle" onClick={() => toggleDir(dir)} aria-expanded={!collapsed}>{collapsed ? "›" : "⌄"} {groupLabel(dir)}</button>
           <span>({items.length})</span>
         </div>
-        {!collapsed && items.map((file) => <div className="file-row" key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{file.path.split("/").pop()}</button><small>{file.sizeLabel || file.size}</small></div>)}
+        {!collapsed && items.map((file) => <div className={`file-row ${focusPath === file.path ? "file-row-focused" : ""}`} key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{file.path.split("/").pop()}</button><small>{file.sizeLabel || file.size}</small></div>)}
       </div>;
     })}</div>}
   </aside>;
@@ -266,6 +283,7 @@ function App() {
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesLoading, setFilesLoading] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [focusFile, setFocusFile] = useState("");
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -389,7 +407,7 @@ function App() {
   const onSaveKey = async () => { const result = await api("/api/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: keyValue }) }); if (result.error) messageApi.error(result.error); else messageApi.success("模型密钥已保存"); };
 
   const fileUrl = (path) => { const project = active?.project || ""; return `/p/${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}${MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}&taskId=${encodeURIComponent(active?.id || "")}` : ""}`; };
-  const openFile = async (path) => { try { const response = await fetch(fileUrl(path), { credentials: "same-origin" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); const type = response.headers.get("content-type") || ""; if (type.startsWith("image/")) setPreview({ path, image: URL.createObjectURL(await response.blob()) }); else setPreview({ path, text: await response.text() }); } catch (error) { messageApi.error(`打开文件失败: ${error.message}`); } };
+  const openFile = async (path) => { setFilesOpen(true); setFocusFile(path); try { const response = await fetch(fileUrl(path), { credentials: "same-origin" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); const type = response.headers.get("content-type") || ""; if (type.startsWith("image/")) setPreview({ path, image: URL.createObjectURL(await response.blob()) }); else setPreview({ path, text: await response.text() }); } catch (error) { messageApi.error(`打开文件失败: ${error.message}`); } };
   const download = () => { if (!selectedFiles.length) return; const project = active?.project || ""; const query = new URLSearchParams({ project }); selectedFiles.forEach((path) => query.append("path", path)); if (MISSION) { query.set("repositoryId", MISSION.repositoryId); query.set("taskCode", MISSION.taskCode); query.set("taskId", active?.id || ""); } window.open(`/api/download?${query}`, "_blank"); };
 
   const sidebarTasks = tasks.filter((task) => !MISSION || (task.repositoryId === MISSION.repositoryId && task.taskCode === MISSION.taskCode));
@@ -416,11 +434,11 @@ function App() {
       <main className="main-content">
         {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
           <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong>{active?.title || "当前任务"}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Switch checked={autoApprove} onChange={(value) => { setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); }} checkedChildren="自动确认" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
-          <div className="feed"><EventFeed events={events} onApprove={approve} /></div>
+          <div className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} /></div>
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
         </section>}
       </main>
-      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />
+      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
       {preview && <Modal open title={preview.path} footer={null} width="80vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
