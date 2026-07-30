@@ -141,9 +141,9 @@ function RecursiveInfo({ value, level = 0 }) {
   return <span>{String(value)}</span>;
 }
 
-function MissionInfo({ context, loading, onClose }) {
+function MissionInfo({ open, context, loading, onClose }) {
   return (
-    <Modal open title="当前任务信息" footer={null} onCancel={onClose} width={680}>
+    <Modal open={open} title="当前任务信息" footer={null} onCancel={onClose} width={680} destroyOnClose>
       {loading ? <Spin /> : context ? <div className="mission-info"><RecursiveInfo value={context} /></div> : <Empty description="暂未获取到任务信息" />}
     </Modal>
   );
@@ -346,7 +346,13 @@ function App() {
         <Button className="new-task" onClick={async () => { setActive(null); setEvents([]); setText(""); setView("home"); if (MISSION) await createTask(); }}>✚ 新任务</Button>
         <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}>历史任务 <span>{historyOpen ? "⌃" : "⌄"}</span></button>
         {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新任务"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任务" />}</div>}
-        {MISSION && <div className="current-mission"><Button type="text" onClick={() => setMissionInfoOpen(true)}>📋 当前任务信息</Button><small>{MISSION.taskCode} · 本体库 {MISSION.repositoryId}</small></div>}
+        {MISSION && <div className="current-mission">
+          <Button type="text" onClick={() => setMissionInfoOpen(true)}>📋 当前任务信息</Button>
+          <small>{MISSION.taskCode} · 本体库 {MISSION.repositoryId}</small>
+          <div className="sidebar-mission-info">
+            {missionLoading ? <Spin size="small" /> : missionContext ? <RecursiveInfo value={missionContext} /> : <span className="sidebar-mission-empty">暂未获取到完整任务信息</span>}
+          </div>
+        </div>}
         <div className="sidebar-grow" />
         <Button className="settings-button" onClick={() => setSettingsOpen(true)}>⚙ 大语言模型设置</Button>
         <div className="sandbox-note">沙箱模式：智能体只能操作当前任务工作目录。<br /><span>{meta.sandbox || "sandbox/"}</span></div>
@@ -362,7 +368,7 @@ function App() {
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
       {preview && <Modal open title={preview.path} footer={null} width="80vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
-      {MISSION && <MissionInfo context={missionContext} loading={missionLoading} onClose={() => setMissionInfoOpen(false)} />}
+      {MISSION && <MissionInfo open={missionInfoOpen} context={missionContext} loading={missionLoading} onClose={() => setMissionInfoOpen(false)} />}
     </div>
   </ConfigProvider>;
 }

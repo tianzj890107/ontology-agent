@@ -18,6 +18,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('import { ThoughtChain } from "@ant-design/x"', source)
         self.assertIn('MISSION ? "你可以直接点击开始任务，或者描述一个任务"', source)
         self.assertNotIn(': mission ? "你可以直接点击开始任务', source)
+        self.assertIn('<RecursiveInfo value={missionContext} />', source)
+        self.assertIn('MissionInfo open={missionInfoOpen}', source)
         for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send"):
             self.assertIn(route, source)
 
