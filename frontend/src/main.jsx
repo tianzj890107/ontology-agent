@@ -72,7 +72,9 @@ function normalizeEvents(task) {
 }
 
 function eventTitle(event) {
-  const names = { Read: "读取文件", Write: "写入文件", Edit: "修改文件", Bash: "执行命令", Glob: "查找文件", Grep: "搜索内容", Agent: "调用子智能体" };
+  const names = { Read: "读取文件", Write: "写入文件", Edit: "修改文件", Bash: "执行命令", Glob: "查找文件", Grep: "搜索内容", Agent: "调用子智能体", TaskCreate: "创建任务" };
+  if (event.type === "model_switch") return "模型切换";
+  if (event.type === "tool_result") return "工具结果";
   return names[event.name] || event.name || event.type || "执行步骤";
 }
 
@@ -95,14 +97,17 @@ function eventDescription(event) {
 }
 
 function ThoughtEvent({ event, onApprove }) {
+  const kind = event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
+  const icon = event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
   const item = {
     key: event.id || `${event.type}-${event.name || "event"}-${event.text || ""}`,
     title: eventTitle(event),
     description: eventDescription(event),
     status: eventStatus(event),
+    icon: <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>,
   };
   return (
-    <div className="chain-event">
+    <div className={`chain-event chain-event-${kind}`}>
       <ThoughtChain items={[item]} />
       {event.type === "approval_request" && (
         <div className="approval-actions">
