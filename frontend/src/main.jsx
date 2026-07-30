@@ -316,7 +316,7 @@ function ModelPicker({ model, models, onModel, onOpenSettings }) {
     <div className="model-picker-list">{(models || []).map((item) => <button type="button" className={item.id === model ? "model-option active" : "model-option"} key={item.id} onClick={() => { onModel(item.id); setOpen(false); }}><span>{item.label || item.id}</span><small>{item.provider || ""}</small></button>)}</div>
     <Button type="link" className="model-params-link" onClick={() => { setOpen(false); onOpenSettings(); }}>⚙ 修改模型参数</Button>
   </div>;
-  return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="topRight" content={content} title="选择大语言模型"><button type="button" className="model-hint">⚙ {String(model || "模型").slice(0, 16)}⌄</button></Popover>;
+  return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="topRight" content={content} title="选择大语言模型"><button type="button" className="model-hint" aria-label={`当前模型：${model || "未选择"}`} title={model || "未选择模型"}>⌄</button></Popover>;
 }
 
 function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, busy, hasConversation, model, models, onModel, onOpenSettings, placeholder, projects, project, onProject }) {
