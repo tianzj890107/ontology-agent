@@ -139,14 +139,14 @@ function ThoughtEvent({ event, onApprove, files, onFile }) {
   const item = {
     key,
     title: eventTitle(event),
-    content: <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div>,
+    content: expanded ? <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div> : undefined,
     status: eventStatus(event),
     icon: <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>,
   };
   return (
-    <div className={`chain-event chain-event-${kind}`}>
+    <div className={`chain-event chain-event-${kind}`} onClick={(eventClick) => { if (!eventClick.target.closest("button,a,input")) setExpanded((value) => !value); }}>
       <div className="thought-collapsed-row">
-        <ThoughtChain items={[item]} collapsible={{ expandedKeys: expanded ? [key] : [], onExpand: (keys) => setExpanded(keys.includes(key)) }} />
+        <ThoughtChain items={[item]} />
         {!expanded && detail && <div className="thought-summary"><EventFileText text={compactEventSummary(detail)} files={files} onFile={onFile} /></div>}
       </div>
       {event.type === "approval_request" && (
