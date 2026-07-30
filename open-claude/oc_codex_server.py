@@ -2380,17 +2380,25 @@ class Handler(BaseHTTPRequestHandler):
             task_code = (query.get("taskCode") or [""])[0]
             with TASKS_LOCK:
                 items = [t for t in TASKS.values()
-                         if (t.user_id == user or
-                             (not t.user_id and repository_id and task_code and
-                              t.repository_id == repository_id and t.task_code == task_code))
-                         if (not repository_id or t.repository_id == repository_id)
+                         if ((t.user_id == user)
+                             or (repository_id and task_code
+                                 and t.repository_id == repository_id
+                                 and t.task_code == task_code))
+                         and (not repository_id or t.repository_id == repository_id)
                          and (not task_code or t.task_code == task_code)]
                 items.sort(key=lambda t: t.updated, reverse=True)
                 self._send_json({"tasks": [t.summary() for t in items]})
         else:
             m = re.match(r"^/api/tasks/([0-9a-f]+)$", path)
             if m:
-                task = self._owned_task(m.group(1))
+                detail_query = parse_qs(urlparse(self.path).query)
+                requested_repo = (detail_query.get("repositoryId") or [""])[0]
+                requested_code = (detail_query.get("taskCode") or [""])[0]
+                task = TASKS.get(m.group(1))
+                mission_match = bool(task and requested_repo and requested_code
+                                     and task.repository_id == requested_repo
+                                     and task.task_code == requested_code)
+                task = self._owned_task(m.group(1)) if not mission_match else task
                 if not task: return
                 if not task.log:
                     task.log = task.rebuild_log_from_conversation()

@@ -280,7 +280,8 @@ function App() {
   useEffect(() => { if (active && filesOpen) loadFiles(); }, [active, filesOpen]);
 
   const openTask = async (task) => {
-    const result = await api(`/api/tasks/${task.id}`);
+    const detailQuery = MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}` : "";
+    const result = await api(`/api/tasks/${task.id}${detailQuery}`);
     if (result.error) { messageApi.error(`打开历史任务失败：${result.error}`); return; }
     const current = result;
     setActive(current); setEvents(normalizeEvents(current)); setView("task"); setText("");

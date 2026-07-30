@@ -196,6 +196,13 @@
 - 主要文件：`open-claude/oc_codex_server.py`。
 - 类型：Python 后端变更，需要重启服务。
 
+### 13. 当前任务历史会话授权兼容
+
+- 修复登录态或服务器重启后，历史任务仍保存在服务器但被当前用户过滤、导致会话无法打开的问题。
+- 在当前 `repositoryId + taskCode` 范围内，历史任务列表和详情允许继续访问；不改变无任务上下文时的用户隔离。
+- 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`frontend/dist/`。
+- 类型：前端与 Python 后端变更，需要重启服务并刷新页面。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
