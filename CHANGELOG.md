@@ -311,6 +311,12 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
 - 类型：前端静态资源变更，刷新页面即可，无需重启后端。
 
+### 29. 模型按钮保留名称与图标
+
+- 保留模型名称和齿轮图标，仅移除按钮默认方块边框/背景；悬浮时显示浅灰提示背景。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
+- 类型：前端静态资源变更，刷新页面即可，无需重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
