@@ -245,6 +245,13 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
 - 类型：前端静态资源变更，刷新页面即可，无需重启后端。
 
+### 20. ThoughtChain 步骤去除白色气泡
+
+- 保留 Ant Design X `ThoughtChain` 的时间线节点、状态和执行详情。
+- 去除每一步外层白色背景、边框和阴影，使执行记录直接显示在页面背景上，不再显示成白色气泡卡片。
+- 主要文件：`frontend/src/styles.css`、`frontend/dist/`。
+- 类型：前端静态资源变更，刷新页面即可，无需重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。

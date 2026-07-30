@@ -6,3 +6,5 @@
 /* 对话打开后必须由 feed 接管垂直滚动；显式截断每层 flex 最小高度，避免内容把输入框顶出视口。 */
 html,body,#root,.workbench{height:100dvh;min-height:0;overflow:hidden}.sidebar,.main-content,.task-view{min-height:0}.main-content{height:100dvh;overflow:hidden}.task-view{height:100%;overflow:hidden}.feed{height:0;min-height:0;flex:1 1 0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}.task-composer{flex:none}
 .file-group-title{display:flex;align-items:center;gap:6px}.file-group-title>span{margin-left:auto;float:none}.file-group-toggle{flex:1;padding:0;border:0;background:transparent;color:#5f7f9d;font:inherit;font-weight:600;text-align:left;cursor:pointer}.folder-select{width:13px;height:13px;margin:0;flex:none;accent-color:#2563eb}
+/* ThoughtChain 使用时间线节点即可，去掉每个执行步骤外层的白色卡片气泡。 */
+.chain-event{padding:5px 0;border:0;border-radius:0;background:transparent;box-shadow:none}.chain-event .ant-thought-chain,.chain-event .ant-thought-chain-item,.chain-event .ant-thought-chain-item-content{background:transparent!important;box-shadow:none!important;border:0!important}.chain-event .ant-thought-chain-item-content{padding:0!important}
