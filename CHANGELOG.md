@@ -289,6 +289,13 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
 - 类型：前端静态资源变更，刷新页面即可，无需重启后端。
 
+### 26. Excel 预览与文件大小格式化
+
+- `.xlsx/.xls/.xlsm` 文件不再按文本读取，改为解析成可切换工作表的表格预览，避免乱码。
+- 文件大小统一使用易读格式：例如 `2938` 显示为 `2.94K`。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/package.json`、`frontend/dist/`。
+- 类型：前端依赖与静态资源变更，刷新页面即可，无需重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。

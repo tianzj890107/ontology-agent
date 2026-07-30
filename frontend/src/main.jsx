@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import { createRoot } from "react-dom/client";
 import {
   App as AntApp,
@@ -220,6 +221,23 @@ function CsvPreview({ text }) {
   return <div className="csv-preview"><div className="csv-preview-meta">CSV 表格预览 · {body.length} 行 · {headers.length} 列</div><div className="csv-preview-scroll"><table className="csv-preview-table"><thead><tr>{headers.map((header, index) => <th key={index}>{header || `列 ${index + 1}`}</th>)}</tr></thead><tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((_, columnIndex) => <td key={columnIndex}>{row[columnIndex] || ""}</td>)}</tr>)}</tbody></table></div></div>;
 }
 
+function SpreadsheetPreview({ sheets }) {
+  const [active, setActive] = useState(0);
+  const current = sheets[active] || { name: "Sheet1", rows: [] };
+  const headers = current.rows[0] || [];
+  const body = current.rows.slice(1);
+  return <div className="csv-preview"><div className="sheet-tabs">{sheets.map((sheet, index) => <button type="button" className={index === active ? "sheet-tab active" : "sheet-tab"} key={sheet.name} onClick={() => setActive(index)}>{sheet.name}</button>)}</div><div className="csv-preview-meta">Excel 表格预览 · {body.length} 行 · {headers.length} 列</div><div className="csv-preview-scroll"><table className="csv-preview-table"><thead><tr>{headers.map((header, index) => <th key={index}>{String(header || `列 ${index + 1}`)}</th>)}</tr></thead><tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((_, columnIndex) => <td key={columnIndex}>{String(row[columnIndex] ?? "")}</td>)}</tr>)}</tbody></table></div></div>;
+}
+
+function formatFileSize(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return "0B";
+  if (bytes < 1000) return `${bytes}B`;
+  const units = ["K", "M", "G"]; let size = bytes; let index = -1;
+  while (size >= 1000 && index < units.length - 1) { size /= 1000; index += 1; }
+  return `${size.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}${units[index]}`;
+}
+
 const MISSION_LABELS = {
   repositoryId: "本体库 ID", taskCode: "任务编码", taskName: "任务名称", modelName: "模型名称",
   taskType: "任务类型", prompt: "提示词", parseElements: "解析要素", expectedFiles: "期望输出文件",
@@ -334,7 +352,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
           <button type="button" className="file-group-toggle" onClick={() => toggleDir(dir)} aria-expanded={!collapsed}>{collapsed ? "›" : "⌄"} {groupLabel(dir)}</button>
           <span>({items.length})</span>
         </div>
-        {!collapsed && items.map((file) => <div className={`file-row ${focusPath === file.path ? "file-row-focused" : ""}`} key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{file.path.split("/").pop()}</button><small>{file.sizeLabel || file.size}</small></div>)}
+        {!collapsed && items.map((file) => <div className={`file-row ${focusPath === file.path ? "file-row-focused" : ""}`} key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{file.path.split("/").pop()}</button><small>{formatFileSize(file.size)}</small></div>)}
       </div>;
     })}</div>}
   </aside>;
@@ -476,7 +494,7 @@ function App() {
   const onSaveKey = async () => { const result = await api("/api/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: keyValue }) }); if (result.error) messageApi.error(result.error); else messageApi.success("模型密钥已保存"); };
 
   const fileUrl = (path) => { const project = active?.project || ""; return `/p/${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}${MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}&taskId=${encodeURIComponent(active?.id || "")}` : ""}`; };
-  const openFile = async (path) => { setFilesOpen(true); setFocusFile(path); try { const response = await fetch(fileUrl(path), { credentials: "same-origin" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); const type = response.headers.get("content-type") || ""; if (type.startsWith("image/")) setPreview({ path, image: URL.createObjectURL(await response.blob()) }); else { const text = await response.text(); setPreview({ path, text, csv: /\.csv$/i.test(path) || type.includes("text/csv") }); } } catch (error) { messageApi.error(`打开文件失败: ${error.message}`); } };
+  const openFile = async (path) => { setFilesOpen(true); setFocusFile(path); try { const response = await fetch(fileUrl(path), { credentials: "same-origin" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); const type = response.headers.get("content-type") || ""; if (type.startsWith("image/")) setPreview({ path, image: URL.createObjectURL(await response.blob()) }); else if (/\.(xlsx?|xlsm)$/i.test(path)) { const workbook = XLSX.read(await response.arrayBuffer(), { type: "array", cellDates: true }); const sheets = workbook.SheetNames.map((name) => ({ name, rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "", raw: false }) })); setPreview({ path, xlsx: true, sheets }); } else { const text = await response.text(); setPreview({ path, text, csv: /\.csv$/i.test(path) || type.includes("text/csv") }); } } catch (error) { messageApi.error(`打开文件失败: ${error.message}`); } };
   const download = () => { if (!selectedFiles.length) return; const project = active?.project || ""; const query = new URLSearchParams({ project }); selectedFiles.forEach((path) => query.append("path", path)); if (MISSION) { query.set("repositoryId", MISSION.repositoryId); query.set("taskCode", MISSION.taskCode); query.set("taskId", active?.id || ""); } window.open(`/api/download?${query}`, "_blank"); };
 
   const sidebarTasks = tasks.filter((task) => !MISSION || (task.repositoryId === MISSION.repositoryId && task.taskCode === MISSION.taskCode));
@@ -509,7 +527,7 @@ function App() {
       </main>
       <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
-      {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+      {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
       {MISSION && <MissionInfo open={missionInfoOpen} context={missionContext} loading={missionLoading} onClose={() => setMissionInfoOpen(false)} />}
     </div>
