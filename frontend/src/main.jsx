@@ -62,6 +62,15 @@ function normalizeFiles(value) {
   return value.map((item) => (typeof item === "string" ? item : item?.path || item?.filename)).filter(Boolean);
 }
 
+function normalizeEvents(task) {
+  const source = Array.isArray(task?.log) ? task.log : Array.isArray(task?.events) ? task.events : [];
+  return source.map((event) => {
+    if (!event || typeof event !== "object") return { type: "text", text: String(event ?? "") };
+    const content = event.text ?? event.content;
+    return { ...event, text: typeof content === "string" ? content : content == null ? "" : $json(content) };
+  });
+}
+
 function eventTitle(event) {
   const names = { Read: "读取文件", Write: "写入文件", Edit: "修改文件", Bash: "执行命令", Glob: "查找文件", Grep: "搜索内容", Agent: "调用子智能体" };
   return names[event.name] || event.name || event.type || "执行步骤";
@@ -272,8 +281,9 @@ function App() {
 
   const openTask = async (task) => {
     const result = await api(`/api/tasks/${task.id}`);
-    const current = result.error ? task : result;
-    setActive(current); setEvents(current.log || []); setView("task"); setText("");
+    if (result.error) { messageApi.error(`打开历史任务失败：${result.error}`); return; }
+    const current = result;
+    setActive(current); setEvents(normalizeEvents(current)); setView("task"); setText("");
     if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, current.id);
     await loadFiles(current);
   };

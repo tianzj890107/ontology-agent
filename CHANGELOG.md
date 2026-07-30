@@ -37,6 +37,7 @@
 - 任务列表、当前任务上下文、会话恢复、SSE 对话、审批、文件浏览/预览/下载/上传、模型参数和用户 Key 设置均接入原有后端接口；建模与消歧空会话继续显示对应的开始任务按钮。
 - 修复首次渲染时任务上下文变量引用错误导致页面空白的问题；普通入口和 `/mission`、`/merge` 入口均已完成页面级冒烟验证。
 - 当前任务信息不再进入页面时自动弹窗；左侧栏固定展开完整 execution-context，点击“当前任务信息”才打开可关闭的全量详情弹窗。
+- 历史会话回放增加兼容：服务端日志缺失时从持久化 Conversation.messages 重建用户/助手消息，前端兼容多种历史事件字段；历史任务读取失败会明确提示，不再静默显示空对话。
 - 思维链行为卡片使用 `@ant-design/x` 的 `ThoughtChain`，页面统一使用本体平台风格的浅色低饱和主题，并保留三栏文件区和响应式布局。
 - Python 服务优先提供 `frontend/dist` 的构建结果并安全提供 `/assets/*`，没有构建前端时自动回退到旧 HTML；任务入口 `/mission`、`/merge` 继续注入任务上下文。
 - 主要文件：`frontend/package.json`、`frontend/vite.config.js`、`frontend/index.html`、`frontend/src/main.jsx`、`frontend/src/styles.css`、`open-claude/oc_codex_server.py`。

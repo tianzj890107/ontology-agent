@@ -1770,6 +1770,28 @@ class Task:
                 return True
         return False
 
+    def replay_events(self) -> list[dict]:
+        """Return UI replay events, rebuilding old sessions when needed.
+
+        Early web tasks persisted the Open Claude session but did not always
+        persist the browser-specific ``log`` array.  The conversation is the
+        durable source of truth in that case, so expose its user/assistant
+        messages in the same small event format consumed by both frontends.
+        """
+        if self.log:
+            return self.log
+        events: list[dict] = []
+        for message in getattr(self.conv, "messages", []) or []:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "")
+            if role not in ("user", "assistant"):
+                continue
+            text = _stringify(message.get("content") or "").strip()
+            if text:
+                events.append({"type": role, "text": text})
+        return events
+
     def rebuild_log_from_conversation(self) -> list[dict]:
         """Recover readable chat messages for legacy tasks whose web event log
         was not persisted yet. Tool cards cannot be reconstructed, but the
@@ -2374,7 +2396,7 @@ class Handler(BaseHTTPRequestHandler):
                     task.log = task.rebuild_log_from_conversation()
                     if task.log:
                         persist_tasks()
-                self._send_json({**task.summary(), "log": task.log})
+                self._send_json({**task.summary(), "log": task.replay_events()})
                 return
             self.send_error(404)
 

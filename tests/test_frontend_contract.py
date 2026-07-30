@@ -20,6 +20,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertNotIn(': mission ? "你可以直接点击开始任务', source)
         self.assertIn('<RecursiveInfo value={missionContext} />', source)
         self.assertIn('MissionInfo open={missionInfoOpen}', source)
+        self.assertIn('normalizeEvents(current)', source)
         for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send"):
             self.assertIn(route, source)
 
