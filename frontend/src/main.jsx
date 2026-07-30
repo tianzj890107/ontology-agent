@@ -371,18 +371,19 @@ function App() {
     <div className="workbench">
       <aside className="sidebar">
         <div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能</strong><Tag>Agent</Tag></div>
-        <Button className="new-task" onClick={async () => { setActive(null); setEvents([]); setText(""); setView("home"); if (MISSION) await createTask(); }}>✚ 新任务</Button>
-        <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}>历史任务 <span>{historyOpen ? "⌃" : "⌄"}</span></button>
-        {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新任务"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任务" />}</div>}
-        {MISSION && <div className="current-mission">
-          <Button type="text" onClick={() => setMissionInfoOpen(true)}>📋 当前任务信息</Button>
-          <small>{MISSION.taskCode} · 本体库 {MISSION.repositoryId}</small>
-          <div className="sidebar-mission-info">
-            {missionLoading ? <Spin size="small" /> : missionContext ? <RecursiveInfo value={missionContext} /> : <span className="sidebar-mission-empty">暂未获取到完整任务信息</span>}
-          </div>
-        </div>}
-        <div className="sidebar-grow" />
-        <Button className="settings-button" onClick={() => setSettingsOpen(true)}>⚙ 大语言模型设置</Button>
+        <div className="sidebar-scroll">
+          <Button className="new-task" onClick={async () => { setActive(null); setEvents([]); setText(""); setView("home"); if (MISSION) await createTask(); }}>✚ 新任务</Button>
+          <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}>历史任务 <span>{historyOpen ? "⌃" : "⌄"}</span></button>
+          {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新任务"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任务" />}</div>}
+          <Button className="settings-button" onClick={() => setSettingsOpen(true)}>⚙ 大语言模型设置</Button>
+          {MISSION && <div className="current-mission">
+            <Button type="text" onClick={() => setMissionInfoOpen(true)}>📋 当前任务信息</Button>
+            <small>{MISSION.taskCode} · 本体库 {MISSION.repositoryId}</small>
+            <div className="sidebar-mission-info">
+              {missionLoading ? <Spin size="small" /> : missionContext ? <RecursiveInfo value={missionContext} /> : <span className="sidebar-mission-empty">暂未获取到完整任务信息</span>}
+            </div>
+          </div>}
+        </div>
         <div className="sandbox-note">沙箱模式：智能体只能操作当前任务工作目录。<br /><span>{meta.sandbox || "sandbox/"}</span></div>
       </aside>
       <main className="main-content">
