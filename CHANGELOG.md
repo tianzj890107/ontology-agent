@@ -31,6 +31,15 @@
 
 ## 当前版本最终变更
 
+### 0. 全量迁移到 React + Ant Design 工作台
+
+- 原 `open-claude/codex_web.html` 的单文件界面保留为未构建时的兼容回退；正式页面改由 `frontend/` 中的 React + Vite + Ant Design/Ant Design X 构建。
+- 任务列表、当前任务上下文、会话恢复、SSE 对话、审批、文件浏览/预览/下载/上传、模型参数和用户 Key 设置均接入原有后端接口；建模与消歧空会话继续显示对应的开始任务按钮。
+- 思维链行为卡片使用 `@ant-design/x` 的 `ThoughtChain`，页面统一使用本体平台风格的浅色低饱和主题，并保留三栏文件区和响应式布局。
+- Python 服务优先提供 `frontend/dist` 的构建结果并安全提供 `/assets/*`，没有构建前端时自动回退到旧 HTML；任务入口 `/mission`、`/merge` 继续注入任务上下文。
+- 主要文件：`frontend/package.json`、`frontend/vite.config.js`、`frontend/index.html`、`frontend/src/main.jsx`、`frontend/src/styles.css`、`open-claude/oc_codex_server.py`。
+- 类型：前端依赖和服务入口变更；本地构建后刷新即可，服务器需要同步前端构建产物并重启服务。
+
 ### 1. 当前任务绑定与会话恢复
 
 - 从智能建模页面点击小机器人时，自动携带当前任务的 `repositoryId`、`taskCode` 和任务类型进入 Agent。

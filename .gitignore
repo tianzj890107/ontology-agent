@@ -45,3 +45,6 @@ Thumbs.db
 
 # ---- Node ----
 node_modules/
+# The Python service serves this reproducible production bundle directly.
+!frontend/dist/
+!frontend/dist/**

@@ -74,6 +74,7 @@ from open_claude.ontology_knowledge import load_static_knowledge, normalize_task
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(SCRIPT_DIR, "codex_web.html")
+FRONTEND_DIST = os.path.join(SCRIPT_DIR, "..", "frontend", "dist")
 SANDBOX_DIR = os.path.join(SCRIPT_DIR, "sandbox")
 STATIC_KNOWLEDGE_DIR = os.path.join(SCRIPT_DIR, "..", "agent_knowledge")
 MAX_JSON_BODY_BYTES = 32 * 1024 * 1024
@@ -2230,6 +2231,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_bytes(self, body, content_type, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _read_body(self) -> dict:
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
@@ -2250,6 +2258,11 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         qs = parse_qs(parsed.query)
+        # Vite assets are public static resources; API and workspace routes
+        # below still require the normal external-platform identity.
+        if path.startswith("/assets/"):
+            self._serve_frontend_asset(path)
+            return
         if self._requires_auth(path) and not self._require_user():
             return
         if path in ("/", "/index.html"):
@@ -2906,8 +2919,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"ok": True, "provider": provider, "hasKey": bool(key)})
 
     def _serve_html(self, mission=None):
+        # Prefer the built React/Ant Design workbench. Keep the historical
+        # single-file page as a fallback for an unbuilt checkout.
+        html_path = os.path.join(FRONTEND_DIST, "index.html")
+        if not os.path.isfile(html_path):
+            html_path = HTML_PATH
         try:
-            with open(HTML_PATH, "rb") as fh:
+            with open(html_path, "rb") as fh:
                 body = fh.read()
         except OSError:
             self.send_error(500, "frontend html not found")
@@ -2928,6 +2946,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", f"{_AUTH_COOKIE}={cookie}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax")
         self.end_headers()
         self.wfile.write(body)
+
+    def _serve_frontend_asset(self, request_path):
+        """Serve only files emitted by Vite, with traversal protection."""
+        relative = unquote(urlparse(request_path).path).lstrip("/")
+        root = os.path.realpath(FRONTEND_DIST)
+        candidate = os.path.realpath(os.path.join(root, relative))
+        if not os.path.isfile(candidate) or not candidate.startswith(root + os.sep):
+            self.send_error(404, "Frontend asset not found")
+            return
+        try:
+            with open(candidate, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            self.send_error(404, "Frontend asset not found")
+            return
+        self._send_bytes(data, mimetypes.guess_type(candidate)[0] or "application/octet-stream")
 
     def _handle_send(self, task_id: str):
         task = self._owned_task(task_id)
