@@ -188,6 +188,13 @@
 - 主要文件：`open-claude/oc_codex_server.py`、`open-claude/open_claude/config.py`、`tests/test_ontology_knowledge.py`。
 - 类型：后端与测试变更，需要重启本地和服务器服务。
 
+### 12. 旧会话正文恢复
+
+- 修复历史任务详情为空的问题：当旧任务没有保存网页事件日志时，从 SessionStore 中恢复用户消息和 Agent 回复正文后再展示。
+- 已保存的工具执行卡片仍按原日志展示；历史上未保存的工具卡片无法补造，但不会再导致整个会话空白。
+- 主要文件：`open-claude/oc_codex_server.py`。
+- 类型：Python 后端变更，需要重启服务。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。

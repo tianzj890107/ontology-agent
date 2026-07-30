@@ -1770,6 +1770,34 @@ class Task:
                 return True
         return False
 
+    def rebuild_log_from_conversation(self) -> list[dict]:
+        """Recover readable chat messages for legacy tasks whose web event log
+        was not persisted yet. Tool cards cannot be reconstructed, but the
+        user/assistant conversation is stored by SessionStore and should be
+        shown instead of presenting a blank task.
+        """
+        recovered = []
+        for message in getattr(self.conv, "messages", []) or []:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        parts.append(str(block.get("text") or ""))
+                text = "\n".join(p for p in parts if p)
+            else:
+                text = str(content or "")
+            if text.strip():
+                recovered.append({"type": role, "text": text})
+        return recovered
+
     # -- one full agentic turn, streamed --------------------------------------
 
     def stream_turn(self, text: str, emit, display_text: str | None = None):
@@ -1999,6 +2027,8 @@ def restore_tasks():
             t.updated = float(row.get("updated") or t.created)
             t.status = "idle" if row.get("status") == "working" else str(row.get("status") or "idle")
             t.log = row.get("log") if isinstance(row.get("log"), list) else []
+            if not t.log:
+                t.log = t.rebuild_log_from_conversation()
             TASKS[t.id] = t
         except Exception:
             traceback.print_exc()
@@ -2340,6 +2370,10 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 task = self._owned_task(m.group(1))
                 if not task: return
+                if not task.log:
+                    task.log = task.rebuild_log_from_conversation()
+                    if task.log:
+                        persist_tasks()
                 self._send_json({**task.summary(), "log": task.log})
                 return
             self.send_error(404)
