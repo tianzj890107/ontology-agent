@@ -193,6 +193,33 @@ function EventFeed({ events, onApprove, files, onFile }) {
   );
 }
 
+function parseCsv(text) {
+  const source = String(text || "").replace(/^\uFEFF/, "");
+  const rows = []; let row = []; let cell = ""; let quoted = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '"') {
+      if (quoted && source[index + 1] === '"') { cell += '"'; index += 1; }
+      else quoted = !quoted;
+    } else if (char === "," && !quoted) { row.push(cell); cell = ""; }
+    else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && source[index + 1] === "\n") index += 1;
+      row.push(cell); cell = "";
+      if (row.some((value) => value !== "")) rows.push(row);
+      row = [];
+    } else cell += char;
+  }
+  if (cell || row.length) { row.push(cell); if (row.some((value) => value !== "")) rows.push(row); }
+  return rows;
+}
+
+function CsvPreview({ text }) {
+  const rows = parseCsv(text);
+  const headers = rows[0] || [];
+  const body = rows.slice(1);
+  return <div className="csv-preview"><div className="csv-preview-meta">CSV 表格预览 · {body.length} 行 · {headers.length} 列</div><div className="csv-preview-scroll"><table className="csv-preview-table"><thead><tr>{headers.map((header, index) => <th key={index}>{header || `列 ${index + 1}`}</th>)}</tr></thead><tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((_, columnIndex) => <td key={columnIndex}>{row[columnIndex] || ""}</td>)}</tr>)}</tbody></table></div></div>;
+}
+
 const MISSION_LABELS = {
   repositoryId: "本体库 ID", taskCode: "任务编码", taskName: "任务名称", modelName: "模型名称",
   taskType: "任务类型", prompt: "提示词", parseElements: "解析要素", expectedFiles: "期望输出文件",
@@ -449,7 +476,7 @@ function App() {
   const onSaveKey = async () => { const result = await api("/api/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: keyValue }) }); if (result.error) messageApi.error(result.error); else messageApi.success("模型密钥已保存"); };
 
   const fileUrl = (path) => { const project = active?.project || ""; return `/p/${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}${MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}&taskId=${encodeURIComponent(active?.id || "")}` : ""}`; };
-  const openFile = async (path) => { setFilesOpen(true); setFocusFile(path); try { const response = await fetch(fileUrl(path), { credentials: "same-origin" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); const type = response.headers.get("content-type") || ""; if (type.startsWith("image/")) setPreview({ path, image: URL.createObjectURL(await response.blob()) }); else setPreview({ path, text: await response.text() }); } catch (error) { messageApi.error(`打开文件失败: ${error.message}`); } };
+  const openFile = async (path) => { setFilesOpen(true); setFocusFile(path); try { const response = await fetch(fileUrl(path), { credentials: "same-origin" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); const type = response.headers.get("content-type") || ""; if (type.startsWith("image/")) setPreview({ path, image: URL.createObjectURL(await response.blob()) }); else { const text = await response.text(); setPreview({ path, text, csv: /\.csv$/i.test(path) || type.includes("text/csv") }); } } catch (error) { messageApi.error(`打开文件失败: ${error.message}`); } };
   const download = () => { if (!selectedFiles.length) return; const project = active?.project || ""; const query = new URLSearchParams({ project }); selectedFiles.forEach((path) => query.append("path", path)); if (MISSION) { query.set("repositoryId", MISSION.repositoryId); query.set("taskCode", MISSION.taskCode); query.set("taskId", active?.id || ""); } window.open(`/api/download?${query}`, "_blank"); };
 
   const sidebarTasks = tasks.filter((task) => !MISSION || (task.repositoryId === MISSION.repositoryId && task.taskCode === MISSION.taskCode));
@@ -482,7 +509,7 @@ function App() {
       </main>
       <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
-      {preview && <Modal open title={preview.path} footer={null} width="80vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+      {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
       {MISSION && <MissionInfo open={missionInfoOpen} context={missionContext} loading={missionLoading} onClose={() => setMissionInfoOpen(false)} />}
     </div>

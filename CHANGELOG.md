@@ -282,6 +282,13 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
 - 类型：前端静态资源变更，刷新页面即可，无需重启后端。
 
+### 25. CSV 表格预览
+
+- 点击 CSV 文件时改为表格预览，自动识别表头和数据行，支持引号字段、横向/纵向滚动和首行表头固定。
+- 非 CSV 文件继续使用原有文本或图片预览方式。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
+- 类型：前端静态资源变更，刷新页面即可，无需重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
