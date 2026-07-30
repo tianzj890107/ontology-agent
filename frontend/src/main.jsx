@@ -234,12 +234,12 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
     <div className="file-actions"><Button size="small" disabled={!selected.length} onClick={onDownload}>⬇ 下载所选</Button>{mission && <span className="panel-note">当前任务范围</span>}</div>
     {loading ? <Spin /> : !files.length ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => {
       const collapsed = collapsedDirs.has(dir);
-      const selectableFolder = dir === "mission-input" || dir === "mission-output";
       const paths = items.map((file) => file.path);
       const allSelected = paths.length > 0 && paths.every((path) => selected.includes(path));
+      const partiallySelected = !allSelected && paths.some((path) => selected.includes(path));
       return <div className="file-group" key={dir || "root"}>
         <div className="file-group-title">
-          {selectableFolder && <Button size="small" className="file-group-select" onClick={() => onSelectGroup(paths)}>{allSelected ? "取消全选" : "全选"}</Button>}
+          <input className="folder-select" type="checkbox" checked={allSelected} ref={(node) => { if (node) node.indeterminate = partiallySelected; }} onChange={() => onSelectGroup(paths)} aria-label={`选择 ${dir || "项目根目录"} 下全部文件`} />
           <button type="button" className="file-group-toggle" onClick={() => toggleDir(dir)} aria-expanded={!collapsed}>{collapsed ? "›" : "⌄"} {groupLabel(dir)}</button>
           <span>({items.length})</span>
         </div>

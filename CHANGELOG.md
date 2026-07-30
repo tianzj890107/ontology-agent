@@ -238,6 +238,13 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
 - 类型：前端静态资源变更，刷新页面即可，无需重启后端。
 
+### 19. 文件夹全选复选框样式
+
+- 文件夹全选改为与文件行一致的无文字复选框，置于文件夹图标左侧的同一选择列。
+- `mission-input`、`mission-output` 和项目根目录均支持目录级全选；部分选中时显示半选状态。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
+- 类型：前端静态资源变更，刷新页面即可，无需重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
