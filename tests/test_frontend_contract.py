@@ -16,6 +16,8 @@ class FrontendContractTests(unittest.TestCase):
     def test_workbench_uses_thought_chain_and_existing_api_routes(self):
         source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
         self.assertIn('import { ThoughtChain } from "@ant-design/x"', source)
+        self.assertIn('MISSION ? "你可以直接点击开始任务，或者描述一个任务"', source)
+        self.assertNotIn(': mission ? "你可以直接点击开始任务', source)
         for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send"):
             self.assertIn(route, source)
 

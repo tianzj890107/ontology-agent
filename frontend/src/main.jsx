@@ -230,7 +230,7 @@ function App() {
   const params = meta.params || { temperature: null, max_tokens: null, thinking: false, thinking_budget: 8000 };
   const provider = meta.provider || "";
   const hasConversation = Boolean(active?.hasConversation || events.some((event) => ["user", "assistant"].includes(event.type) && String(event.text || "").trim()));
-  const placeholder = view === "task" ? "继续对这个任务下指令…" : mission ? "你可以直接点击开始任务，或者描述一个任务" : "描述一个任务，例如：帮我分析这个项目…";
+  const placeholder = view === "task" ? "继续对这个任务下指令…" : MISSION ? "你可以直接点击开始任务，或者描述一个任务" : "描述一个任务，例如：帮我分析这个项目…";
 
   const loadMeta = async () => { const result = await api("/api/meta"); if (!result.error) setMeta(result); else messageApi.error(result.error); };
   const loadTasks = async () => { const result = await api(`/api/tasks${MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}` : ""}`); if (!result.error) setTasks(result.tasks || []); };
