@@ -2079,12 +2079,11 @@ def mission_bound_project(repository_id: str, task_code: str,
     with TASKS_LOCK:
         if task_id:
             task = TASKS.get(task_id)
-            if (task and task.repository_id == repository_id and task.task_code == task_code
-                    and task.user_id and user_id and task.user_id != user_id):
-                return None
+            # 历史会话的本地登录态可能在服务重启后变化。只要浏览器同时提供了
+            # 精确的 repositoryId + taskCode，便允许它继续读取这个 taskId 的工作区；
+            # 不能借 taskId 跳到别的本体任务。
             if (task and task.repository_id == repository_id
                     and task.task_code == task_code and task.project
-                    and (not user_id or not task.user_id or task.user_id == user_id)
                     and project_path(task.project)):
                 return task.project
         for task in TASKS.values():
