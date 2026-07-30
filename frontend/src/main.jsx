@@ -109,6 +109,22 @@ function EventFileText({ text, files, onFile }) {
     : <React.Fragment key={index}>{part}</React.Fragment>)}</>;
 }
 
+function compactEventSummary(value) {
+  const source = String(value || "");
+  const trimmed = source.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const first = Array.isArray(parsed) ? parsed[0] : Object.entries(parsed)[0];
+      if (Array.isArray(first)) return `${first[0]}: ${typeof first[1] === "string" ? first[1] : JSON.stringify(first[1])}`;
+      if (first !== undefined) return typeof first === "string" ? first : JSON.stringify(first);
+    } catch { /* 多行非标准 JSON，继续按首行处理 */ }
+  }
+  const firstLine = trimmed.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !/^[{}[\],]+$/.test(line)) || "";
+  return firstLine.replace(/^[{"'`\s]+|[}"'`,\s]+$/g, "").replace(/^([^:]+):\s*["']?(.*?)["']?$/, "$1: $2");
+}
+
 function ThoughtEvent({ event, onApprove, files, onFile }) {
   const [expanded, setExpanded] = useState(false);
   const kind = event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
@@ -124,8 +140,10 @@ function ThoughtEvent({ event, onApprove, files, onFile }) {
   };
   return (
     <div className={`chain-event chain-event-${kind}`}>
-      <ThoughtChain items={[item]} collapsible={{ expandedKeys: expanded ? [key] : [], onExpand: (keys) => setExpanded(keys.includes(key)) }} />
-      {!expanded && detail && <div className="thought-summary"><EventFileText text={detail.slice(0, 240)} files={files} onFile={onFile} /></div>}
+      <div className="thought-collapsed-row">
+        <ThoughtChain items={[item]} collapsible={{ expandedKeys: expanded ? [key] : [], onExpand: (keys) => setExpanded(keys.includes(key)) }} />
+        {!expanded && detail && <div className="thought-summary"><EventFileText text={compactEventSummary(detail)} files={files} onFile={onFile} /></div>}
+      </div>
       {event.type === "approval_request" && (
         <div className="approval-actions">
           <Button type="primary" size="small" onClick={() => onApprove(event.id, true)}>允许执行</Button>

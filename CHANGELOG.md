@@ -296,6 +296,13 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/package.json`、`frontend/dist/`。
 - 类型：前端依赖与静态资源变更，刷新页面即可，无需重启后端。
 
+### 27. 思维链紧凑摘要
+
+- 未展开的思维链不再显示 JSON 外层大括号和多行内容，只提取第一条有效字段内容。
+- 摘要与“工具结果”“创建任务”等步骤标题保持同一行；点击展开后仍可查看完整 JSON 和详细输出。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
+- 类型：前端静态资源变更，刷新页面即可，无需重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
