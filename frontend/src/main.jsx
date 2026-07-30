@@ -109,19 +109,22 @@ function EventFileText({ text, files, onFile }) {
 }
 
 function ThoughtEvent({ event, onApprove, files, onFile }) {
+  const [expanded, setExpanded] = useState(false);
   const kind = event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
   const icon = event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
+  const key = event.id || `${event.type}-${event.name || "event"}-${event.text || ""}`;
+  const detail = eventDescription(event);
   const item = {
-    key: event.id || `${event.type}-${event.name || "event"}-${event.text || ""}`,
+    key,
     title: eventTitle(event),
-    description: <EventFileText text={eventDescription(event).slice(0, 240)} files={files} onFile={onFile} />,
-    content: <div className="thought-detail"><EventFileText text={eventDescription(event)} files={files} onFile={onFile} /></div>,
+    content: <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div>,
     status: eventStatus(event),
     icon: <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>,
   };
   return (
     <div className={`chain-event chain-event-${kind}`}>
-      <ThoughtChain items={[item]} collapsible={true} />
+      <ThoughtChain items={[item]} collapsible={{ expandedKeys: expanded ? [key] : [], onExpand: (keys) => setExpanded(keys.includes(key)) }} />
+      {!expanded && detail && <div className="thought-summary"><EventFileText text={detail.slice(0, 240)} files={files} onFile={onFile} /></div>}
       {event.type === "approval_request" && (
         <div className="approval-actions">
           <Button type="primary" size="small" onClick={() => onApprove(event.id, true)}>允许执行</Button>
