@@ -35,6 +35,7 @@
 
 - 原 `open-claude/codex_web.html` 的单文件界面保留为未构建时的兼容回退；正式页面改由 `frontend/` 中的 React + Vite + Ant Design/Ant Design X 构建。
 - 任务列表、当前任务上下文、会话恢复、SSE 对话、审批、文件浏览/预览/下载/上传、模型参数和用户 Key 设置均接入原有后端接口；建模与消歧空会话继续显示对应的开始任务按钮。
+- 修复首次渲染时任务上下文变量引用错误导致页面空白的问题；普通入口和 `/mission`、`/merge` 入口均已完成页面级冒烟验证。
 - 思维链行为卡片使用 `@ant-design/x` 的 `ThoughtChain`，页面统一使用本体平台风格的浅色低饱和主题，并保留三栏文件区和响应式布局。
 - Python 服务优先提供 `frontend/dist` 的构建结果并安全提供 `/assets/*`，没有构建前端时自动回退到旧 HTML；任务入口 `/mission`、`/merge` 继续注入任务上下文。
 - 主要文件：`frontend/package.json`、`frontend/vite.config.js`、`frontend/index.html`、`frontend/src/main.jsx`、`frontend/src/styles.css`、`open-claude/oc_codex_server.py`。
