@@ -10,6 +10,7 @@ import {
   InputNumber,
   List,
   Modal,
+  Popover,
   Select,
   Slider,
   Spin,
@@ -131,20 +132,49 @@ function ThoughtEvent({ event, onApprove, files, onFile }) {
   );
 }
 
+function inlineMarkdown(value) {
+  const text = String(value || "");
+  const token = /(\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|`[^`]+`|\[[^\]]+\]\([^\)]+\))/g;
+  return text.split(token).map((part, index) => {
+    if (/^\*\*.*\*\*$|^__.*__$/.test(part)) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (/^\*.*\*$|^_.*_$/.test(part)) return <em key={index}>{part.slice(1, -1)}</em>;
+    if (/^`.*`$/.test(part)) return <code key={index}>{part.slice(1, -1)}</code>;
+    const link = part.match(/^\[([^\]]+)\]\(([^\)]+)\)$/);
+    if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
+    return <React.Fragment key={index}>{part.split("\n").map((line, lineIndex) => <React.Fragment key={lineIndex}>{lineIndex ? <br /> : null}{line}</React.Fragment>)}</React.Fragment>;
+  });
+}
+
+function markdownTableRow(line) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
 function AssistantText({ text }) {
   const lines = String(text || "").split("\n");
-  return (
-    <div className="assistant-text">
-      {lines.map((line, index) => {
-        const trimmed = line.trim();
-        if (!trimmed) return <div className="text-gap" key={index} />;
-        if (/^```/.test(trimmed)) return <div className="code-line" key={index}>{trimmed}</div>;
-        if (/^#{1,3}\s/.test(trimmed)) return <h3 key={index}>{trimmed.replace(/^#{1,3}\s*/, "")}</h3>;
-        if (/^[-*]\s/.test(trimmed)) return <div className="list-line" key={index}>• {trimmed.slice(2)}</div>;
-        return <p key={index}>{line}</p>;
-      })}
-    </div>
-  );
+  const blocks = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!trimmed) { index += 1; continue; }
+    if (/^```/.test(trimmed)) {
+      const code = []; index += 1;
+      while (index < lines.length && !/^```/.test(lines[index].trim())) code.push(lines[index++]);
+      if (index < lines.length) index += 1;
+      blocks.push(<pre className="markdown-code" key={`code-${index}`}><code>{code.join("\n")}</code></pre>); continue;
+    }
+    if (/^\|/.test(trimmed) && index + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[index + 1])) {
+      const head = markdownTableRow(line); index += 2; const rows = [];
+      while (index < lines.length && /^\s*\|/.test(lines[index])) rows.push(markdownTableRow(lines[index++]));
+      blocks.push(<table className="markdown-table" key={`table-${index}`}><thead><tr>{head.map((cell, cellIndex) => <th key={cellIndex}>{inlineMarkdown(cell)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{head.map((_, cellIndex) => <td key={cellIndex}>{inlineMarkdown(row[cellIndex] || "")}</td>)}</tr>)}</tbody></table>); continue;
+    }
+    if (/^#{1,3}\s/.test(trimmed)) { blocks.push(<h3 key={`heading-${index}`}>{inlineMarkdown(trimmed.replace(/^#{1,3}\s*/, ""))}</h3>); index += 1; continue; }
+    if (/^[-*]\s/.test(trimmed)) { const items = []; while (index < lines.length && /^\s*[-*]\s/.test(lines[index])) items.push(lines[index++].replace(/^\s*[-*]\s+/, "")); blocks.push(<ul key={`list-${index}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{inlineMarkdown(item)}</li>)}</ul>); continue; }
+    const paragraph = [line]; index += 1;
+    while (index < lines.length && lines[index].trim() && !/^```|^#{1,3}\s|^\s*[-*]\s|^\s*\|/.test(lines[index])) paragraph.push(lines[index++]);
+    blocks.push(<p key={`paragraph-${index}`}>{inlineMarkdown(paragraph.join("\n"))}</p>);
+  }
+  return <div className="assistant-text">{blocks}</div>;
 }
 
 function EventFeed({ events, onApprove, files, onFile }) {
@@ -214,7 +244,16 @@ function SettingsModal({ open, onClose, meta, model, onModel, params, onParams, 
   );
 }
 
-function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, busy, hasConversation, model, placeholder, projects, project, onProject }) {
+function ModelPicker({ model, models, onModel, onOpenSettings }) {
+  const [open, setOpen] = useState(false);
+  const content = <div className="model-picker">
+    <div className="model-picker-list">{(models || []).map((item) => <button type="button" className={item.id === model ? "model-option active" : "model-option"} key={item.id} onClick={() => { onModel(item.id); setOpen(false); }}><span>{item.label || item.id}</span><small>{item.provider || ""}</small></button>)}</div>
+    <Button type="link" className="model-params-link" onClick={() => { setOpen(false); onOpenSettings(); }}>⚙ 修改模型参数</Button>
+  </div>;
+  return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="topRight" content={content} title="选择大语言模型"><button type="button" className="model-hint">⚙ {String(model || "模型").slice(0, 16)}⌄</button></Popover>;
+}
+
+function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, busy, hasConversation, model, models, onModel, onOpenSettings, placeholder, projects, project, onProject }) {
   const start = mission && !hasConversation && !value.trim();
   return (
     <div className="composer">
@@ -223,7 +262,7 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
       <div className="composer-row">
         <Button type="text" onClick={onAttach} title="上传文件到项目">📎 <span>上传文件</span></Button>
         {!mission && projects?.length > 0 && <Select size="small" value={project} options={projects.map((item) => ({ value: item.name, label: item.name }))} onChange={onProject} className="project-select" placeholder="选择项目" />}
-        <Tooltip title={`当前模型：${model || "未选择"}`}><span className="model-hint">⚙ {String(model || "模型").slice(0, 9)}…⌄</span></Tooltip>
+        <ModelPicker model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} />
         <Button type={start ? "primary" : "default"} className={start ? "start-button" : "send-button"} onClick={onSend} disabled={busy}>{start ? (mission?.taskType === "integration" ? "开始智能消歧与整合" : "开始智能建模") : "↑"}</Button>
       </div>
     </div>
@@ -432,10 +471,10 @@ function App() {
         <div className="sandbox-note">沙箱模式：智能体只能操作当前任务工作目录。<br /><span>{meta.sandbox || "sandbox/"}</span></div>
       </aside>
       <main className="main-content">
-        {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
+        {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
           <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong>{active?.title || "当前任务"}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Switch checked={autoApprove} onChange={(value) => { setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); }} checkedChildren="自动确认" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
           <div className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} /></div>
-          <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
+          <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
         </section>}
       </main>
       <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />

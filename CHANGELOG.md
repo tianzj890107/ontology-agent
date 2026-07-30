@@ -267,6 +267,13 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
 - 类型：前端静态资源变更，刷新页面即可，无需重启后端。
 
+### 23. 模型选择与 Markdown 输出渲染
+
+- 输入框中的当前模型改为可点击选择，弹出模型列表，底部提供“修改模型参数”入口并复用原参数设置面板。
+- Agent 回复支持 Markdown 标题、加粗、斜体、行内代码、代码块、列表和表格渲染，改善对话页面可读性。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`。
+- 类型：前端静态资源变更，刷新页面即可，无需重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
