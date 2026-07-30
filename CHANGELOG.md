@@ -188,6 +188,13 @@
 - 主要文件：`open-claude/oc_codex_server.py`、`open-claude/open_claude/config.py`、`tests/test_ontology_knowledge.py`。
 - 类型：后端与测试变更，需要重启本地和服务器服务。
 
+### 12. 全量任务信息展示
+
+- 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
+- 展示任务编码、名称、模型、提示词、解析要素、期望输出文件、输出路径，以及数据源/文档等嵌套字段；字段名称统一为中文，密码继续脱敏。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`。
+- 类型：前端构建产物变更；刷新页面即可，无需重启后端。
+
 ## 当前最终版本
 
 - Git 分支：`20260727`

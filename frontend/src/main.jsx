@@ -134,11 +134,28 @@ function EventFeed({ events, onApprove }) {
   );
 }
 
-function RecursiveInfo({ value, level = 0 }) {
+const MISSION_LABELS = {
+  repositoryId: "本体库 ID", taskCode: "任务编码", taskName: "任务名称", modelName: "模型名称",
+  taskType: "任务类型", prompt: "提示词", parseElements: "解析要素", expectedFiles: "期望输出文件",
+  outputPrefix: "输出路径前缀", sourceMode: "来源模式", checkTypes: "校验类型", dbType: "数据库类型",
+  host: "主机", port: "端口", database: "数据库", username: "用户名", password: "密码",
+  sourceSchema: "Schema", selectedTables: "选中数据表", databaseSourceId: "数据源 ID",
+  fileSourceId: "文件源 ID", fileType: "文件类型", objectKey: "对象存储 Key", items: "条目",
+  mode: "模式", generateAlignmentReport: "生成对齐报告", generate_alignment_report: "生成对齐报告",
+  autoMergeStrategy: "自动合并策略", auto_merge_strategy: "自动合并策略", alignmentStrategy: "对齐策略",
+  mergeStrategy: "整合策略", conflictResolutionStrategy: "冲突处理策略", pendingConfirmationStrategy: "待确认策略",
+};
+const MISSION_SECTION_LABELS = {
+  database: "数据源", document: "文档", sourceModels: "来源模型", integrationStrategy: "整合策略",
+  validationRules: "校验规则",
+};
+const missionLabel = (key) => MISSION_LABELS[key] || MISSION_SECTION_LABELS[key] || key;
+
+function RecursiveInfo({ value, level = 0, field = "" }) {
   if (value === null || value === undefined || value === "") return null;
   if (Array.isArray(value)) return <div className="info-tags">{value.map((item, index) => <Tag key={index}>{typeof item === "object" ? $json(item) : String(item)}</Tag>)}</div>;
-  if (typeof value === "object") return <div className="info-nested">{Object.entries(value).map(([key, item]) => <div className="info-row" key={`${level}-${key}`}><span className="info-key">{key}</span><div className="info-value"><RecursiveInfo value={item} level={level + 1} /></div></div>)}</div>;
-  return <span>{String(value)}</span>;
+  if (typeof value === "object") return <div className="info-nested">{Object.entries(value).map(([key, item]) => <div className="info-row" key={`${level}-${key}`}><span className="info-key">{missionLabel(key)}</span><div className="info-value"><RecursiveInfo value={item} level={level + 1} field={key} /></div></div>)}</div>;
+  return <span>{field === "password" ? "••••••••" : String(value)}</span>;
 }
 
 function MissionInfo({ open, context, loading, onClose }) {
