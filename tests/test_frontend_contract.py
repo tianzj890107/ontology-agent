@@ -29,7 +29,12 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('approve(event.id, true, task)', source)
         self.assertIn('approvalInFlightRef', source)
         self.assertIn('approve(pending.id, true, current)', source)
-        for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send"):
+        self.assertIn('event.type === "thinking" && loading ? <Spin size="small" />', source)
+        self.assertIn('上传到 MinIO', source)
+        self.assertIn('const uploadToMinio = async () =>', source)
+        self.assertIn('missionContext?.outputPrefix', source)
+        self.assertIn('onUploadToMinio={uploadToMinio}', source)
+        for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send", "/api/minio/upload"):
             self.assertIn(route, source)
 
     def test_python_server_prefers_built_frontend_with_safe_assets(self):

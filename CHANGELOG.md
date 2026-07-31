@@ -567,6 +567,13 @@
 - 主要文件：`agent_knowledge/通用业务对象与逻辑实体识别规范_V6.md`、`scripts/build_agent_knowledge.py`、`agent_knowledge/modeling/`、`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`。
 - 类型：建模核心规则与服务端 Agent 提示变更，需要重新构建知识库并重启本地和服务器 Agent。
 
+### 66. MinIO 结果上传与思考加载提示恢复
+
+- 文件面板恢复“上传到 MinIO”按钮；本体任务选中结果文件后，使用当前任务 `outputPrefix` 调用 `/api/minio/upload`，并展示上传、失败与任务回写结果。
+- 思考流事件合并为连续内容；当前正在接收的思考步骤使用 Ant Design `Spin` 转圈提示，后续工具调用或回复到达后自动停止。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+- 类型：前端交互和静态资源变更，刷新浏览器即可；服务器需同步构建产物，无需重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。

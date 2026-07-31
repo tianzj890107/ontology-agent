@@ -79,6 +79,7 @@ function normalizeEvents(task) {
 
 function eventTitle(event) {
   const names = { Read: "读取文件", Write: "写入文件", Edit: "修改文件", Bash: "执行命令", Glob: "查找文件", Grep: "搜索内容", Agent: "调用子智能体", TaskCreate: "创建任务" };
+  if (event.type === "thinking") return "思考中";
   if (event.type === "model_switch") return "模型切换";
   if (event.type === "tool_result") return "工具结果";
   return names[event.name] || event.name || event.type || "执行步骤";
@@ -129,10 +130,10 @@ function compactEventSummary(value) {
   return firstLine.replace(/^[{"'`\s]+|[}"'`,\s]+$/g, "").replace(/^([^:]+):\s*["']?(.*?)["']?$/, "$1: $2");
 }
 
-function ThoughtEvent({ event, onApprove, files, onFile }) {
+function ThoughtEvent({ event, onApprove, files, onFile, loading = false }) {
   const [expanded, setExpanded] = useState(false);
-  const kind = event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
-  const icon = event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
+  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
+  const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
   const detail = eventDescription(event);
   const toggleExpanded = () => setExpanded((value) => !value);
   return (
@@ -200,14 +201,15 @@ function AssistantText({ text }) {
   return <div className="assistant-text">{blocks}</div>;
 }
 
-function EventFeed({ events, onApprove, files, onFile }) {
+function EventFeed({ events, onApprove, files, onFile, busy = false }) {
   return (
     <div className="feed-list">
       {events.map((event, index) => {
         if (event.type === "user") return <div className="user-message" key={`${index}-user`}>{event.text}</div>;
         if (["text", "assistant"].includes(event.type)) return <div className="assistant-message" key={`${index}-assistant`}><AssistantText text={event.text} /></div>;
         if (event.type === "done") return <div className="done-note" key={`${index}-done`}>本轮执行结束 · {event.status || "完成"}</div>;
-        return <ThoughtEvent event={event} onApprove={onApprove} files={files} onFile={onFile} key={`${index}-${event.id || event.type}`} />;
+        const loading = busy && index === events.length - 1 && event.type === "thinking";
+        return <ThoughtEvent event={event} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
       })}
     </div>
   );
@@ -337,7 +339,7 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
   );
 }
 
-function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onClose, onRefresh, mission, focusPath }) {
+function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onUploadToMinio, uploadingToMinio, onClose, onRefresh, mission, focusPath }) {
   const [collapsedDirs, setCollapsedDirs] = useState(() => new Set([""]));
   const groups = useMemo(() => {
     const map = new Map();
@@ -360,7 +362,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" onClick={onRefresh}>⟳</Button><Button size="small" onClick={onClose}>✕</Button></div>
-    <div className="file-actions"><Button size="small" disabled={!selected.length} onClick={onDownload}>⬇ 下载所选</Button>{mission && <span className="panel-note">当前任务范围</span>}</div>
+    <div className="file-actions"><Button size="small" disabled={!selected.length} onClick={onDownload}>⬇ 下载所选</Button>{mission && <Button size="small" type="primary" loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio} onClick={onUploadToMinio}>☁ 上传到 MinIO</Button>}{mission && <span className="panel-note">当前任务范围</span>}</div>
     {loading ? <Spin /> : !files.length ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => {
       const collapsed = collapsedDirs.has(dir);
       const paths = items.map((file) => file.path);
@@ -393,6 +395,7 @@ function App() {
   const [focusFile, setFocusFile] = useState("");
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [minioUploading, setMinioUploading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [missionInfoOpen, setMissionInfoOpen] = useState(false);
@@ -465,9 +468,9 @@ function App() {
   };
 
   const appendEvent = (event) => setEvents((previous) => {
-    if (event.type === "text") {
+    if (event.type === "text" || event.type === "thinking") {
       const last = previous[previous.length - 1];
-      if (last?.type === "text") return [...previous.slice(0, -1), { ...last, text: `${last.text || ""}${event.text || ""}` }];
+      if (last?.type === event.type) return [...previous.slice(0, -1), { ...last, text: `${last.text || ""}${event.text || ""}` }];
     }
     return [...previous, event];
   });
@@ -550,6 +553,23 @@ function App() {
   const fileUrl = (path) => { const project = active?.project || ""; return `/p/${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}${MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}&taskId=${encodeURIComponent(active?.id || "")}` : ""}`; };
   const openFile = async (path) => { setFilesOpen(true); setFocusFile(path); try { const response = await fetch(fileUrl(path), { credentials: "same-origin" }); if (!response.ok) throw new Error(`HTTP ${response.status}`); const type = response.headers.get("content-type") || ""; if (type.startsWith("image/")) setPreview({ path, image: URL.createObjectURL(await response.blob()) }); else if (/\.(xlsx?|xlsm)$/i.test(path)) { const workbook = XLSX.read(await response.arrayBuffer(), { type: "array", cellDates: true }); const sheets = workbook.SheetNames.map((name) => ({ name, rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "", raw: false }) })); setPreview({ path, xlsx: true, sheets }); } else { const text = await response.text(); setPreview({ path, text, csv: /\.csv$/i.test(path) || type.includes("text/csv") }); } } catch (error) { messageApi.error(`打开文件失败: ${error.message}`); } };
   const download = () => { if (!selectedFiles.length) return; const project = active?.project || ""; const query = new URLSearchParams({ project }); selectedFiles.forEach((path) => query.append("path", path)); if (MISSION) { query.set("repositoryId", MISSION.repositoryId); query.set("taskCode", MISSION.taskCode); query.set("taskId", active?.id || ""); } window.open(`/api/download?${query}`, "_blank"); };
+  const uploadToMinio = async () => {
+    if (!MISSION || !active || !selectedFiles.length) return;
+    const prefix = String(missionContext?.outputPrefix || "").trim();
+    if (!prefix) { messageApi.error("尚未获取当前任务的输出路径，无法上传到 MinIO"); return; }
+    setMinioUploading(true);
+    try {
+      const result = await api("/api/minio/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: active.project, paths: selectedFiles, prefix, taskCode: MISSION.taskCode, repositoryId: MISSION.repositoryId, taskId: active.id, taskType: MISSION.taskType || active.taskType || "" }) });
+      if (result.error) { messageApi.error(result.error); return; }
+      const failed = (result.results || []).filter((item) => !item.ok);
+      if (result.uploaded) messageApi.success(`已上传 ${result.uploaded}/${result.total || selectedFiles.length} 个文件到 MinIO`);
+      if (failed.length) messageApi.warning(failed.map((item) => `${item.name}: ${item.error}`).join("；"));
+      if (result.callback && result.callback.ok === false && !result.callback.skipped) messageApi.warning(`任务回写失败：${result.callback.error || "请稍后重试"}`);
+      await loadFiles(active);
+    } finally {
+      setMinioUploading(false);
+    }
+  };
 
   const sidebarTasks = tasks.filter((task) => !MISSION || (task.repositoryId === MISSION.repositoryId && task.taskCode === MISSION.taskCode));
   return <ConfigProvider theme={{ token: { colorPrimary: "#5f7f9d", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
@@ -575,11 +595,11 @@ function App() {
       <main className="main-content">
         {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
           <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Switch checked={autoApprove} onChange={(value) => { autoApproveRef.current = value; setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); if (value) { const pending = events.find((event) => event.type === "approval_request"); if (pending) approve(pending.id, true, active); } }} checkedChildren="自动确认：开" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
-          <div className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} /></div>
+          <div className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} /></div>
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
         </section>}
       </main>
-      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />
+      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
       {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
