@@ -20,7 +20,6 @@ import {
   Tooltip,
   message,
 } from "antd";
-import { ThoughtChain } from "@ant-design/x";
 import "./styles.css";
 
 const MISSION = window.__MISSION__?.taskCode ? window.__MISSION__ : null;
@@ -134,22 +133,18 @@ function ThoughtEvent({ event, onApprove, files, onFile }) {
   const [expanded, setExpanded] = useState(false);
   const kind = event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
   const icon = event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
-  const key = event.id || `${event.type}-${event.name || "event"}-${event.text || ""}`;
   const detail = eventDescription(event);
   const toggleExpanded = () => setExpanded((value) => !value);
-  const item = {
-    key,
-    title: <button type="button" className="thought-toggle" onClick={(clickEvent) => { clickEvent.stopPropagation(); toggleExpanded(); }}>{eventTitle(event)}</button>,
-    content: expanded ? <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div> : undefined,
-    status: eventStatus(event),
-    icon: <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>,
-  };
   return (
     <div className={`chain-event chain-event-${kind}`}>
       <div className="thought-collapsed-row">
-        <ThoughtChain items={[item]} />
+        <div className="thought-header">
+          <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>
+          <button type="button" className="thought-toggle" onClick={(clickEvent) => { clickEvent.stopPropagation(); toggleExpanded(); }}>{eventTitle(event)}</button>
+        </div>
         {!expanded && detail && <div className="thought-summary"><EventFileText text={compactEventSummary(detail)} files={files} onFile={onFile} /></div>}
       </div>
+      {expanded && <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div>}
       {event.type === "approval_request" && (
         <div className="approval-actions">
           <Button type="primary" size="small" onClick={() => onApprove(event.id, true)}>允许执行</Button>
