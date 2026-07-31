@@ -26,7 +26,9 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('MissionInfo open={missionInfoOpen}', source)
         self.assertIn('normalizeEvents(current)', source)
         self.assertIn('autoApproveRef.current', source)
-        self.assertIn('approve(event.id, true)', source)
+        self.assertIn('approve(event.id, true, task)', source)
+        self.assertIn('approvalInFlightRef', source)
+        self.assertIn('approve(pending.id, true, current)', source)
         for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send"):
             self.assertIn(route, source)
 

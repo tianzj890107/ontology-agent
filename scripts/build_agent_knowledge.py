@@ -119,6 +119,8 @@ def read_xlsx(path: Path) -> str:
 
 def read_source(name: str) -> str:
     path = SOURCE_DIR / name
+    if path.suffix.lower() == ".md":
+        return path.read_text(encoding="utf-8")
     if path.suffix == ".xlsx":
         return read_xlsx(path)
     return read_docx(path)
@@ -277,6 +279,9 @@ BASE_SOURCES = [
     "本体建模步骤拆解.xlsx",
     "本体元模型.xlsx",
     "本体元模型模板.xlsx",
+    # V3 是当前自底向上识别逻辑实体和业务对象的最高优先级规范。
+    # 放在公共规则最后，确保模型在发现历史规则冲突时以 V3 为准。
+    "自底向上业务对象识别规范_v3.md",
 ]
 SOURCE_DOCS = {
     "source_code": "源代码本体建模.docx",
@@ -299,6 +304,7 @@ def build() -> None:
 - `modeling/base.md` 用于所有智能建模任务；各 `modeling/*.md` 文件只保存对应输入源的专项规则，运行时由 Agent 加载器按需拼接公共规则和专项规则，避免重复复制。
 - `modeling/本体元模型.md`、`modeling/本体元模型模板.md` 和 `modeling/本体建模步骤拆解.md` 是建模参考 Markdown；同样内容也已编入 `modeling/base.md`，由 modeling system prompt 静态注入 Agent。
 - `modeling/数据模型建模规范-20260626.md` 是数据模型命名、定义、主键、关系和建模质量规范的独立 Markdown；同样内容也已编入 `modeling/base.md`。
+- `modeling/自底向上业务对象识别规范_v3.md` 是当前逻辑实体识别、关系边分类、业务对象聚合和完整性校验的最高优先级规范；已编入 `modeling/base.md`，与历史规则冲突时必须以 V3 为准。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 
 ## 安全边界
@@ -306,7 +312,12 @@ def build() -> None:
 这些文件只作为服务端 Agent 的私有 system prompt 输入，不复制到任务 sandbox，不通过网页文件树展示，也不应在用户对话中复述原文。
 """)
 
-    base = "# 智能建模任务：静态私有知识\n\n" + "\n\n".join(block(x) for x in BASE_SOURCES)
+    base = ("# 智能建模任务：静态私有知识\n\n"
+            "## 当前规范优先级\n\n"
+            "`自底向上业务对象识别规范_v3.md` 是当前逻辑实体识别、实体关系分类、"
+            "业务对象聚合和完整性校验的最高优先级建模规范。若历史规则或示例与 V3 冲突，"
+            "必须以 V3 为准；历史规则仅作为字段、命名和模板补充，不得覆盖 V3。\n\n"
+            + "\n\n".join(block(x) for x in BASE_SOURCES))
     write(OUTPUT_DIR / "modeling" / "base.md", base)
     write(OUTPUT_DIR / "modeling" / "本体元模型.md",
           "# 本体元模型：静态 Markdown\n\n" + block("本体元模型.xlsx"))
@@ -317,6 +328,9 @@ def build() -> None:
     write(OUTPUT_DIR / "modeling" / "数据模型建模规范-20260626.md",
           "# 数据模型建模规范-20260626：静态 Markdown\n\n"
           + block("数据模型建模规范-20260626.xlsx"))
+    write(OUTPUT_DIR / "modeling" / "自底向上业务对象识别规范_v3.md",
+          "# 自底向上业务对象识别与逻辑实体聚合规范 V3：静态 Markdown\n\n"
+          + block("自底向上业务对象识别规范_v3.md"))
     # 专项文件只保存对应输入源的规则，不重复复制公共建模规范。
     # 运行时由 ontology_knowledge.load_static_knowledge() 按需拼接 base.md。
     all_parts = [base] + [block(name) for name in SOURCE_DOCS.values()]

@@ -536,6 +536,21 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`open-claude/oc_codex_server.py`、`tests/`。
 - 类型：前后端运行逻辑和静态资源变更，需要重启 Agent；浏览器刷新后生效。
 
+### 62. V3 自底向上建模规范接入
+
+- 将 `rules/自底向上业务对象识别规范_v3.md` 接入静态知识构建流程，作为逻辑实体识别、关系边分类、业务对象聚合和完整性校验的最高优先级规范。
+- 生成独立的 `agent_knowledge/modeling/自底向上业务对象识别规范_v3.md`，并编入所有建模任务使用的 `modeling/base.md`；历史规则仅作为字段、命名和模板补充，冲突时以 V3 为准。
+- 构建脚本新增 Markdown 规则源读取能力，并增加 V3 知识加载回归断言。
+- 主要文件：`rules/自底向上业务对象识别规范_v3.md`、`scripts/build_agent_knowledge.py`、`agent_knowledge/modeling/`、`tests/test_ontology_knowledge.py`。
+- 类型：建模规则与服务端私有知识变更，需要重新构建知识库并重启本地和服务器 Agent。
+
+### 63. 历史任务审批恢复与重复确认保护
+
+- 自动确认开启时，重新打开页面或历史任务会主动恢复服务端已经挂起的审批请求，不再只依赖本次 SSE 新事件。
+- 审批请求使用任务 ID 定位，并增加前端进行中请求去重，避免自动确认和手动点击同时提交造成假失败提示。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+- 类型：前端交互和静态资源变更，刷新浏览器即可；服务器需同步静态资源，不需要重启后端。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
