@@ -498,6 +498,14 @@
 - 主要文件：`frontend/src/styles.css`、`frontend/dist/`。
 - 类型：前端静态资源变更，刷新页面即可，无需重启后端。
 
+### 57. 公司团队模型网关默认配置
+
+- 所有用户默认使用公司团队 OpenAI 兼容网关；仍保留用户个人配置覆盖默认密钥的能力。
+- 模型切换列表统一为：`direct-deepseek-v4-flash`、`Qwen/Qwen3-80B-AWQ`、`direct-deepseek-v4-pro`、`qwen3.7-plus`、`glm-5.1`、`kimi-k2.6`、`glm-5.2`、`glm-5-turbo`。
+- 团队密钥仅写入本地/服务器未提交的 `.env`，不进入 Git。
+- 主要文件：`open-claude/open_claude/config.py`、`open-claude/oc_codex_server.py`、`.env.example`。
+- 类型：后端配置、模型路由和环境变量变更，需要重启本地及服务器 Agent。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。

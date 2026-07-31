@@ -121,6 +121,11 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "env": ["DEEPSEEK_API_KEY"],
         "base_url": "https://api.deepseek.com/v1",
     },
+    "team": {
+        "label": "公司团队模型网关",
+        "env": ["TEAM_API_KEY"],
+        "base_url": "http://172.16.10.34:4000/v1",
+    },
 }
 
 
@@ -182,7 +187,37 @@ for _mid in _QWEN_MODEL_IDS:
     if not any(m["id"] == _mid for m in AVAILABLE_MODELS):
         AVAILABLE_MODELS.append({"id": _mid, "label": _mid, "provider": "qwen", "aliases": []})
 
-DEFAULT_MODEL = AVAILABLE_MODELS[0]["id"]
+TEAM_MODEL_IDS = _env_csv("TEAM_MODELS") or [
+    "direct-deepseek-v4-flash",
+    "Qwen/Qwen3-80B-AWQ",
+    "direct-deepseek-v4-pro",
+    "qwen3.7-plus",
+    "glm-5.1",
+    "kimi-k2.6",
+    "glm-5.2",
+    "glm-5-turbo",
+]
+_TEAM_MODEL_LABELS = {
+    "direct-deepseek-v4-flash": "DeepSeek V4 Flash",
+    "Qwen/Qwen3-80B-AWQ": "Qwen3 80B AWQ",
+    "direct-deepseek-v4-pro": "DeepSeek V4 Pro",
+    "qwen3.7-plus": "Qwen3.7 Plus",
+    "glm-5.1": "GLM-5.1",
+    "kimi-k2.6": "Kimi K2.6",
+    "glm-5.2": "GLM-5.2",
+    "glm-5-turbo": "GLM-5 Turbo",
+}
+for _mid in TEAM_MODEL_IDS:
+    _existing = next((m for m in AVAILABLE_MODELS if m["id"] == _mid), None)
+    if _existing:
+        _existing["provider"] = "team"
+        _existing["label"] = _TEAM_MODEL_LABELS.get(_mid, _mid)
+    else:
+        AVAILABLE_MODELS.append({"id": _mid, "label": _TEAM_MODEL_LABELS.get(_mid, _mid),
+                                 "provider": "team", "aliases": []})
+
+DEFAULT_MODEL = (os.environ.get("TEAM_MODEL", "").strip()
+                 if os.environ.get("LLM_PROVIDER", "").strip().lower() == "team" else "") or AVAILABLE_MODELS[0]["id"]
 
 # Build the alias lookup: alias/id (lowercased) -> canonical id
 _MODEL_ALIASES: dict[str, str] = {}
@@ -195,11 +230,21 @@ for _m in AVAILABLE_MODELS:
         _MODEL_ALIASES.setdefault(_a.lower(), _m["id"])
 
 
+def configured_models() -> list[dict[str, Any]]:
+    """Models exposed by the web workbench for the active runtime gateway."""
+    if os.environ.get("LLM_PROVIDER", "").strip().lower() == "team":
+        by_id = {str(item.get("id")): item for item in AVAILABLE_MODELS}
+        return [by_id[mid] for mid in TEAM_MODEL_IDS if mid in by_id]
+    return AVAILABLE_MODELS
+
+
 def get_model_provider(model_id: Optional[str]) -> str:
     """Return the provider for a model id (best-effort prefix inference)."""
     if not model_id:
         return "anthropic"
     mid = model_id.strip()
+    if mid in TEAM_MODEL_IDS:
+        return "team"
     if mid in _QWEN_MODEL_IDS and os.environ.get("LLM_PROVIDER", "").lower() == "qwen":
         return "qwen"
     if mid in _MODEL_PROVIDERS:
@@ -223,9 +268,13 @@ def get_model_provider(model_id: Optional[str]) -> str:
 def get_provider_base_url(provider: str) -> Optional[str]:
     """Base URL for an OpenAI-compatible provider (env override supported)."""
     override = os.environ.get(provider.upper() + "_BASE_URL")
-    if override:
-        return override
-    return PROVIDERS.get(provider, {}).get("base_url")
+    base_url = override or PROVIDERS.get(provider, {}).get("base_url")
+    if provider == "team" and base_url:
+        if "://" not in base_url:
+            base_url = "http://" + base_url
+        if not base_url.rstrip("/").endswith("/v1"):
+            base_url = base_url.rstrip("/") + "/v1"
+    return base_url
 
 
 def get_api_key_for(provider: str) -> Optional[str]:

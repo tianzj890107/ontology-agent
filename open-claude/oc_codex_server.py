@@ -70,6 +70,13 @@ from open_claude.config import (
     resolve_model,
     validate_inference_params,
 )
+try:
+    from open_claude.config import configured_models
+except ImportError:
+    # Keep the web server importable with lightweight config stubs used by
+    # contract tests and downstream integrations.
+    def configured_models():
+        return AVAILABLE_MODELS
 from open_claude.ontology_knowledge import load_static_knowledge, normalize_task_type
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -242,8 +249,12 @@ def user_api_key(user_id, provider):
         entry = data.get(user_id) if isinstance(data, dict) else None
         if isinstance(entry, dict) and entry.get(provider):
             return str(entry[provider])
-    # Only explicitly configured admin identities may use the server fallback
-    # key; ordinary users must provide their own provider key.
+    # The company team gateway is the shared default for every authenticated
+    # user. User-specific keys still take precedence above this fallback.
+    default_provider = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    if provider == default_provider:
+        return get_api_key_for(provider)
+    # Other provider fallbacks remain restricted to explicitly configured admins.
     admins = {x.strip() for x in os.environ.get("ONTOLOGY_ADMIN_USER_IDS", "admin").split(",") if x.strip()}
     return get_api_key_for(provider) if user_id in admins else None
 
@@ -268,14 +279,14 @@ def user_model(user_id):
         with _AUTH_LOCK:
             data = _read_json_file(_USER_SETTINGS_PATH, {})
             model = data.get(uid, {}).get("model") if isinstance(data.get(uid), dict) else None
-            if model and any(str(item.get("id")) == str(model) for item in AVAILABLE_MODELS):
+            if model and any(str(item.get("id")) == str(model) for item in configured_models()):
                 return str(model)
     return get_model()
 
 
 def set_user_model(user_id, model_id):
     model_id = str(model_id or "").strip()
-    if not model_id or not any(str(item.get("id")) == model_id for item in AVAILABLE_MODELS):
+    if not model_id or not any(str(item.get("id")) == model_id for item in configured_models()):
         raise ValueError("未知模型")
     uid = _safe_user_id(user_id)
     if not uid:
@@ -2361,7 +2372,7 @@ class Handler(BaseHTTPRequestHandler):
                 "provider": get_model_provider(model),
                 "models": [{"id": m["id"], "label": m["label"],
                             "provider": m.get("provider", "anthropic")}
-                           for m in AVAILABLE_MODELS],
+                           for m in configured_models()],
                 "providers": [{"id": pid, "label": spec.get("label", pid),
                                "hasKey": bool(user_api_key(user, pid))}
                                for pid, spec in PROVIDERS.items()],
