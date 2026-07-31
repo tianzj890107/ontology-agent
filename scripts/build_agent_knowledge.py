@@ -314,7 +314,7 @@ def build() -> None:
 - `integration/` 用于智能消歧与整合：`base.md` 是目标和规则，`template.md` 是 Excel 模板，`output_schema.md` 是十类结果 CSV 的字段契约，`all_sources.md` 是组合后的 system prompt 知识。
 - `modeling/base.md` 用于所有智能建模任务；各 `modeling/*.md` 文件只保存对应输入源的专项规则，运行时由 Agent 加载器按需拼接公共规则和专项规则，避免重复复制。
 - `modeling/本体元模型.md`、`modeling/本体元模型模板.md` 和 `modeling/本体建模步骤拆解.md` 是建模参考 Markdown；同样内容也已编入 `modeling/base.md`，由 modeling system prompt 静态注入 Agent。
-- `modeling/通用业务对象与逻辑实体识别规范_V6.md` 是所有建模任务唯一的核心判定规范：逻辑实体、关系分类、实体族、业务对象 R1–R5、UNKNOWN/冲突和一致性校验均以 V6 为准。
+- `modeling/通用业务对象与逻辑实体识别规范_V6.md` 是所有建模任务唯一的核心判定规范：业务属性、逻辑实体、关系分类、实体族、业务对象 R1–R5、UNKNOWN/冲突和一致性校验均以 V6 为准。
 - `modeling/数据模型建模规范-20260626.md`、`modeling/本体建模步骤拆解.md` 和 `modeling/自底向上业务对象识别规范_v3.md` 保留为历史参考，不再作为运行时建模判定依据。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 
@@ -328,7 +328,7 @@ def build() -> None:
     base = ("# 智能建模任务：静态私有知识\n\n"
             "## 当前规范优先级\n\n"
             "`通用业务对象与逻辑实体识别规范_V6.md` 是所有建模任务唯一的核心判定规范。"
-            "逻辑实体识别、关系分类、实体族聚合、候选主实体、R1–R5、UNKNOWN、冲突处理和一致性校验"
+            "业务属性识别与归属、逻辑实体识别、关系分类、实体族聚合、候选主实体、R1–R5、UNKNOWN、冲突处理和一致性校验"
             "必须严格按 V6 执行。历史规则、示例和来源专项说明只能补充输入提取、字段映射或模板，"
             "不得改变或覆盖 V6 的结论、枚举和判定流程。\n\n"
             + v6 + "\n\n## 本体元模型与结果模板参考\n\n" + references)

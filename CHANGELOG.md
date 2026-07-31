@@ -574,6 +574,14 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 - 类型：前端交互和静态资源变更，刷新浏览器即可；服务器需同步构建产物，无需重启后端。
 
+### 67. V6 业务属性识别章节与编号修正
+
+- 将新增的“业务属性识别”迁回 V6 源文件，作为第 6 章；后续逻辑实体、关系、业务对象、输出、校验、执行流程和边界章节统一顺延至第 7～21 章，标题层级同步修正。
+- 建模顺序改为：候选业务属性识别 → 逻辑实体识别 → 业务属性正式归属 → 基于属性归属复核实体边界 → 关系分类与业务对象判定。
+- 补充业务属性清单、字段覆盖/归属/角色校验；服务端建模执行提示同步该顺序，避免静态 Markdown 与 Agent 执行要求不一致。
+- 主要文件：`agent_knowledge/通用业务对象与逻辑实体识别规范_V6.md`、`scripts/build_agent_knowledge.py`、`agent_knowledge/modeling/`、`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`。
+- 类型：建模核心规则与服务端 Agent 提示变更，需要重新构建知识库并重启本地和服务器 Agent。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。

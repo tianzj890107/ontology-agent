@@ -90,6 +90,18 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("通用业务对象与逻辑实体识别规范 V6", v6_rules)
         self.assertIn("业务对象判定标准", v6_rules)
         self.assertIn("UNKNOWN 闭环校验", v6_rules)
+        self.assertIn("业务属性识别", v6_rules)
+        self.assertIn("业务属性正式归属", v6_rules)
+        v6_source = (ROOT / "agent_knowledge" / "通用业务对象与逻辑实体识别规范_V6.md").read_text(encoding="utf-8")
+        top_level_numbers = [
+            int(line.split(". ", 1)[0].removeprefix("## "))
+            for line in v6_source.splitlines() if line.startswith("## ") and ". " in line
+        ]
+        self.assertEqual(top_level_numbers, list(range(1, 22)))
+        self.assertIn("## 6. 业务属性识别", v6_source)
+        self.assertIn("## 7. 逻辑实体识别", v6_source)
+        source_digest = hashlib.sha256(v6_source.encode("utf-8")).hexdigest()[:12]
+        self.assertIn(f"SHA-256（前12位）：`{source_digest}`", v6_rules)
         integration_template = (ROOT / "agent_knowledge" / "integration" / "template.md").read_text(encoding="utf-8")
         self.assertIn("智能消歧与整合模板.xlsx", integration_template)
         self.assertIn("推荐名称", integration_template)
@@ -179,6 +191,8 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertIn("执行审计摘要", server.build_modeling_instructions({}))
             self.assertIn("唯一的核心判定规范", server.build_modeling_instructions({}))
             self.assertIn("COMPOSITION 和 EXTENSION", server.build_modeling_instructions({}))
+            self.assertIn("候选业务属性", server.build_modeling_instructions({}))
+            self.assertIn("属性归属", server.build_modeling_instructions({}))
             self.assertIn("规则文件名和章节标题", server.build_integration_instructions({}))
             self.assertEqual(
                 server.build_tool_audit("Bash", {"command": "head -n 5 input.csv"})["severity"],
