@@ -216,9 +216,11 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             )
             with tempfile.TemporaryDirectory() as workspace_tmp:
                 old_sandbox, old_tasks = server.SANDBOX_DIR, server.TASKS
+                old_script_dir = server.SCRIPT_DIR
                 try:
                     server.SANDBOX_DIR = workspace_tmp
                     server.TASKS = {}
+                    server.SCRIPT_DIR = str(Path(workspace_tmp) / "legacy-open-claude")
                     workspace = Path(workspace_tmp) / "ontology-workspace-1"
                     task_dir = workspace / "tasks" / "RM123456789"
                     task_dir.mkdir(parents=True)
@@ -243,8 +245,19 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     )
                     self.assertTrue(server._mission_task_user_matches(existing, "local:current-browser"))
                     self.assertFalse(server._mission_task_user_matches(existing, "external-user"))
+                    legacy_input = Path(server.SCRIPT_DIR) / "mission-input"
+                    legacy_input.mkdir(parents=True)
+                    object_key = "bucket/source.xlsx"
+                    suffix = hashlib.sha256(object_key.encode("utf-8")).hexdigest()[:8]
+                    legacy_name = f"source-{suffix}.xlsx"
+                    (legacy_input / legacy_name).write_bytes(b"legacy-input")
+                    migrated = server.migrate_legacy_mission_inputs(
+                        {"source": {"filename": "source.xlsx", "objectKey": object_key}},
+                        str(task_dir), "ontology-workspace-1")
+                    self.assertEqual(migrated, [f"mission-input/{legacy_name}"])
+                    self.assertTrue((task_dir / "mission-input" / legacy_name).is_file())
                 finally:
-                    server.SANDBOX_DIR, server.TASKS = old_sandbox, old_tasks
+                    server.SANDBOX_DIR, server.TASKS, server.SCRIPT_DIR = old_sandbox, old_tasks, old_script_dir
             with tempfile.TemporaryDirectory() as auth_tmp:
                 old_paths = (server._USER_KEYS_PATH, server._USER_SETTINGS_PATH,
                              server._AUTH_SECRET_PATH, server._USAGE_PATH)

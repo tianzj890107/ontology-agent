@@ -551,6 +551,14 @@
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 - 类型：前端交互和静态资源变更，刷新浏览器即可；服务器需同步静态资源，不需要重启后端。
 
+### 64. 任务输入统一落到 mission-input
+
+- 修复本体任务浏览器上传：上传文件现在写入当前任务目录的 `mission-input/`，不再落到任务根目录。
+- 为旧版本遗留在 `open-claude/mission-input` 或项目根目录的输入增加按 execution-context `objectKey` 精确迁移，只迁移当前任务引用的文件及其表格预览目录，避免跨任务复制。
+- Agent 系统上下文新增当前任务输入文件清单和路径边界提示；规则源文件只使用服务端注入的静态知识，不再尝试读取 sandbox 外的规则路径或历史绝对路径。
+- 主要文件：`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`。
+- 类型：后端上传、输入迁移和 Agent 路径约束变更，需要重启本地和服务器 Agent。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
