@@ -187,7 +187,7 @@ for _mid in _QWEN_MODEL_IDS:
     if not any(m["id"] == _mid for m in AVAILABLE_MODELS):
         AVAILABLE_MODELS.append({"id": _mid, "label": _mid, "provider": "qwen", "aliases": []})
 
-TEAM_MODEL_IDS = _env_csv("TEAM_MODELS") or [
+TEAM_MODEL_IDS = list(dict.fromkeys(_env_csv("TEAM_MODELS") or [
     "direct-deepseek-v4-flash",
     "Qwen/Qwen3-80B-AWQ",
     "direct-deepseek-v4-pro",
@@ -196,7 +196,7 @@ TEAM_MODEL_IDS = _env_csv("TEAM_MODELS") or [
     "kimi-k2.6",
     "glm-5.2",
     "glm-5-turbo",
-]
+]))
 _TEAM_MODEL_LABELS = {
     "direct-deepseek-v4-flash": "DeepSeek V4 Flash",
     "Qwen/Qwen3-80B-AWQ": "Qwen3 80B AWQ",
@@ -216,8 +216,12 @@ for _mid in TEAM_MODEL_IDS:
         AVAILABLE_MODELS.append({"id": _mid, "label": _TEAM_MODEL_LABELS.get(_mid, _mid),
                                  "provider": "team", "aliases": []})
 
-DEFAULT_MODEL = (os.environ.get("TEAM_MODEL", "").strip()
-                 if os.environ.get("LLM_PROVIDER", "").strip().lower() == "team" else "") or AVAILABLE_MODELS[0]["id"]
+_requested_team_model = os.environ.get("TEAM_MODEL", "").strip()
+if os.environ.get("LLM_PROVIDER", "").strip().lower() == "team":
+    DEFAULT_MODEL = (_requested_team_model if _requested_team_model in TEAM_MODEL_IDS
+                     else (TEAM_MODEL_IDS[0] if TEAM_MODEL_IDS else AVAILABLE_MODELS[0]["id"]))
+else:
+    DEFAULT_MODEL = AVAILABLE_MODELS[0]["id"]
 
 # Build the alias lookup: alias/id (lowercased) -> canonical id
 _MODEL_ALIASES: dict[str, str] = {}
@@ -328,7 +332,10 @@ def get_model() -> str:
              os.environ.get("ANTHROPIC_MODEL"))
     if not model:
         model = load_config().get("model")
-    return resolve_model(model) or DEFAULT_MODEL
+    resolved = resolve_model(model)
+    if provider == "team" and resolved not in TEAM_MODEL_IDS:
+        return DEFAULT_MODEL
+    return resolved or DEFAULT_MODEL
 
 
 def get_max_tokens() -> int:

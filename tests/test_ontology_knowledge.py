@@ -246,6 +246,18 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     self.assertEqual(server.user_api_key("u1", "qwen"), "key-one")
                     self.assertEqual(server.user_api_key("u2", "qwen"), "key-two")
                     self.assertIsNone(server.user_api_key("u3", "qwen"))
+                    old_provider, old_key_lookup = os.environ.get("LLM_PROVIDER"), server.get_api_key_for
+                    try:
+                        os.environ["LLM_PROVIDER"] = "team"
+                        server.get_api_key_for = lambda provider: "team-test-key" if provider == "team" else None
+                        self.assertEqual(server.user_api_key("u3", "team"), "team-test-key")
+                        self.assertIsNone(server.user_api_key("u3", "qwen"))
+                    finally:
+                        server.get_api_key_for = old_key_lookup
+                        if old_provider is None:
+                            os.environ.pop("LLM_PROVIDER", None)
+                        else:
+                            os.environ["LLM_PROVIDER"] = old_provider
                     os.environ["ONTOLOGY_JWT_SECRET"] = "test-secret"
                     enc = lambda value: base64.urlsafe_b64encode(value).decode().rstrip("=")
                     header, payload = enc(b'{"alg":"HS256"}'), enc(b'{"sub":"u1"}')

@@ -15,9 +15,13 @@ class FrontendContractTests(unittest.TestCase):
 
     def test_workbench_uses_thought_chain_and_existing_api_routes(self):
         source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
-        self.assertIn('import { ThoughtChain } from "@ant-design/x"', source)
-        self.assertIn('MISSION ? "你可以直接点击开始任务，或者描述一个任务"', source)
-        self.assertNotIn(': mission ? "你可以直接点击开始任务', source)
+        # The workbench keeps @ant-design/x as a supported dependency, but the
+        # visible chain is rendered directly so its icon/toggle hit areas stay
+        # stable across Ant Design X releases.
+        self.assertIn("function ThoughtEvent", source)
+        self.assertIn('className={`thought-icon thought-icon-${kind}`}', source)
+        self.assertIn('MISSION ? "点击开始任务，或者描述一个任务"', source)
+        self.assertNotIn('MISSION ? "你可以直接点击开始任务', source)
         self.assertIn('<RecursiveInfo value={missionContext} />', source)
         self.assertIn('MissionInfo open={missionInfoOpen}', source)
         self.assertIn('normalizeEvents(current)', source)

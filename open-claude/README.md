@@ -112,7 +112,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 ### Models & providers
 
 Open Claude is multi-provider. Anthropic models use the native SDK; every other
-provider (Qwen, GLM, Kimi, DeepSeek, OpenAI) speaks the OpenAI-compatible Chat
+provider (Qwen, GLM, Kimi, DeepSeek, OpenAI, and the company team gateway) speaks the OpenAI-compatible Chat
 Completions API and is handled by a single adapter. Switch models with
 `/model <name>` in the REPL (run `/model` with no argument to see the list, each
 model's provider, and whether its key is configured), the `--model` flag, or the
@@ -135,8 +135,12 @@ works as well as `claude-opus-4-8`:
 | `deepseek` | DeepSeek-V4-Pro | DeepSeek | `deepseek-v4-pro` |
 | `deepseek-flash` | DeepSeek-V4-Flash | DeepSeek | `deepseek-v4-flash` |
 
-Any unrecognized value is passed through unchanged, so you can still use a dated
-snapshot ID or a provider-specific model name directly.
+When `LLM_PROVIDER=team`, the web workbench exposes the eight model IDs from
+`TEAM_MODELS` and uses `TEAM_MODEL` only when it is one of those IDs. An invalid
+or stale `TEAM_MODEL` safely falls back to the first configured team model.
+
+Outside team mode, any unrecognized value is passed through unchanged, so you can
+still use a dated snapshot ID or a provider-specific model name directly.
 
 **Non-Anthropic models need the `openai` package** (an optional dependency):
 
@@ -156,6 +160,7 @@ Each provider reads its key from its own env var(s), or from an `api_keys` map i
 | Zhipu GLM | `ZHIPUAI_API_KEY` / `GLM_API_KEY` | `https://open.bigmodel.cn/api/paas/v4` |
 | Moonshot (Kimi) | `MOONSHOT_API_KEY` / `KIMI_API_KEY` | `https://api.moonshot.cn/v1` |
 | DeepSeek | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` |
+| Company team gateway | `TEAM_API_KEY` | `http://172.16.10.34:4000/v1` |
 
 ```json
 {
@@ -182,6 +187,10 @@ Each provider reads its key from its own env var(s), or from an `api_keys` map i
 | `ZHIPUAI_API_KEY` / `GLM_API_KEY` | Zhipu GLM key | — |
 | `MOONSHOT_API_KEY` / `KIMI_API_KEY` | Moonshot (Kimi) key | — |
 | `DEEPSEEK_API_KEY` | DeepSeek key | — |
+| `TEAM_API_KEY` | Shared company team gateway key | — |
+| `TEAM_BASE_URL` | Company gateway OpenAI-compatible base URL | `http://172.16.10.34:4000/v1` |
+| `TEAM_MODEL` | Default model from `TEAM_MODELS` | first team model |
+| `TEAM_MODELS` | Comma-separated team model catalogue | eight configured IDs |
 | `<PROVIDER>_BASE_URL` | Override a provider's base URL | (per-provider default) |
 | `CLAUDE_MODEL` | Model to use (alias or full ID) | `claude-opus-4-8` |
 | `CLAUDE_MAX_TOKENS` | Max output tokens | `16384` |

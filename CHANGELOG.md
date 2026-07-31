@@ -513,6 +513,14 @@
 - 主要配置：服务器未提交的 `.env` 中 `ONTOLOGY_ALLOW_LOCAL_DEV_AUTH=true`。
 - 类型：服务器鉴权环境变量变更，需要重启 Agent；不涉及 Git 中的密钥。
 
+### 59. 团队模型与任务工作区一致性优化
+
+- 团队模式下自动去重模型列表；无效或过期的 `TEAM_MODEL` 自动回退到第一个有效团队模型，避免界面模型与实际调用不一致。
+- 任务工作区不再信任客户端传入的任意沙箱目录；复用任务时同时校验本体库、任务编码和用户归属，降低跨任务读取风险。
+- 更新外部鉴权/用户 Key 文档和前端契约测试，新增团队模型配置回归测试。
+- 主要文件：`open-claude/open_claude/config.py`、`open-claude/oc_codex_server.py`、`docs/external-auth-and-user-keys.md`、`open-claude/README.md`、`tests/`。
+- 类型：后端安全与配置逻辑、文档和测试变更，需要重启 Agent；前端构建产物无逻辑变化。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。

@@ -1,4 +1,4 @@
-# 外部登录态与用户级 Qwen Key
+# 外部登录态与用户级模型 Key
 
 Agent 不负责账号登录。外部本体平台登录后，应在打开 `/mission` 或 `/merge` 时携带：
 
@@ -20,9 +20,11 @@ X-User-Id: <平台用户 ID>
 
 - `POST /api/apikey` 只写当前用户自己的 Provider Key。
 - Key 保存在服务器 `~/.claude/ontology-agent-user-keys.json`，文件权限为 600。
-- 任务执行时按任务归属用户解析 Key，并显式传给模型客户端；普通用户不会读取 `.env` 中的公共 Qwen Key。
+- 任务执行时按任务归属用户解析 Key，并显式传给模型客户端。
+- 当 `LLM_PROVIDER=team` 时，团队网关的 `TEAM_API_KEY` 是所有已认证用户的共享默认 Key；用户自己的同 Provider Key 仍优先于共享 Key。
+- 其他 Provider 的 `.env` 默认 Key 仍只允许管理员身份使用，普通用户需要配置自己的 Key。
 - `POST /api/admin/apikey` 只有 `ONTOLOGY_ADMIN_USER_IDS` 中的用户可调用，用于维护服务器默认 Key。
-- 普通用户没有个人 Key 时，Qwen 调用会在发出请求前被拒绝。
+- 普通用户没有个人 Key 且当前不是团队网关时，模型调用会在发出请求前被拒绝。
 
 ## 用户模型和额度
 

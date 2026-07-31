@@ -1429,10 +1429,14 @@ def task_workspace_path(workspace: str, task_code: str, create: bool = True) -> 
 
 def mission_workspace_for(repository_id: str, requested: str = "",
                           user_id: str = "") -> str:
-    """Choose a project workspace without treating taskCode as its identity."""
-    requested = str(requested or "").strip()
-    if requested and project_path(requested):
-        return requested
+    """Choose the server-owned workspace for a mission.
+
+    ``requested`` is retained for API compatibility, but is deliberately not
+    authoritative: accepting an arbitrary existing sandbox folder here would
+    let a caller with a valid-looking repository/task pair browse or mutate a
+    different project.  Persisted task metadata is the only source for an
+    existing workspace; otherwise use the stable repository workspace.
+    """
     with TASKS_LOCK:
         candidates = []
         for task in TASKS.values():
@@ -2091,10 +2095,11 @@ def mission_bound_project(repository_id: str, task_code: str,
         if task_id:
             task = TASKS.get(task_id)
             # 历史会话的本地登录态可能在服务重启后变化。只要浏览器同时提供了
-            # 精确的 repositoryId + taskCode，便允许它继续读取这个 taskId 的工作区；
-            # 不能借 taskId 跳到别的本体任务。
+            # 精确的 repositoryId + taskCode，且任务属于当前用户，才允许它继续
+            # 读取这个 taskId 的工作区；不能借 taskId 跳到别的本体任务。
             if (task and task.repository_id == repository_id
                     and task.task_code == task_code and task.project
+                    and (not user_id or not task.user_id or task.user_id == user_id)
                     and project_path(task.project)):
                 return task.project
         for task in TASKS.values():
