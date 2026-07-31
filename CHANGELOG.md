@@ -559,6 +559,14 @@
 - 主要文件：`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`。
 - 类型：后端上传、输入迁移和 Agent 路径约束变更，需要重启本地和服务器 Agent。
 
+### 65. V6 通用建模规范统一接管
+
+- 将 `agent_knowledge/通用业务对象与逻辑实体识别规范_V6.md` 设为所有智能建模任务唯一的核心判定规范，覆盖逻辑实体、关系分类、实体族、候选主实体、R1–R5、UNKNOWN、冲突处理和一致性校验。
+- 运行时建模提示按 V6 的 20 步流程执行：先建立统一输入模型，再识别实体/关系；仅 `COMPOSITION` 和 `EXTENSION` 可聚合；使用 `PASS/FAIL/UNKNOWN` 形成 `CONFIRMED/CANDIDATE/REJECTED` 结论。
+- V3、历史步骤表和旧数据模型规范保留为离线历史参考，不再注入运行时建模判定链路；本体元模型和模板仍作为结果字段参考。
+- 主要文件：`agent_knowledge/通用业务对象与逻辑实体识别规范_V6.md`、`scripts/build_agent_knowledge.py`、`agent_knowledge/modeling/`、`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`。
+- 类型：建模核心规则与服务端 Agent 提示变更，需要重新构建知识库并重启本地和服务器 Agent。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。

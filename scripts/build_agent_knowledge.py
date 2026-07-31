@@ -134,6 +134,21 @@ def block(name: str, title: str | None = None) -> str:
             f"{read_source(name)}")
 
 
+def block_from_path(path: Path, source_label: str, title: str) -> str:
+    """Build an auditable Markdown section from a source outside ``rules/`` too."""
+    try:
+        if path.suffix.lower() == ".md":
+            content = path.read_text(encoding="utf-8")
+        else:
+            raise ValueError(f"不支持的外部知识源: {path.name}")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"无法读取知识源 {path}") from exc
+    return (f"## {title}\n\n"
+            f"> 规则标识：`{source_label}`（服务端已静态注入，禁止在任务 sandbox 中查找源文件）\n"
+            f"> SHA-256（前12位）：`{source_hash(path)}`\n\n"
+            f"{content}")
+
+
 def write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content.rstrip() + "\n", encoding="utf-8")
@@ -273,16 +288,12 @@ INTEGRATION_OUTPUT_SCHEMA = """# 智能消歧与整合输出文件字段契约
 """
 
 
-BASE_SOURCES = [
-    "智能建模任务.docx",
-    "数据模型建模规范-20260626.xlsx",
-    "本体建模步骤拆解.xlsx",
+BASE_REFERENCE_SOURCES = [
     "本体元模型.xlsx",
     "本体元模型模板.xlsx",
-    # V3 是当前自底向上识别逻辑实体和业务对象的最高优先级规范。
-    # 放在公共规则最后，确保模型在发现历史规则冲突时以 V3 为准。
-    "自底向上业务对象识别规范_v3.md",
 ]
+V6_STANDARD_FILENAME = "通用业务对象与逻辑实体识别规范_V6.md"
+V6_STANDARD_PATH = OUTPUT_DIR / V6_STANDARD_FILENAME
 SOURCE_DOCS = {
     "source_code": "源代码本体建模.docx",
     "system_page": "系统页面本体建模.docx",
@@ -303,8 +314,8 @@ def build() -> None:
 - `integration/` 用于智能消歧与整合：`base.md` 是目标和规则，`template.md` 是 Excel 模板，`output_schema.md` 是十类结果 CSV 的字段契约，`all_sources.md` 是组合后的 system prompt 知识。
 - `modeling/base.md` 用于所有智能建模任务；各 `modeling/*.md` 文件只保存对应输入源的专项规则，运行时由 Agent 加载器按需拼接公共规则和专项规则，避免重复复制。
 - `modeling/本体元模型.md`、`modeling/本体元模型模板.md` 和 `modeling/本体建模步骤拆解.md` 是建模参考 Markdown；同样内容也已编入 `modeling/base.md`，由 modeling system prompt 静态注入 Agent。
-- `modeling/数据模型建模规范-20260626.md` 是数据模型命名、定义、主键、关系和建模质量规范的独立 Markdown；同样内容也已编入 `modeling/base.md`。
-- `modeling/自底向上业务对象识别规范_v3.md` 是当前逻辑实体识别、关系边分类、业务对象聚合和完整性校验的最高优先级规范；已编入 `modeling/base.md`，与历史规则冲突时必须以 V3 为准。
+- `modeling/通用业务对象与逻辑实体识别规范_V6.md` 是所有建模任务唯一的核心判定规范：逻辑实体、关系分类、实体族、业务对象 R1–R5、UNKNOWN/冲突和一致性校验均以 V6 为准。
+- `modeling/数据模型建模规范-20260626.md`、`modeling/本体建模步骤拆解.md` 和 `modeling/自底向上业务对象识别规范_v3.md` 保留为历史参考，不再作为运行时建模判定依据。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 
 ## 安全边界
@@ -312,12 +323,15 @@ def build() -> None:
 这些文件只作为服务端 Agent 的私有 system prompt 输入，不复制到任务 sandbox，不通过网页文件树展示，也不应在用户对话中复述原文。
 """)
 
+    v6 = block_from_path(V6_STANDARD_PATH, V6_STANDARD_FILENAME, V6_STANDARD_FILENAME)
+    references = "\n\n".join(block(x) for x in BASE_REFERENCE_SOURCES)
     base = ("# 智能建模任务：静态私有知识\n\n"
             "## 当前规范优先级\n\n"
-            "`自底向上业务对象识别规范_v3.md` 是当前逻辑实体识别、实体关系分类、"
-            "业务对象聚合和完整性校验的最高优先级建模规范。若历史规则或示例与 V3 冲突，"
-            "必须以 V3 为准；历史规则仅作为字段、命名和模板补充，不得覆盖 V3。\n\n"
-            + "\n\n".join(block(x) for x in BASE_SOURCES))
+            "`通用业务对象与逻辑实体识别规范_V6.md` 是所有建模任务唯一的核心判定规范。"
+            "逻辑实体识别、关系分类、实体族聚合、候选主实体、R1–R5、UNKNOWN、冲突处理和一致性校验"
+            "必须严格按 V6 执行。历史规则、示例和来源专项说明只能补充输入提取、字段映射或模板，"
+            "不得改变或覆盖 V6 的结论、枚举和判定流程。\n\n"
+            + v6 + "\n\n## 本体元模型与结果模板参考\n\n" + references)
     write(OUTPUT_DIR / "modeling" / "base.md", base)
     write(OUTPUT_DIR / "modeling" / "本体元模型.md",
           "# 本体元模型：静态 Markdown\n\n" + block("本体元模型.xlsx"))
@@ -331,6 +345,9 @@ def build() -> None:
     write(OUTPUT_DIR / "modeling" / "自底向上业务对象识别规范_v3.md",
           "# 自底向上业务对象识别与逻辑实体聚合规范 V3：静态 Markdown\n\n"
           + block("自底向上业务对象识别规范_v3.md"))
+    write(OUTPUT_DIR / "modeling" / V6_STANDARD_FILENAME,
+          "# 通用业务对象与逻辑实体识别规范 V6：运行时静态 Markdown\n\n"
+          + v6)
     # 专项文件只保存对应输入源的规则，不重复复制公共建模规范。
     # 运行时由 ontology_knowledge.load_static_knowledge() 按需拼接 base.md。
     all_parts = [base] + [block(name) for name in SOURCE_DOCS.values()]
