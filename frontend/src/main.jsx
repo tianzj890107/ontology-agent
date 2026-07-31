@@ -136,15 +136,16 @@ function ThoughtEvent({ event, onApprove, files, onFile }) {
   const icon = event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
   const key = event.id || `${event.type}-${event.name || "event"}-${event.text || ""}`;
   const detail = eventDescription(event);
+  const toggleExpanded = () => setExpanded((value) => !value);
   const item = {
     key,
-    title: eventTitle(event),
+    title: <button type="button" className="thought-toggle" onClick={(clickEvent) => { clickEvent.stopPropagation(); toggleExpanded(); }}>{eventTitle(event)}</button>,
     content: expanded ? <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div> : undefined,
     status: eventStatus(event),
-    icon: <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>,
+    icon: <button type="button" className="thought-icon-button" onClick={(clickEvent) => { clickEvent.stopPropagation(); toggleExpanded(); }} aria-label="展开或折叠思维链"><span className={`thought-icon thought-icon-${kind}`}>{icon}</span></button>,
   };
   return (
-    <div className={`chain-event chain-event-${kind}`} onClick={(eventClick) => { if (!eventClick.target.closest("button,a,input")) setExpanded((value) => !value); }}>
+    <div className={`chain-event chain-event-${kind}`}>
       <div className="thought-collapsed-row">
         <ThoughtChain items={[item]} />
         {!expanded && detail && <div className="thought-summary"><EventFileText text={compactEventSummary(detail)} files={files} onFile={onFile} /></div>}
