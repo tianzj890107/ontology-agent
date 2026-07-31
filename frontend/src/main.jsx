@@ -529,7 +529,7 @@ function App() {
         <div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能</strong><Tag>Agent</Tag></div>
         <div className="sidebar-scroll">
           <Button className="new-task" onClick={async () => { setActive(null); setEvents([]); setText(""); setView("home"); if (MISSION) await createTask(); }}>✚ 新任务</Button>
-          <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}>历史任务 <span>{historyOpen ? "⌃" : "⌄"}</span></button>
+          <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}>历史任务</button>
           {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新任务"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任务" />}</div>}
           <Button className="settings-button" onClick={() => setSettingsOpen(true)}>⚙ 大语言模型设置</Button>
           {MISSION && <div className="current-mission">
