@@ -142,7 +142,7 @@ function ThoughtEvent({ event, onApprove, files, onFile }) {
     title: <button type="button" className="thought-toggle" onClick={(clickEvent) => { clickEvent.stopPropagation(); toggleExpanded(); }}>{eventTitle(event)}</button>,
     content: expanded ? <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div> : undefined,
     status: eventStatus(event),
-    icon: <button type="button" className="thought-icon-button" onClick={(clickEvent) => { clickEvent.stopPropagation(); toggleExpanded(); }} aria-label="展开或折叠思维链"><span className={`thought-icon thought-icon-${kind}`}>{icon}</span></button>,
+    icon: <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>,
   };
   return (
     <div className={`chain-event chain-event-${kind}`}>
