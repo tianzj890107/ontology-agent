@@ -506,6 +506,13 @@
 - 主要文件：`open-claude/open_claude/config.py`、`open-claude/oc_codex_server.py`、`.env.example`。
 - 类型：后端配置、模型路由和环境变量变更，需要重启本地及服务器 Agent。
 
+### 58. 直接访问工作台的本地联调身份
+
+- 开启服务器本地联调身份：直接访问 47313 时自动为当前浏览器签发独立 Cookie，不再因缺少外部平台 JWT 无法进入工作台。
+- 外部本体平台接入时仍支持并优先使用有效 `Authorization JWT` 或受信任的 `X-User-Id`。
+- 主要配置：服务器未提交的 `.env` 中 `ONTOLOGY_ALLOW_LOCAL_DEV_AUTH=true`。
+- 类型：服务器鉴权环境变量变更，需要重启 Agent；不涉及 Git 中的密钥。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
