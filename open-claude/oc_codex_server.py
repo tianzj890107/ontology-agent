@@ -2290,7 +2290,7 @@ class Handler(BaseHTTPRequestHandler):
         if not task:
             self._send_json({"error": "任务不存在"}, status=404)
             return None
-        if task.user_id and task.user_id != user:
+        if not _mission_task_user_matches(task, user):
             self._send_json({"error": "无权访问其他用户的任务"}, status=403)
             return None
         if claim_legacy and not task.user_id:

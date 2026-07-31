@@ -25,6 +25,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('<RecursiveInfo value={missionContext} />', source)
         self.assertIn('MissionInfo open={missionInfoOpen}', source)
         self.assertIn('normalizeEvents(current)', source)
+        self.assertIn('autoApproveRef.current', source)
+        self.assertIn('approve(event.id, true)', source)
         for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send"):
             self.assertIn(route, source)
 

@@ -401,6 +401,7 @@ function App() {
   const [keyValue, setKeyValue] = useState("");
   const [selectedProject, setSelectedProject] = useState("");
   const [autoApprove, setAutoApprove] = useState(() => localStorage.getItem("oc_auto_approve") === "1");
+  const autoApproveRef = useRef(autoApprove);
   const [messageApi, contextHolder] = message.useMessage();
   const fileInput = useRef(null);
 
@@ -464,7 +465,16 @@ function App() {
     return [...previous, event];
   });
 
-  const approve = async (id, approved) => { if (!active) return; await api(`/api/tasks/${active.id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, approved }) }); appendEvent({ type: "approval_result", approved }); };
+  const approve = async (id, approved) => {
+    if (!active) return false;
+    const result = await api(`/api/tasks/${active.id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, approved }) });
+    if (result.error) {
+      messageApi.error(result.error);
+      return false;
+    }
+    appendEvent({ type: "approval_result", id, approved });
+    return true;
+  };
 
   const uploadFiles = async (task, selected) => {
     const names = [];
@@ -487,7 +497,16 @@ function App() {
     const consume = (chunk) => {
       buffer += decoder.decode(chunk, { stream: true });
       const packets = buffer.split("\n\n"); buffer = packets.pop() || "";
-      packets.forEach((packet) => { const line = packet.split("\n").find((item) => item.startsWith("data: ")); if (!line) return; try { const event = JSON.parse(line.slice(6)); appendEvent(event); if (event.type === "done") setBusy(false); } catch { /* ignore malformed SSE packet */ } });
+      packets.forEach((packet) => {
+        const line = packet.split("\n").find((item) => item.startsWith("data: "));
+        if (!line) return;
+        try {
+          const event = JSON.parse(line.slice(6));
+          appendEvent(event);
+          if (event.type === "approval_request" && autoApproveRef.current) approve(event.id, true);
+          if (event.type === "done") setBusy(false);
+        } catch { /* ignore malformed SSE packet */ }
+      });
     };
     try { while (true) { const { value, done } = await reader.read(); if (done) break; consume(value); } if (buffer) consume(new Uint8Array()); } catch (error) { appendEvent({ type: "error", error: error.message }); }
     setBusy(false); await loadTasks(); await loadFiles(task);
@@ -540,7 +559,7 @@ function App() {
       </aside>
       <main className="main-content">
         {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
-          <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Switch checked={autoApprove} onChange={(value) => { setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); }} checkedChildren="自动确认：开" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
+          <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Switch checked={autoApprove} onChange={(value) => { autoApproveRef.current = value; setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); if (value) { const pending = events.find((event) => event.type === "approval_request"); if (pending) approve(pending.id, true); } }} checkedChildren="自动确认：开" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
           <div className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} /></div>
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
         </section>}

@@ -235,6 +235,8 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                         server.mission_task_cwd("", "1", "RM123456789", "task-1", "local:current-browser"),
                         str(task_dir),
                     )
+                    self.assertTrue(server._mission_task_user_matches(existing, "local:current-browser"))
+                    self.assertFalse(server._mission_task_user_matches(existing, "external-user"))
                 finally:
                     server.SANDBOX_DIR, server.TASKS = old_sandbox, old_tasks
             with tempfile.TemporaryDirectory() as auth_tmp:
