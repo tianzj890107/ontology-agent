@@ -216,6 +216,20 @@ def _local_dev_auth_enabled() -> bool:
     }
 
 
+def _mission_task_user_matches(task, user_id: str) -> bool:
+    """Check mission ownership while preserving local-browser history.
+
+    Direct联调身份 is intentionally browser-scoped.  A user may therefore
+    open a historical task created by an earlier local browser identity, while
+    externally authenticated users must still match the persisted owner.
+    """
+    owner = str(getattr(task, "user_id", "") or "")
+    current = str(user_id or "")
+    if not owner or not current or owner == current:
+        return True
+    return _local_dev_auth_enabled() and current.startswith("local:") and owner.startswith("local:")
+
+
 def _read_json_file(path, default):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -2099,15 +2113,13 @@ def mission_bound_project(repository_id: str, task_code: str,
             # 读取这个 taskId 的工作区；不能借 taskId 跳到别的本体任务。
             if (task and task.repository_id == repository_id
                     and task.task_code == task_code and task.project
-                    and (not user_id or not task.user_id or task.user_id == user_id)
+                    and _mission_task_user_matches(task, user_id)
                     and project_path(task.project)):
                 return task.project
         for task in TASKS.values():
             if task.repository_id == repository_id and task.task_code == task_code:
-                if task.user_id and user_id and task.user_id != user_id:
+                if not _mission_task_user_matches(task, user_id):
                     has_foreign_match = True
-                    continue
-                if not (not user_id or not task.user_id or task.user_id == user_id):
                     continue
                 project = str(task.project or "")
                 if project and project_path(project):
@@ -2153,7 +2165,7 @@ def mission_task_cwd(project: str, repository_id: str = "", task_code: str = "",
         matching = [t for t in TASKS.values()
                     if t.project == bound and t.repository_id == repository_id
                     and t.task_code == task_code
-                    and (not user_id or not t.user_id or t.user_id == user_id)]
+                    and _mission_task_user_matches(t, user_id)]
     if matching:
         current = max(matching, key=lambda t: t.updated)
         if current.cwd and os.path.isdir(current.cwd):

@@ -521,6 +521,13 @@
 - 主要文件：`open-claude/open_claude/config.py`、`open-claude/oc_codex_server.py`、`docs/external-auth-and-user-keys.md`、`open-claude/README.md`、`tests/`。
 - 类型：后端安全与配置逻辑、文档和测试变更，需要重启 Agent；前端构建产物无逻辑变化。
 
+### 60. 本地联调历史任务文件恢复
+
+- 修复直接浏览器联调时历史任务文件列表返回 403/空列表的问题。
+- 本地联调身份允许不同浏览器的 `local:*` 身份复用同一 `repositoryId + taskCode` 历史任务；外部 JWT 身份仍必须匹配任务归属用户。
+- 主要文件：`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`。
+- 类型：后端任务文件访问权限修复，需要重启 Agent。
+
 ### 12. 全量任务信息展示
 
 - 新版 React 工作台的当前任务信息改为完整递归展示，不再只显示任务摘要。
