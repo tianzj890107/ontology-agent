@@ -382,6 +382,19 @@ def ontology_app_id() -> str:
             app = None
     return app or _DEFAULT_ONTOLOGY_APP_ID
 
+
+def _forward_authorization(value: str | None) -> str:
+    """Return only a bounded Bearer token for the upstream Ontology gateway.
+
+    The browser's platform JWT is the authoritative gateway identity.  The
+    Agent may still derive a local user namespace for its own task storage, but
+    replacing the JWT with that synthetic ID makes upstream task reads fail.
+    """
+    raw = str(value or "").strip()
+    if raw.lower().startswith("bearer ") and len(raw) <= 8192:
+        return raw
+    return ""
+
 # ---------------------------------------------------------------------------
 # FileServer 对象存储 —— 走 Eimos FileServer 的 /sdk/object/put(multipart+HMAC)。
 # 连接参数对齐后端 DataIoFileServiceUtils:server-url / access-key / secret-key /
@@ -627,7 +640,7 @@ def fileserver_preview_url(cfg, file_url, object_key):
     return f"{cfg['preview_base']}/file/preview/{cfg['bucket']}/{object_key.lstrip('/')}"
 
 
-def ontology_task_callback(kind, task_code, repo_id, payload, user_id=""):
+def ontology_task_callback(kind, task_code, repo_id, payload, user_id="", authorization=""):
     """POST /intelligent/{kind}/tasks/{taskCode}/callback,回写 Agent 状态与文件。
     返回 {ok, error?, resp?}。走与 execution-context 同一网关(带 X-App-Id)。"""
     base = ontology_api_base()
@@ -640,7 +653,10 @@ def ontology_task_callback(kind, task_code, repo_id, payload, user_id=""):
     }
     if repo_id:
         headers["X-Ontology-Repository-Id"] = str(repo_id)
-    if user_id:
+    auth = _forward_authorization(authorization)
+    if auth:
+        headers["Authorization"] = auth
+    elif user_id:
         headers["X-User-Id"] = str(user_id)
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
@@ -658,7 +674,7 @@ def ontology_task_callback(kind, task_code, repo_id, payload, user_id=""):
     return {"ok": True, "resp": payload_resp}
 
 
-def fetch_execution_context(task_code, repo_id="", task_type="", user_id=""):
+def fetch_execution_context(task_code, repo_id="", task_type="", user_id="", authorization=""):
     """上传前从平台重新读取 execution-context，确保许可范围是最新且可信的。"""
     code = str(task_code or "").strip()
     if not code:
@@ -671,7 +687,10 @@ def fetch_execution_context(task_code, repo_id="", task_type="", user_id=""):
         headers = {"X-App-Id": ontology_app_id(), "Accept": "application/json"}
         if repo_id:
             headers["X-Ontology-Repository-Id"] = str(repo_id)
-        if user_id:
+        auth = _forward_authorization(authorization)
+        if auth:
+            headers["Authorization"] = auth
+        elif user_id:
             headers["X-User-Id"] = str(user_id)
         try:
             req = urllib.request.Request(url, method="GET", headers=headers)
@@ -2709,7 +2728,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         # execution-context 是唯一许可来源；浏览器字段只作缓存，上传前强制刷新。
         context = fetch_execution_context(task_code, repo_id, ttype,
-                                          self._current_user()) if task_code else None
+                                          self._current_user(),
+                                          self.headers.get("Authorization")) if task_code else None
         modeling_upload = not integration_upload
         if modeling_upload and task_code and not isinstance(context, dict):
             self._send_json({"error": "无法读取当前任务 execution-context，已拒绝上传和回写结果文件"}, status=502)
@@ -2802,18 +2822,20 @@ class Handler(BaseHTTPRequestHandler):
                 missing = sorted((set(expected_files) - local_names) | (set() if "ok.csv" in local_names else {"ok.csv"}))
                 if "ok.csv" in uploaded_names and not missing:
                     resp["callback"] = self._callback_after_upload(
-                        cfg, task_code, repo_id, ttype, results, allowed_files, expected_files)
+                        cfg, task_code, repo_id, ttype, results, allowed_files, expected_files,
+                        self.headers.get("Authorization"))
                 else:
                     resp["callback"] = {"ok": False, "skipped": True,
                                          "error": "未回写完成：必须先生成并上传全部 expectedFiles，最后上传 ok.csv；缺少: "
                                                   + ", ".join(missing or ["ok.csv"])}
             else:
                 resp["callback"] = self._callback_after_upload(
-                    cfg, task_code, repo_id, ttype, results, allowed_files, expected_files)
+                    cfg, task_code, repo_id, ttype, results, allowed_files, expected_files,
+                    self.headers.get("Authorization"))
         self._send_json(resp)
 
     def _callback_after_upload(self, cfg, task_code, repo_id, ttype, results,
-                               allowed_files=None, expected_files=None):
+                               allowed_files=None, expected_files=None, authorization=""):
         """按上传结果构造 COMPLETED 回调:智能建模带 files[](按文件名映射 parseElement),
         消歧整合按文档 §5.2 不带 files。"""
         if ttype in ("modeling", "integration"):
@@ -2855,7 +2877,7 @@ class Handler(BaseHTTPRequestHandler):
             payload["files"] = files
         else:
             payload["files"] = None
-        out = ontology_task_callback(kind, task_code, repo_id, payload, self._current_user())
+        out = ontology_task_callback(kind, task_code, repo_id, payload, self._current_user(), authorization)
         out["kind"] = kind
         out["reported"] = len(payload.get("files") or [])
         return out
@@ -2987,7 +3009,10 @@ class Handler(BaseHTTPRequestHandler):
                 headers = {"X-App-Id": app_id, "Accept": "application/json"}
                 if repo:
                     headers["X-Ontology-Repository-Id"] = repo
-                if self._current_user():
+                auth = _forward_authorization(self.headers.get("Authorization"))
+                if auth:
+                    headers["Authorization"] = auth
+                elif self._current_user():
                     headers["X-User-Id"] = self._current_user()
                 req = urllib.request.Request(url, method="GET", headers=headers)
                 with urllib.request.urlopen(req, timeout=15) as resp:
@@ -3126,7 +3151,7 @@ class Handler(BaseHTTPRequestHandler):
             # 任务绑定后，服务端重新读取 execution-context，避免浏览器篡改任务规则/输出范围。
             server_context = fetch_execution_context(
                 task.task_code, task.repository_id, task.task_type,
-                task.user_id) if task.task_code else None
+                task.user_id, self.headers.get("Authorization")) if task.task_code else None
             if isinstance(server_context, dict):
                 task.set_mission_context(server_context)
                 persist_tasks()

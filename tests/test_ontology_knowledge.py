@@ -222,6 +222,12 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                              "RM123456789")
             self.assertIsNone(handler._mission_from("1", "</script><script>alert(1)</script>", "modeling"))
             self.assertIsNone(handler._mission_from("1", "RM123456789/extra", "modeling"))
+            self.assertEqual(
+                server._forward_authorization("Bearer eyJhbGciOiJIUzI1NiJ9"),
+                "Bearer eyJhbGciOiJIUzI1NiJ9",
+            )
+            self.assertEqual(server._forward_authorization("local:browser"), "")
+            self.assertEqual(server._forward_authorization("Basic abc"), "")
             # Mission requests no longer accept a task-code-shaped project
             # directory.  The server resolves the shared workspace from
             # persisted task metadata (or creates a stable repository

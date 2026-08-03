@@ -27,3 +27,9 @@
 
 - 将 `openai` 纳入 Open Claude 的基础依赖，确保 Qwen、团队网关及其他兼容接口在按项目依赖安装后即可调用。
 - 同步更新 `open-claude/open_claude/requirements.txt`、`open-claude/pyproject.toml` 与安装说明。
+
+### 4. 任务上下文鉴权转发修复
+
+- 读取 execution-context 和完成回写时保留平台传入的 Bearer JWT，避免 Agent 为本地任务隔离生成的临时用户标识覆盖上游登录态。
+- 对无效或过长的鉴权头不转发，继续由服务端按现有鉴权规则处理。
+- 主要文件：`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`。
