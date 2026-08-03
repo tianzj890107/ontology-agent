@@ -209,10 +209,7 @@ _TEAM_MODEL_LABELS = {
 }
 for _mid in TEAM_MODEL_IDS:
     _existing = next((m for m in AVAILABLE_MODELS if m["id"] == _mid), None)
-    if _existing:
-        _existing["provider"] = "team"
-        _existing["label"] = _TEAM_MODEL_LABELS.get(_mid, _mid)
-    else:
+    if not _existing:
         AVAILABLE_MODELS.append({"id": _mid, "label": _TEAM_MODEL_LABELS.get(_mid, _mid),
                                  "provider": "team", "aliases": []})
 
@@ -236,9 +233,19 @@ for _m in AVAILABLE_MODELS:
 
 def configured_models() -> list[dict[str, Any]]:
     """Models exposed by the web workbench for the active runtime gateway."""
-    if os.environ.get("LLM_PROVIDER", "").strip().lower() == "team":
+    active_provider = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    if active_provider == "team":
         by_id = {str(item.get("id")): item for item in AVAILABLE_MODELS}
-        return [by_id[mid] for mid in TEAM_MODEL_IDS if mid in by_id]
+        return [{**by_id[mid], "provider": "team",
+                 "label": _TEAM_MODEL_LABELS.get(mid, by_id[mid].get("label", mid))}
+                for mid in TEAM_MODEL_IDS if mid in by_id]
+    if active_provider == "qwen":
+        # A model can appear in both TEAM_MODELS and QWEN_*_MODELS. Keep the
+        # shared ID on the Qwen endpoint and hide only models that belong
+        # exclusively to the team gateway.
+        return [item for item in AVAILABLE_MODELS
+                if str(item.get("id")) not in TEAM_MODEL_IDS
+                or str(item.get("id")) in _QWEN_MODEL_IDS]
     return AVAILABLE_MODELS
 
 
@@ -247,9 +254,10 @@ def get_model_provider(model_id: Optional[str]) -> str:
     if not model_id:
         return "anthropic"
     mid = model_id.strip()
-    if mid in TEAM_MODEL_IDS:
+    active_provider = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    if active_provider == "team" and mid in TEAM_MODEL_IDS:
         return "team"
-    if mid in _QWEN_MODEL_IDS and os.environ.get("LLM_PROVIDER", "").lower() == "qwen":
+    if active_provider == "qwen" and mid in _QWEN_MODEL_IDS:
         return "qwen"
     if mid in _MODEL_PROVIDERS:
         return _MODEL_PROVIDERS[mid]

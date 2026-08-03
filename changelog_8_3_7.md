@@ -15,3 +15,10 @@
 - 打开历史会话自动恢复审批时，已处理或已过期的审批请求不再弹出错误提示；鉴权、网络等真实审批失败仍保留提示。
 - 当前任务信息仅作为侧栏辅助内容；上游任务信息暂不可获取时改为页面空态，不再在打开对话时弹出“获取任务信息失败”。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 2. Qwen 与团队模型重名路由修复
+
+- 修复团队模型目录与 Qwen 模型目录存在同名模型时的 Provider 污染问题。
+- Qwen 模式下，共享模型继续走 Qwen Base URL 和 Qwen Key；仅团队专属模型不会混入 Qwen 模型列表。
+- 团队模式下仍按 `TEAM_MODELS` 暴露模型，并将共享模型标记为团队网关模型。
+- 主要文件：`open-claude/open_claude/config.py`、`tests/test_team_config.py`。
