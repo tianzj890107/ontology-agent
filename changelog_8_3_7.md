@@ -22,3 +22,8 @@
 - Qwen 模式下，共享模型继续走 Qwen Base URL 和 Qwen Key；仅团队专属模型不会混入 Qwen 模型列表。
 - 团队模式下仍按 `TEAM_MODELS` 暴露模型，并将共享模型标记为团队网关模型。
 - 主要文件：`open-claude/open_claude/config.py`、`tests/test_team_config.py`。
+
+### 3. OpenAI 兼容客户端纳入运行依赖
+
+- 将 `openai` 纳入 Open Claude 的基础依赖，确保 Qwen、团队网关及其他兼容接口在按项目依赖安装后即可调用。
+- 同步更新 `open-claude/open_claude/requirements.txt`、`open-claude/pyproject.toml` 与安装说明。

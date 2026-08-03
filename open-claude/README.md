@@ -142,10 +142,12 @@ or stale `TEAM_MODEL` safely falls back to the first configured team model.
 Outside team mode, any unrecognized value is passed through unchanged, so you can
 still use a dated snapshot ID or a provider-specific model name directly.
 
-**Non-Anthropic models need the `openai` package** (an optional dependency):
+The project includes the `openai` package because Qwen, GLM, Kimi, DeepSeek,
+OpenAI, and the company team gateway use the OpenAI-compatible Chat Completions API.
+If you install dependencies manually, run:
 
 ```bash
-pip install "open-claude[openai]"   # or: pip install openai
+pip install -r open_claude/requirements.txt
 ```
 
 Each provider reads its key from its own env var(s), or from an `api_keys` map in
