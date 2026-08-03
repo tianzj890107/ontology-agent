@@ -63,6 +63,11 @@ function truncateTitle(value, max = 15) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
+function isExpiredApprovalError(error) {
+  const text = String(error || "");
+  return /没有待确认.*(?:请求|操作)|请求已过期/.test(text);
+}
+
 function normalizeFiles(value) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => (typeof item === "string" ? item : item?.path || item?.filename)).filter(Boolean);
@@ -422,7 +427,9 @@ function App() {
     setMissionLoading(true);
     const query = new URLSearchParams({ repositoryId: MISSION.repositoryId, taskCode: MISSION.taskCode, ...(MISSION.taskType ? { taskType: MISSION.taskType } : {}) });
     const result = await api(`/api/mission/task?${query}`);
-    if (!result.error) setMissionContext(result.task); else messageApi.warning(result.error);
+    // 任务信息只是侧栏的辅助内容；上游任务已完成、删除或暂不可查时，
+    // 保持空态即可，不能在打开历史对话时弹出错误打断用户。
+    if (!result.error) setMissionContext(result.task); else setMissionContext(null);
     setMissionLoading(false);
   };
 
@@ -484,7 +491,9 @@ function App() {
     try {
       const result = await api(`/api/tasks/${task.id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, approved }) });
       if (result.error) {
-        messageApi.error(result.error);
+        // 自动恢复历史审批时，服务端可能已处理同一个请求；这不是用户需要
+        // 处理的异常。其他审批失败（鉴权、网络等）仍然保留明确提示。
+        if (!isExpiredApprovalError(result.error)) messageApi.error(result.error);
         return false;
       }
       appendEvent({ type: "approval_result", id, approved });

@@ -34,6 +34,9 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('const uploadToMinio = async () =>', source)
         self.assertIn('missionContext?.outputPrefix', source)
         self.assertIn('onUploadToMinio={uploadToMinio}', source)
+        self.assertIn('function isExpiredApprovalError(error)', source)
+        self.assertIn('if (!isExpiredApprovalError(result.error)) messageApi.error(result.error);', source)
+        self.assertNotIn('else messageApi.warning(result.error);', source)
         for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send", "/api/minio/upload"):
             self.assertIn(route, source)
 
