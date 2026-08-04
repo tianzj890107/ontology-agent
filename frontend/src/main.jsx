@@ -207,6 +207,8 @@ function AssistantText({ text }) {
 }
 
 function EventFeed({ events, onApprove, files, onFile, busy = false }) {
+  const lastEvent = events[events.length - 1];
+  const waitingForNextEvent = busy && !["done", "error", "approval_request"].includes(lastEvent?.type);
   return (
     <div className="feed-list">
       {events.map((event, index) => {
@@ -216,6 +218,9 @@ function EventFeed({ events, onApprove, files, onFile, busy = false }) {
         const loading = busy && index === events.length - 1 && event.type === "thinking";
         return <ThoughtEvent event={event} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
       })}
+      {waitingForNextEvent && lastEvent?.type !== "thinking" && (
+        <ThoughtEvent event={{ type: "thinking", text: "" }} files={files} onFile={onFile} loading />
+      )}
     </div>
   );
 }

@@ -79,3 +79,9 @@
 - `LOGICAL_MODEL` 计划展开现在显式包含候选属性阶段；正式逻辑实体、业务属性和实体关系仍作为进入业务对象层的完成条件。
 - 将分层建模与 artifact 依赖说明纳入 `scripts/build_agent_knowledge.py` 的生成源，后续重新生成静态知识时不会丢失该规则。
 - 主要文件：`open-claude/oc_codex_server.py`、`scripts/build_agent_knowledge.py`、`agent_knowledge/README.md`、`agent_knowledge/modeling/all_sources.md`、`tests/test_ontology_knowledge.py`。
+
+### 10. 思维链空闲阶段加载提示
+
+- Agent 正在执行但暂时没有新的 SSE 思维链事件时，补显示一个临时“思考中”旋转节点；新事件到达、等待审批或本轮结束后自动切换/移除。
+- 页面：`frontend/src/main.jsx`。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。

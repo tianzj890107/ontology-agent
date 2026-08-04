@@ -30,6 +30,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('approvalInFlightRef', source)
         self.assertIn('approve(pending.id, true, current)', source)
         self.assertIn('event.type === "thinking" && loading ? <Spin size="small" />', source)
+        self.assertIn('const waitingForNextEvent = busy && !["done", "error", "approval_request"].includes(lastEvent?.type);', source)
+        self.assertIn('event={{ type: "thinking", text: "" }}', source)
         self.assertIn('上传到 MinIO', source)
         self.assertIn('const uploadToMinio = async () =>', source)
         self.assertIn('missionContext?.outputPrefix', source)
