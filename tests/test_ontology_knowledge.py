@@ -16,7 +16,12 @@ import types
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-claude"))
 
-from open_claude.ontology_knowledge import knowledge_filename, load_static_knowledge, normalize_task_type
+from open_claude.ontology_knowledge import (
+    knowledge_filename,
+    load_static_knowledge,
+    modeling_skill_modules,
+    normalize_task_type,
+)
 from open_claude import config as open_claude_config
 from open_claude.tools import execute_read
 
@@ -81,6 +86,21 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("本体元模型.xlsx", modeling)
         self.assertIn("本体元模型模板.xlsx", modeling)
         self.assertNotIn("本体建模步骤拆解.xlsx", modeling)
+        self.assertEqual(modeling_skill_modules({}), ())
+        self.assertEqual(
+            modeling_skill_modules({"parseElements": "BUSINESS_OBJECTTERMRULEMETRIC"}),
+            (("TERM", "业务术语.md"), ("RULE", "业务规则.md"), ("METRIC", "指标.md")),
+        )
+        specialized = load_static_knowledge(
+            ROOT / "agent_knowledge", "modeling",
+            {"sourceMode": "DATABASE", "expectedFiles": "terms.csvbusiness_rules.csvmetrics.csv"},
+        )
+        self.assertIn("建模专项技能：业务术语.md", specialized)
+        self.assertIn("优先发现已有的人工语义资产", specialized)
+        self.assertIn("建模专项技能：业务规则.md", specialized)
+        self.assertIn("规则的存在与规则被强制是两件事", specialized)
+        self.assertIn("建模专项技能：指标.md", specialized)
+        self.assertIn("口径以实际执行的 SQL 为事实依据", specialized)
         self.assertIn("本体元模型.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型.md").read_text(encoding="utf-8"))
         self.assertIn("本体元模型模板.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板.md").read_text(encoding="utf-8"))
         data_model_rules = (ROOT / "agent_knowledge" / "modeling" / "数据模型建模规范-20260626.md").read_text(encoding="utf-8")
@@ -193,6 +213,11 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertIn("COMPOSITION 和 EXTENSION", server.build_modeling_instructions({}))
             self.assertIn("候选业务属性", server.build_modeling_instructions({}))
             self.assertIn("属性归属", server.build_modeling_instructions({}))
+            skill_instructions = server.build_modeling_instructions(
+                {"parseElements": ["TERM", "RULE", "METRIC"]})
+            self.assertIn("业务术语.md", skill_instructions)
+            self.assertIn("业务规则.md", skill_instructions)
+            self.assertIn("指标.md", skill_instructions)
             self.assertIn("规则文件名和章节标题", server.build_integration_instructions({}))
             self.assertEqual(
                 server.build_tool_audit("Bash", {"command": "head -n 5 input.csv"})["severity"],
@@ -228,6 +253,11 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             )
             self.assertEqual(server._forward_authorization("local:browser"), "")
             self.assertEqual(server._forward_authorization("Basic abc"), "")
+            self.assertEqual(
+                server.normalize_parse_elements("业务术语业务规则指标"),
+                {"TERM", "RULE", "METRIC"},
+            )
+            self.assertEqual(server.parse_element_for_file("business_terms.csv"), "TERM")
             # Mission requests no longer accept a task-code-shaped project
             # directory.  The server resolves the shared workspace from
             # persisted task metadata (or creates a stable repository

@@ -33,3 +33,9 @@
 - 读取 execution-context 和完成回写时保留平台传入的 Bearer JWT，避免 Agent 为本地任务隔离生成的临时用户标识覆盖上游登录态。
 - 对无效或过长的鉴权头不转发，继续由服务端按现有鉴权规则处理。
 - 主要文件：`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`。
+
+### 5. 术语、规则与指标建模专项技能
+
+- 新增业务术语、业务规则、指标三个静态建模技能；任务选择 `TERM`、`RULE`、`METRIC` 或对应结果文件时自动注入。
+- 技能按需加载在 V6 和输入源专项规则后，未选择时不会引导 Agent 生成额外文件。
+- 主要文件：`agent_knowledge/业务术语.md`、`agent_knowledge/业务规则.md`、`agent_knowledge/指标.md`、`open-claude/open_claude/ontology_knowledge.py`、`open-claude/oc_codex_server.py`。
