@@ -222,8 +222,7 @@ Agent 工作台状态约定：
 
 - 用户真正发起 Agent 执行前回调一次 `RUNNING`；仅打开页面、恢复历史会话或读取任务信息不代表执行开始。
 - 执行以不可恢复错误结束时回调 `FAILED`，并使用 `AGENT_EXECUTION_FAILED` 作为通用错误码。
-- 结果上传至对象存储后仍保持 `RUNNING`。用户在工作台检查、修改并重新上传后，主动点击“完成”才发送 `COMPLETED`；点击“修改”会回调 `RUNNING` 以恢复编辑。
-- 用户确认 `COMPLETED` 前，Agent 会校验全部 `expectedFiles` 都已上传，且本地文件内容仍与已上传文件一致。
+- 结果上传至对象存储后，Agent 校验全部 `expectedFiles` 都已上传，且本地文件内容仍与已上传文件一致；校验通过即自动发送 `COMPLETED`。结果不完整时保持 `RUNNING`，可继续上传。
 
 ## 5. 消歧整合接口
 

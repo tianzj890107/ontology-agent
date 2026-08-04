@@ -705,11 +705,11 @@ def task_status_callback(task, agent_status: str, *, authorization: str = "",
 
 
 def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
-    """Validate the exact uploaded artefacts before a user confirms completion.
+    """Validate uploaded artefacts before automatically reporting completion.
 
-    Uploading is deliberately not completion: a user may review and edit generated
-    CSV files several times.  The saved SHA-256 values make sure the files being
-    confirmed are still the same bytes that were uploaded to object storage.
+    A task completes only after every required result has been uploaded.  The
+    saved SHA-256 values make sure each local file still matches its uploaded
+    object at the moment the completion callback is sent.
     """
     context = getattr(task, "mission_context", {})
     if not isinstance(context, dict):
@@ -730,7 +730,7 @@ def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
         uploaded = {}
     missing = sorted(name for name in expected if name not in uploaded)
     if missing:
-        return None, "请先上传全部结果文件后再完成：" + ", ".join(missing)
+        return None, "请先上传全部结果文件后再自动完成：" + ", ".join(missing)
 
     files = []
     changed = []
@@ -1922,8 +1922,8 @@ class Task:
         self.log: list[dict] = []     # replayable UI events
         self.lock = threading.Lock()
         # Platform lifecycle is separate from the local web turn state above.
-        # It remains RUNNING after an agent turn and only becomes COMPLETED when
-        # the user explicitly confirms the uploaded result files.
+        # It remains RUNNING after an agent turn and becomes COMPLETED only when
+        # every expected result file has been uploaded and validated.
         self.platform_status = str(platform_status or "").upper()
         self.platform_updated = float(platform_updated or 0)
         self.platform_uploaded_files = (platform_uploaded_files.copy()
@@ -2916,10 +2916,6 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/minio/upload":
             self._handle_minio_upload()
         else:
-            m = re.match(r"^/api/tasks/([0-9a-f]+)/platform-status$", path)
-            if m:
-                self._handle_platform_status(m.group(1))
-                return
             m = re.match(r"^/api/tasks/([0-9a-f]+)/send$", path)
             if m:
                 self._handle_send(m.group(1))
@@ -3050,7 +3046,7 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_minio_upload(self):
         """POST /api/minio/upload {project, paths:[...], prefix, taskCode, repositoryId, taskType?}
         —— 把项目里选中的文件上传到 FileServer 的 <bucket>/<prefix>/<文件名>,
-        保存上传清单供用户稍后确认；上传本身绝不回调 COMPLETED。
+        保存上传清单；全部期望结果上传且校验通过后自动回调 COMPLETED。
 
         prefix 即任务执行上下文里的 outputPrefix,例如
         ontology/1/modeling-tasks/RM.../agent-output。走 FileServer 的 /sdk/object/put。"""
@@ -3068,9 +3064,6 @@ class Handler(BaseHTTPRequestHandler):
         if task and (str(task.task_code or "") != task_code
                      or str(task.repository_id or "") != repo_id):
             self._send_json({"error": "任务标识与当前会话不一致"}, status=403)
-            return
-        if task and task.platform_status == "COMPLETED":
-            self._send_json({"error": "任务已完成，请先点击“修改”恢复为运行中后再上传结果"}, status=409)
             return
         if task:
             trusted_type = normalize_task_type(task.task_type or task.mission_context.get("taskType", ""))
@@ -3098,9 +3091,6 @@ class Handler(BaseHTTPRequestHandler):
                 task.platform_status = platform_status
                 task.platform_updated = time.time()
                 persist_tasks()
-        if task and task.platform_status == "COMPLETED":
-            self._send_json({"error": "任务已完成，请先点击“修改”恢复为运行中后再上传结果"}, status=409)
-            return
         modeling_upload = not integration_upload
         if modeling_upload and task_code and not isinstance(context, dict):
             self._send_json({"error": "无法读取当前任务 execution-context，已拒绝上传和回写结果文件"}, status=502)
@@ -3183,64 +3173,27 @@ class Handler(BaseHTTPRequestHandler):
         if task and ok_n:
             task.record_uploaded_results(prefix, results)
             persist_tasks()
-            resp["task"] = task.summary()
-            resp["completionHint"] = "结果已上传，仍保持运行中；确认无误后请点击“完成”回写平台。"
-        self._send_json(resp)
-
-    def _handle_platform_status(self, task_id: str):
-        """User-controlled platform lifecycle transition: complete or reopen editing."""
-        task = self._owned_task(task_id)
-        if not task:
-            return
-        if not task.task_code or not task.repository_id:
-            self._send_json({"error": "仅本体平台任务支持完成状态回写"}, status=400)
-            return
-        data = self._read_body()
-        action = str(data.get("action") or "").strip().lower()
-        authorization = self.headers.get("Authorization") or ""
-
-        if action == "complete":
-            if task.platform_status == "COMPLETED":
-                self._send_json({"ok": True, "task": task.summary(), "message": "任务已完成"})
-                return
             payload, error = build_completed_callback_payload(task)
             if error:
-                self._send_json({"error": error}, status=422)
-                return
-            result = task_status_callback(task, "COMPLETED", authorization=authorization,
-                                          files=payload.get("files"))
-            if not result.get("ok"):
-                task.platform_last_error = "COMPLETED 状态回调失败: " + str(result.get("error") or "未知错误")[:800]
+                # Partial uploads are normal: preserve RUNNING and tell the
+                # client why an automatic completion callback was not sent.
+                resp["callback"] = {"ok": False, "skipped": True, "error": error}
+            else:
+                callback = task_status_callback(
+                    task, "COMPLETED",
+                    authorization=self.headers.get("Authorization") or "",
+                    files=payload.get("files"),
+                )
+                resp["callback"] = callback
                 task.platform_updated = time.time()
+                if callback.get("ok"):
+                    task.platform_status = "COMPLETED"
+                    task.platform_last_error = ""
+                else:
+                    task.platform_last_error = "COMPLETED 状态回调失败: " + str(callback.get("error") or "未知错误")[:800]
                 persist_tasks()
-                self._send_json({"error": task.platform_last_error}, status=502)
-                return
-            task.platform_status = "COMPLETED"
-            task.platform_last_error = ""
-            task.platform_updated = time.time()
-            persist_tasks()
-            self._send_json({"ok": True, "task": task.summary(), "callback": result})
-            return
-
-        if action == "edit":
-            if task.platform_status != "COMPLETED":
-                self._send_json({"ok": True, "task": task.summary(), "message": "任务当前已可修改"})
-                return
-            result = task_status_callback(task, "RUNNING", authorization=authorization)
-            if not result.get("ok"):
-                task.platform_last_error = "RUNNING 状态回调失败: " + str(result.get("error") or "未知错误")[:800]
-                task.platform_updated = time.time()
-                persist_tasks()
-                self._send_json({"error": task.platform_last_error}, status=502)
-                return
-            task.platform_status = "RUNNING"
-            task.platform_last_error = ""
-            task.platform_updated = time.time()
-            persist_tasks()
-            self._send_json({"ok": True, "task": task.summary(), "callback": result})
-            return
-
-        self._send_json({"error": "不支持的状态操作，仅支持 complete 或 edit"}, status=400)
+            resp["task"] = task.summary()
+        self._send_json(resp)
 
     def _handle_upload(self):
         """POST /api/upload {project, repositoryId, taskCode, name, data(base64)}."""
@@ -3584,17 +3537,6 @@ class Handler(BaseHTTPRequestHandler):
                 # 平台暂时不可达时，仅首次允许浏览器上下文作为降级；已有上下文不被覆盖。
                 task.set_mission_context(client_context)
                 persist_tasks()
-
-        # A completed mission is intentionally immutable from the platform's
-        # perspective until the user explicitly chooses “修改”.  Do this before
-        # opening the stream so a rejected request never creates a phantom turn.
-        if task.platform_status == "COMPLETED":
-            self.close_connection = True
-            self.send_response(409)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "任务已完成，请先点击“修改”恢复为运行中后再继续执行"}, ensure_ascii=False).encode("utf-8"))
-            return
 
         # Report RUNNING immediately before the first real agent turn.  Opening
         # a history chat or merely reading execution-context must not be treated

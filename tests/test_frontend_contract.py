@@ -34,15 +34,16 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('const uploadToMinio = async () =>', source)
         self.assertIn('missionContext?.outputPrefix', source)
         self.assertIn('onUploadToMinio={uploadToMinio}', source)
-        self.assertIn('const changePlatformStatus = async () =>', source)
-        self.assertIn('/api/tasks/${active.id}/platform-status', source)
-        self.assertIn('platformStatus === "COMPLETED" ? "修改" : "完成"', source)
-        self.assertIn('setMissionPlatformStatus(result.platformStatus || "")', source)
-        self.assertIn('请先点击“修改”恢复任务后再上传', source)
+        self.assertIn('结果文件已校验并自动回写完成', source)
+        self.assertIn('尚未自动完成：${result.callback.error}', source)
+        self.assertNotIn('const changePlatformStatus = async () =>', source)
+        self.assertNotIn('/api/tasks/${active.id}/platform-status', source)
+        self.assertNotIn('platformStatus === "COMPLETED" ? "修改" : "完成"', source)
+        self.assertNotIn('请先点击“修改”恢复任务后再上传', source)
         self.assertIn('function isExpiredApprovalError(error)', source)
         self.assertIn('if (!isExpiredApprovalError(result.error)) messageApi.error(result.error);', source)
         self.assertNotIn('else messageApi.warning(result.error);', source)
-        for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send", "/api/minio/upload", "/api/tasks/${active.id}/platform-status"):
+        for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send", "/api/minio/upload"):
             self.assertIn(route, source)
 
     def test_python_server_prefers_built_frontend_with_safe_assets(self):

@@ -53,3 +53,10 @@
 - 新增业务术语、业务规则、指标三个静态建模技能；任务选择 `TERM`、`RULE`、`METRIC` 或对应结果文件时自动注入。
 - 技能按需加载在 V6 和输入源专项规则后，未选择时不会引导 Agent 生成额外文件。
 - 主要文件：`agent_knowledge/业务术语.md`、`agent_knowledge/业务规则.md`、`agent_knowledge/指标.md`、`open-claude/open_claude/ontology_knowledge.py`、`open-claude/oc_codex_server.py`。
+
+### 7. 恢复结果上传后自动完成
+
+- 根据交互调整，移除任务栏“完成/修改”按钮及对应手动状态接口；任务可继续执行和上传，不再因已完成状态锁定操作。
+- 上传到 MinIO 后，服务端会校验全部期望输出文件及其 SHA-256 一致性；校验通过即自动回调本体平台 `COMPLETED`，文件未传齐则保持 `RUNNING` 并提示缺少项。
+- 保留 Agent 实际开始时的 `RUNNING` 回调以及不可恢复错误的 `FAILED` 回调。
+- 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`backend-agent-interaction-api.md`、`tests/test_frontend_contract.py`、`tests/test_ontology_knowledge.py`。

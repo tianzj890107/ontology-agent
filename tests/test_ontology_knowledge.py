@@ -264,8 +264,10 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertTrue(server.upstream_context_configuration_error("解析要素未配置输出文件: business_object"))
             self.assertFalse(server.upstream_context_configuration_error("认证失败: 访问Token不存在"))
             self.assertFalse(server.upstream_context_configuration_error("integration task does not exist"))
-            self.assertIn("context_config_err or last_err",
-                          (ROOT / "open-claude" / "oc_codex_server.py").read_text(encoding="utf-8"))
+            server_source = (ROOT / "open-claude" / "oc_codex_server.py").read_text(encoding="utf-8")
+            self.assertIn("context_config_err or last_err", server_source)
+            self.assertIn('task_status_callback(\n                    task, "COMPLETED"', server_source)
+            self.assertNotIn("/platform-status", server_source)
             self.assertEqual(server.normalize_platform_status("SUCCESS"), "COMPLETED")
             self.assertEqual(server.platform_status_from_payload({"agentStatus": "COMPLETED"}), "COMPLETED")
             wrapped_context = server.normalize_execution_context({
@@ -423,6 +425,18 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                         "previewUrl": "https://files.example/preview.csv", "sha256": digest,
                     }},
                 )
+                partial_task = types.SimpleNamespace(
+                    cwd=task_tmp,
+                    task_code="RM123456789",
+                    task_type="modeling",
+                    mission_context={
+                        "taskType": "modeling", "parseElements": ["LOGICAL_ENTITY", "ENTITY_RELATION"],
+                        "expectedFiles": ["logical_entities.csv", "entity_relations.csv"],
+                    },
+                    platform_uploaded_files=completion_task.platform_uploaded_files,
+                )
+                _, partial_error = server.build_completed_callback_payload(partial_task)
+                self.assertIn("请先上传全部结果文件后再自动完成", partial_error)
                 completion, completion_error = server.build_completed_callback_payload(completion_task)
                 self.assertIsNone(completion_error)
                 self.assertEqual(completion["agentStatus"], "COMPLETED")
@@ -430,6 +444,97 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 result_file.write_text("逻辑实体编码,逻辑实体名称\nLE1,已修改采购订单\n", encoding="utf-8")
                 _, changed_error = server.build_completed_callback_payload(completion_task)
                 self.assertIn("上传后已变更", changed_error)
+            with tempfile.TemporaryDirectory() as upload_tmp:
+                output = Path(upload_tmp) / "mission-output"
+                output.mkdir()
+                logical = output / "logical_entities.csv"
+                logical.write_text(
+                    "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n"
+                    "BO1,采购,LE1,采购订单,purchaseOrder,采购订单,true,事务数据\n",
+                    encoding="utf-8",
+                )
+                business_object = output / "business_objects.csv"
+                business_object.write_text(
+                    "业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
+                    "BO1,采购,Purchase,采购业务,事务数据\n",
+                    encoding="utf-8",
+                )
+
+                class UploadTask:
+                    id = "upload-task"
+                    project = "project"
+                    repository_id = "1"
+                    task_code = "RM123456789"
+                    task_type = "modeling"
+                    user_id = "u1"
+                    cwd = upload_tmp
+                    platform_status = "RUNNING"
+                    platform_updated = 0
+                    platform_last_error = ""
+                    platform_output_prefix = ""
+                    platform_uploaded_files = {}
+                    mission_context = {
+                        "taskType": "modeling",
+                        "parseElements": ["BUSINESS_OBJECT", "LOGICAL_ENTITY"],
+                        "expectedFiles": ["business_objects.csv", "logical_entities.csv"],
+                    }
+
+                    def set_mission_context(self, context):
+                        self.mission_context = dict(context)
+
+                    def record_uploaded_results(self, prefix, results):
+                        server.Task.record_uploaded_results(self, prefix, results)
+
+                    def summary(self):
+                        return {"id": self.id, "platformStatus": self.platform_status,
+                                "uploadedResultCount": len(self.platform_uploaded_files)}
+
+                upload_task = UploadTask()
+                handler = object.__new__(server.Handler)
+                responses, callback_statuses = [], []
+                originals = {
+                    "bind": server.bind_mission_project,
+                    "context": server.fetch_execution_context,
+                    "cwd": server.mission_task_cwd,
+                    "config": server.minio_config,
+                    "put": server.fileserver_put_object,
+                    "callback": server.task_status_callback,
+                    "persist": server.persist_tasks,
+                }
+                try:
+                    server.bind_mission_project = lambda *args: "project"
+                    server.fetch_execution_context = lambda *args: None
+                    server.mission_task_cwd = lambda *args: upload_tmp
+                    server.minio_config = lambda: {"bucket": "bucket"}
+                    server.fileserver_put_object = lambda cfg, key, blob, name, ctype: {"objectKey": key}
+                    server.task_status_callback = lambda task, status, **kwargs: (
+                        callback_statuses.append((status, kwargs.get("files"))) or {"ok": True})
+                    server.persist_tasks = lambda: None
+                    handler.headers = {}
+                    handler._owned_task = lambda task_id: upload_task if task_id == upload_task.id else None
+                    handler._current_user = lambda: "u1"
+                    handler._send_json = lambda payload, status=200: responses.append((status, payload))
+                    common = {
+                        "project": "project", "prefix": "ontology/1/modeling-tasks/RM123456789/agent-output",
+                        "taskCode": "RM123456789", "repositoryId": "1", "taskId": "upload-task", "taskType": "modeling",
+                    }
+                    handler._read_body = lambda: {**common, "paths": ["mission-output/logical_entities.csv"]}
+                    handler._handle_minio_upload()
+                    self.assertTrue(responses[-1][1]["callback"]["skipped"])
+                    self.assertEqual(callback_statuses, [])
+                    handler._read_body = lambda: {**common, "paths": ["mission-output/business_objects.csv"]}
+                    handler._handle_minio_upload()
+                    self.assertEqual([status for status, _ in callback_statuses], ["COMPLETED"])
+                    self.assertEqual(upload_task.platform_status, "COMPLETED")
+                    self.assertEqual(len(callback_statuses[0][1]), 2)
+                finally:
+                    server.bind_mission_project = originals["bind"]
+                    server.fetch_execution_context = originals["context"]
+                    server.mission_task_cwd = originals["cwd"]
+                    server.minio_config = originals["config"]
+                    server.fileserver_put_object = originals["put"]
+                    server.task_status_callback = originals["callback"]
+                    server.persist_tasks = originals["persist"]
             bo_header = "业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
             self.assertEqual(
                 server.validate_integration_csv(
