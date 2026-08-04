@@ -258,6 +258,9 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 {"TERM", "RULE", "METRIC"},
             )
             self.assertEqual(server.parse_element_for_file("business_terms.csv"), "TERM")
+            self.assertTrue(server.upstream_reports_completed("任务已成功，不能再次执行"))
+            self.assertTrue(server.upstream_reports_completed("task already success"))
+            self.assertFalse(server.upstream_reports_completed("integration task does not exist"))
             callback_calls = []
             original_callback = server.ontology_task_callback
             try:

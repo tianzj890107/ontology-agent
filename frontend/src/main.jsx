@@ -406,6 +406,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [missionInfoOpen, setMissionInfoOpen] = useState(false);
   const [missionContext, setMissionContext] = useState(null);
+  const [missionPlatformStatus, setMissionPlatformStatus] = useState("");
   const [missionLoading, setMissionLoading] = useState(Boolean(MISSION));
   const [keyValue, setKeyValue] = useState("");
   const [selectedProject, setSelectedProject] = useState("");
@@ -418,6 +419,7 @@ function App() {
   const model = meta.model || "";
   const params = meta.params || { temperature: null, max_tokens: null, thinking: false, thinking_budget: 8000 };
   const provider = meta.provider || "";
+  const platformStatus = active?.platformStatus || missionPlatformStatus;
   const hasConversation = Boolean(active?.hasConversation || events.some((event) => ["user", "assistant"].includes(event.type) && String(event.text || "").trim()));
   const placeholder = view === "task" ? "继续对这个任务下指令…" : MISSION ? "点击开始任务，或者描述一个任务" : "描述一个任务，例如：帮我分析这个项目…";
 
@@ -430,7 +432,17 @@ function App() {
     const result = await api(`/api/mission/task?${query}`);
     // 任务信息只是侧栏的辅助内容；上游任务已完成、删除或暂不可查时，
     // 保持空态即可，不能在打开历史对话时弹出错误打断用户。
-    if (!result.error) setMissionContext(result.task); else setMissionContext(null);
+    if (!result.error) {
+      setMissionContext(result.task);
+      setMissionPlatformStatus(result.platformStatus || "");
+      if (result.platformStatus && active) {
+        setActive((current) => current ? { ...current, platformStatus: result.platformStatus } : current);
+        setTasks((previous) => previous.map((task) => task.id === active.id ? { ...task, platformStatus: result.platformStatus } : task));
+      }
+    } else {
+      setMissionContext(null);
+      setMissionPlatformStatus("");
+    }
     setMissionLoading(false);
   };
 
@@ -587,7 +599,7 @@ function App() {
 
   const changePlatformStatus = async () => {
     if (!MISSION || !active || platformActionLoading) return;
-    const completed = active.platformStatus === "COMPLETED";
+    const completed = platformStatus === "COMPLETED";
     setPlatformActionLoading(true);
     try {
       const result = await api(`/api/tasks/${active.id}/platform-status`, {
@@ -598,6 +610,7 @@ function App() {
       if (result.task) {
         setActive(result.task);
         setTasks((previous) => previous.map((task) => task.id === result.task.id ? { ...task, ...result.task } : task));
+        setMissionPlatformStatus(result.task.platformStatus || "");
       }
       messageApi.success(completed ? "已恢复为运行中，可继续修改并重新上传" : "已确认完成，结果已回写本体平台");
     } finally {
@@ -628,12 +641,12 @@ function App() {
       </aside>
       <main className="main-content">
         {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
-          <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Button type={active?.platformStatus === "COMPLETED" ? "default" : "primary"} loading={platformActionLoading} onClick={changePlatformStatus}>{active?.platformStatus === "COMPLETED" ? "修改" : "完成"}</Button>}{MISSION && <Switch checked={autoApprove} onChange={(value) => { autoApproveRef.current = value; setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); if (value) { const pending = events.find((event) => event.type === "approval_request"); if (pending) approve(pending.id, true, active); } }} checkedChildren="自动确认：开" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
+          <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Button type={platformStatus === "COMPLETED" ? "default" : "primary"} loading={platformActionLoading} onClick={changePlatformStatus}>{platformStatus === "COMPLETED" ? "修改" : "完成"}</Button>}{MISSION && <Switch checked={autoApprove} onChange={(value) => { autoApproveRef.current = value; setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); if (value) { const pending = events.find((event) => event.type === "approval_request"); if (pending) approve(pending.id, true, active); } }} checkedChildren="自动确认：开" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
           <div className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} /></div>
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
         </section>}
       </main>
-      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} platformStatus={active?.platformStatus} />
+      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} platformStatus={platformStatus} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
       {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />

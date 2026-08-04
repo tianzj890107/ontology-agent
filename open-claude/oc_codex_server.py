@@ -830,6 +830,37 @@ def cached_mission_context(repository_id: str, task_code: str, user_id: str = ""
                                                           default=str)))
 
 
+def upstream_reports_completed(error: object) -> bool:
+    """Recognise the gateway's terminal-success response without guessing from UI state."""
+    raw = str(error or "")
+    text = raw.upper()
+    return ("任务已成功" in raw
+            or "不能再次执行" in raw
+            or "TASK ALREADY SUCCESS" in text
+            or "STATUS=SUCCESS" in text)
+
+
+def mark_cached_mission_completed(repository_id: str, task_code: str,
+                                  user_id: str = "") -> int:
+    """Migrate legacy local sessions after the platform confirms terminal success."""
+    repository_id, task_code = str(repository_id or ""), str(task_code or "")
+    changed = 0
+    with TASKS_LOCK:
+        for task in TASKS.values():
+            if (str(task.repository_id or "") != repository_id
+                    or str(task.task_code or "") != task_code
+                    or not _mission_task_user_matches(task, user_id)):
+                continue
+            if task.platform_status != "COMPLETED":
+                task.platform_status = "COMPLETED"
+                task.platform_updated = time.time()
+                task.platform_last_error = ""
+                changed += 1
+    if changed:
+        persist_tasks()
+    return changed
+
+
 def _http_err_body(e):
     try:
         return e.read().decode("utf-8", "replace")[:400].strip()
@@ -3246,13 +3277,25 @@ class Handler(BaseHTTPRequestHandler):
         # endpoint again (the gateway returns “任务已成功，不能再次执行”).  The
         # context was persisted locally when the task was started, so expose
         # that trusted snapshot for read-only task information and file browsing.
+        completed_upstream = upstream_reports_completed(last_err)
+        if completed_upstream:
+            mark_cached_mission_completed(repo, code, self._current_user())
         cached = cached_mission_context(repo, code, self._current_user())
         if cached:
             cached_kind = normalize_task_type(cached.get("taskType"))
             if cached_kind not in ("modeling", "integration"):
                 cached_kind = "integration" if code.upper().startswith("MI") else "modeling"
             self._send_json({"ok": True, "cached": True, "kind": cached_kind,
+                             "platformStatus": "COMPLETED" if completed_upstream else "",
                              "task": cached})
+            return
+        if completed_upstream:
+            # A legacy conversation can exist without a persisted context.  It
+            # still needs the correct status/button and must not show an error.
+            self._send_json({"ok": True, "cached": True,
+                             "kind": "integration" if code.upper().startswith("MI") else "modeling",
+                             "platformStatus": "COMPLETED",
+                             "task": {"repositoryId": repo, "taskCode": code}})
             return
         self._send_json({"error": f"获取任务信息失败: {last_err}", "base": base},
                         status=502)
