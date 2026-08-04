@@ -796,10 +796,65 @@ def fetch_execution_context(task_code, repo_id="", task_type="", user_id="", aut
                 payload = json.loads(resp.read().decode("utf-8"))
             if isinstance(payload, dict) and payload.get("success") is False:
                 continue
-            return payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+            data = payload.get("data") if isinstance(payload, dict) and "data" in payload else payload
+            context = normalize_execution_context(data)
+            if isinstance(context, dict):
+                platform_status = platform_status_from_payload(payload, data)
+                if platform_status:
+                    context["_platformStatus"] = platform_status
+                return context
         except Exception:
             continue
     return None
+
+
+def normalize_platform_status(value: object) -> str:
+    """Map current and legacy platform state spellings to the callback contract."""
+    raw = str(value or "").strip().upper().replace("-", "_")
+    if raw in {"COMPLETED", "SUCCESS", "SUCCEEDED", "FINISHED", "DONE"}:
+        return "COMPLETED"
+    if raw in {"RUNNING", "PROCESSING", "IN_PROGRESS", "EXECUTING"}:
+        return "RUNNING"
+    if raw in {"FAILED", "FAIL", "ERROR"}:
+        return "FAILED"
+    if raw in {"PENDING", "WAITING", "CREATED", "NEW"}:
+        return "PENDING"
+    return ""
+
+
+def platform_status_from_payload(*values) -> str:
+    """Read explicit lifecycle fields from either flat or wrapped API responses."""
+    status_keys = {"status", "taskstatus", "agentstatus", "executionstatus", "taskstate", "agentstate", "state"}
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        for key, item in value.items():
+            if str(key).replace("_", "").lower() in status_keys:
+                status = normalize_platform_status(item)
+                if status:
+                    return status
+        for key in ("task", "context", "executionContext", "taskContext", "data"):
+            nested = value.get(key)
+            if isinstance(nested, dict):
+                status = platform_status_from_payload(nested)
+                if status:
+                    return status
+    return ""
+
+
+def normalize_execution_context(value: object) -> dict | None:
+    """Accept both the former flat context and current wrapper-style responses."""
+    if not isinstance(value, dict):
+        return None
+    context = value
+    for key in ("executionContext", "taskContext", "context", "task"):
+        nested = value.get(key)
+        if not isinstance(nested, dict):
+            continue
+        if any(name in nested for name in ("outputPrefix", "expectedFiles", "parseElements", "taskCode")):
+            context = {**value, **nested}
+            break
+    return context.copy()
 
 
 def cached_mission_context(repository_id: str, task_code: str, user_id: str = "") -> dict | None:
@@ -856,6 +911,31 @@ def mark_cached_mission_completed(repository_id: str, task_code: str,
                 task.platform_updated = time.time()
                 task.platform_last_error = ""
                 changed += 1
+    if changed:
+        persist_tasks()
+    return changed
+
+
+def claim_legacy_mission_tasks(repository_id: str, task_code: str, user_id: str = "") -> int:
+    """Attach pre-JWT local-browser sessions to their platform-authorised owner.
+
+    This is intentionally limited to records owned by the old `local:` browser
+    identity and is called only after the platform accepts the same
+    repository/task tuple for the current authenticated user.
+    """
+    current = _safe_user_id(user_id)
+    if not current or current.startswith("local:"):
+        return 0
+    changed = 0
+    with TASKS_LOCK:
+        for task in TASKS.values():
+            if (str(task.repository_id or "") != str(repository_id or "")
+                    or str(task.task_code or "") != str(task_code or "")
+                    or not str(task.user_id or "").startswith("local:")):
+                continue
+            task.user_id = current
+            task.conv.model = user_model(current)
+            changed += 1
     if changed:
         persist_tasks()
     return changed
@@ -2973,10 +3053,20 @@ class Handler(BaseHTTPRequestHandler):
         context = fetch_execution_context(task_code, repo_id, ttype,
                                           self._current_user(),
                                           self.headers.get("Authorization")) if task_code else None
+        platform_status = ""
+        if isinstance(context, dict):
+            platform_status = normalize_platform_status(context.pop("_platformStatus", ""))
         if not isinstance(context, dict) and task and isinstance(task.mission_context, dict):
             context = task.mission_context
         if isinstance(context, dict) and task:
             task.set_mission_context(context)
+            if platform_status:
+                task.platform_status = platform_status
+                task.platform_updated = time.time()
+                persist_tasks()
+        if task and task.platform_status == "COMPLETED":
+            self._send_json({"error": "任务已完成，请先点击“修改”恢复为运行中后再上传结果"}, status=409)
+            return
         modeling_upload = not integration_upload
         if modeling_upload and task_code and not isinstance(context, dict):
             self._send_json({"error": "无法读取当前任务 execution-context，已拒绝上传和回写结果文件"}, status=502)
@@ -3268,9 +3358,29 @@ class Handler(BaseHTTPRequestHandler):
                 if payload.get("success") is False:
                     last_err = payload.get("msg") or "任务查询失败"
                     continue
-                self._send_json({"ok": True, "kind": kind, "task": payload.get("data")})
+                task_context = normalize_execution_context(payload.get("data"))
+                if not isinstance(task_context, dict):
+                    last_err = "任务 execution-context 格式不正确"
+                    continue
+                platform_status = platform_status_from_payload(payload, payload.get("data"))
+                user = self._current_user()
+                claim_legacy_mission_tasks(repo, code, user)
+                if platform_status == "COMPLETED":
+                    mark_cached_mission_completed(repo, code, user)
+                self._send_json({"ok": True, "kind": kind, "platformStatus": platform_status,
+                                 "task": task_context})
                 return
-            self._send_json({"ok": True, "kind": kind, "task": payload})
+            task_context = normalize_execution_context(payload)
+            if not isinstance(task_context, dict):
+                last_err = "任务 execution-context 格式不正确"
+                continue
+            platform_status = platform_status_from_payload(payload)
+            user = self._current_user()
+            claim_legacy_mission_tasks(repo, code, user)
+            if platform_status == "COMPLETED":
+                mark_cached_mission_completed(repo, code, user)
+            self._send_json({"ok": True, "kind": kind, "platformStatus": platform_status,
+                             "task": task_context})
             return
 
         # A completed task cannot be queried from the upstream execution-context
@@ -3279,7 +3389,9 @@ class Handler(BaseHTTPRequestHandler):
         # that trusted snapshot for read-only task information and file browsing.
         completed_upstream = upstream_reports_completed(last_err)
         if completed_upstream:
-            mark_cached_mission_completed(repo, code, self._current_user())
+            user = self._current_user()
+            claim_legacy_mission_tasks(repo, code, user)
+            mark_cached_mission_completed(repo, code, user)
         cached = cached_mission_context(repo, code, self._current_user())
         if cached:
             cached_kind = normalize_task_type(cached.get("taskType"))
@@ -3401,7 +3513,11 @@ class Handler(BaseHTTPRequestHandler):
                 task.task_code, task.repository_id, task.task_type,
                 task.user_id, self.headers.get("Authorization")) if task.task_code else None
             if isinstance(server_context, dict):
+                platform_status = normalize_platform_status(server_context.pop("_platformStatus", ""))
                 task.set_mission_context(server_context)
+                if platform_status:
+                    task.platform_status = platform_status
+                    task.platform_updated = time.time()
                 persist_tasks()
             elif not task.mission_context and client_context:
                 # 平台暂时不可达时，仅首次允许浏览器上下文作为降级；已有上下文不被覆盖。

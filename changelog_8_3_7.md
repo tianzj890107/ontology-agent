@@ -17,6 +17,8 @@
 - 对话任务栏新增“完成”按钮：仅当全部期望输出文件已上传、且本地文件 SHA-256 与已上传版本一致时，才回调 `COMPLETED`；完成后按钮变为“修改”，点击后回调 `RUNNING` 并恢复上传和继续执行。
 - 上传清单（对象键、预览地址、文件指纹）与平台状态随会话持久化，服务器重启后仍可继续确认；已完成任务再次上传或执行前会明确提示先点击“修改”。
 - 兼容本次状态字段上线前已在本体平台成功的历史任务：当平台返回“任务已成功，不能再次执行”时，将对应本地会话迁移为 `COMPLETED`，任务栏直接显示“修改”。
+- 适配平台新版任务读取返回：兼容 `executionContext`、`taskContext`、`context` 等嵌套上下文，以及 `taskStatus`、`agentStatus`、`executionStatus` 等显式状态字段；恢复 `outputPrefix`、`expectedFiles` 和解析要素读取。
+- 平台已验证当前任务后，会将旧版 `local:` 浏览器身份下的同一任务会话安全迁移到当前平台用户，修复历史任务能查看但无法读取文件、上传或修改的权限断链。
 - 同步更新 Agent 与本体平台的状态接口约定，明确 `RUNNING`、`FAILED`、用户确认 `COMPLETED` 和“修改”恢复运行中的时机。
 - 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`backend-agent-interaction-api.md`、`tests/test_ontology_knowledge.py`、`tests/test_frontend_contract.py`。
 

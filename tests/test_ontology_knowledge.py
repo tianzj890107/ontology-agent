@@ -261,6 +261,26 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertTrue(server.upstream_reports_completed("任务已成功，不能再次执行"))
             self.assertTrue(server.upstream_reports_completed("task already success"))
             self.assertFalse(server.upstream_reports_completed("integration task does not exist"))
+            self.assertEqual(server.normalize_platform_status("SUCCESS"), "COMPLETED")
+            self.assertEqual(server.platform_status_from_payload({"agentStatus": "COMPLETED"}), "COMPLETED")
+            wrapped_context = server.normalize_execution_context({
+                "taskStatus": "RUNNING",
+                "executionContext": {"taskCode": "RM123456789", "outputPrefix": "ontology/1/out"},
+            })
+            self.assertEqual(wrapped_context["outputPrefix"], "ontology/1/out")
+            self.assertEqual(wrapped_context["taskStatus"], "RUNNING")
+            original_tasks, original_persist = server.TASKS, server.persist_tasks
+            try:
+                legacy_task = types.SimpleNamespace(
+                    repository_id="1", task_code="RM123456789", user_id="local:old-browser",
+                    conv=types.SimpleNamespace(model="old-model"),
+                )
+                server.TASKS = {"legacy": legacy_task}
+                server.persist_tasks = lambda: None
+                self.assertEqual(server.claim_legacy_mission_tasks("1", "RM123456789", "platform-user"), 1)
+                self.assertEqual(legacy_task.user_id, "platform-user")
+            finally:
+                server.TASKS, server.persist_tasks = original_tasks, original_persist
             callback_calls = []
             original_callback = server.ontology_task_callback
             try:
