@@ -34,6 +34,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('const uploadToMinio = async () =>', source)
         self.assertIn('missionContext?.outputPrefix', source)
         self.assertIn('onUploadToMinio={uploadToMinio}', source)
+        self.assertIn('modelingPlan: "分层建模计划"', source)
+        self.assertIn('artifactType: "Artifact 类型"', source)
         self.assertIn('结果文件已校验并自动回写完成', source)
         self.assertIn('尚未自动完成：${result.callback.error}', source)
         self.assertNotIn('const changePlatformStatus = async () =>', source)

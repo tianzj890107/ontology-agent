@@ -4,6 +4,32 @@
 
 `通用业务对象与逻辑实体识别规范_V6.md` 是所有建模任务唯一的核心判定规范。业务属性识别与归属、逻辑实体识别、关系分类、实体族聚合、候选主实体、R1–R5、UNKNOWN、冲突处理和一致性校验必须严格按 V6 执行。历史规则、示例和来源专项说明只能补充输入提取、字段映射或模板，不得改变或覆盖 V6 的结论、枚举和判定流程。
 
+## 分层建模与 artifact 依赖
+
+建模不是可以任意组合的平面任务，必须按服务端提供的 `modelingPlan` 执行。计划身份固定为：
+`repositoryId + taskCode + modelVersion + inputFingerprint`。不同身份的输入、证据和结果文件禁止混用。
+
+```text
+TERM ─────────────────────────────── 独立，可单独执行
+
+候选业务属性 → 逻辑实体 → 正式业务属性 → 实体关系
+                                      ↓ 校验通过
+                       实体族 → 候选主实体 → R1–R5
+                                      ↓
+                  CONFIRMED / CANDIDATE / REJECTED 业务对象
+                                      ↓ 已完成业务对象
+                         RULE        METRIC
+```
+
+对应 artifact 必须保持以下依赖：
+
+- `termArtifact` 独立，不依赖逻辑模型或业务对象；
+- `logicalModelArtifact` 内部严格按候选属性、逻辑实体、正式业务属性、实体关系顺序执行；
+- `businessObjectArtifact` 必须引用已校验的 `logicalModelArtifact`，并保留实体族、候选主实体、R1–R5 和三类业务对象结论；
+- `ruleArtifact` 和 `metricArtifact` 都必须引用已完成的 `businessObjectArtifact`，二者彼此独立；
+- 同一任务同时请求多层时，先写入并校验上游 artifact，再进入下游；历史上游结果必须通过 execution-context 的已完成 artifact 引用接入；
+- 缺少依赖时禁止生成下游 CSV，也不得把待确认或驳回结果伪装成已完成 artifact。
+
 ## 通用业务对象与逻辑实体识别规范_V6.md
 
 > 规则标识：`通用业务对象与逻辑实体识别规范_V6.md`（服务端已静态注入，禁止在任务 sandbox 中查找源文件）

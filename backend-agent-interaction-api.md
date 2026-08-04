@@ -224,6 +224,35 @@ Agent 工作台状态约定：
 - 执行以不可恢复错误结束时回调 `FAILED`，并使用 `AGENT_EXECUTION_FAILED` 作为通用错误码。
 - 结果上传至对象存储后，Agent 校验全部 `expectedFiles` 都已上传，且本地文件内容仍与已上传文件一致；校验通过即自动发送 `COMPLETED`。结果不完整时保持 `RUNNING`，可继续上传。
 
+### 4.3 分层建模计划与 artifact 依赖
+
+建模任务的执行身份由以下四个字段共同决定，Agent 不得跨身份复用输入、结果或上游引用：
+
+```text
+repositoryId + taskCode + modelVersion + inputFingerprint
+```
+
+建模计划通过 execution-context 的 `modelingPlan` 返回，包含以下固定 artifact 图：
+
+```text
+termArtifact                 （独立）
+logicalModelArtifact         （候选属性 → 逻辑实体 → 正式业务属性 → 实体关系）
+        ↓ 校验通过
+businessObjectArtifact       （实体族 → 候选主实体 → R1–R5 → CONFIRMED/CANDIDATE/REJECTED）
+        ↓ 已完成业务对象
+ruleArtifact                 （RULE）
+metricArtifact               （METRIC）
+```
+
+依赖约束：
+
+- `TERM` 可以单独执行，不依赖其他 artifact；
+- `BUSINESS_ATTRIBUTE` 必须先有 `LOGICAL_ENTITY`，`ENTITY_RELATION` 必须先有逻辑实体和正式业务属性；
+- `BUSINESS_OBJECT` 必须在逻辑模型校验通过后执行；
+- `RULE`、`METRIC` 必须引用已完成的 `businessObjectArtifact`，不能从物理输入直接生成；
+- 同一任务请求多层时按上述顺序执行；跨任务使用上游结果时，必须在 context 中提供状态为 `COMPLETED/CONFIRMED/PASSED` 的 artifact 引用；
+- 缺少依赖时 Agent 在真正执行前回调 `FAILED`，错误码为 `MODELING_DEPENDENCY_BLOCKED`，不会生成或上传下游结果。
+
 ## 5. 消歧整合接口
 
 ### 5.1 获取执行上下文

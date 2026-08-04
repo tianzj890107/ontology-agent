@@ -60,3 +60,11 @@
 - 上传到 MinIO 后，服务端会校验全部期望输出文件及其 SHA-256 一致性；校验通过即自动回调本体平台 `COMPLETED`，文件未传齐则保持 `RUNNING` 并提示缺少项。
 - 保留 Agent 实际开始时的 `RUNNING` 回调以及不可恢复错误的 `FAILED` 回调。
 - 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`backend-agent-interaction-api.md`、`tests/test_frontend_contract.py`、`tests/test_ontology_knowledge.py`。
+
+### 8. 完整实现分层建模与 artifact 依赖
+
+- 建模任务统一生成 `repositoryId + taskCode + modelVersion + inputFingerprint` 身份，并在当前任务信息中展示 `modelingPlan` 和五类 artifact。
+- `TERM` 作为独立分支；逻辑模型强制按候选属性、逻辑实体、正式业务属性、实体关系顺序执行；业务对象必须依赖逻辑模型；规则和指标必须引用已完成业务对象。
+- 服务端在 Agent 真正执行前校验依赖，缺少上游 artifact 时回调 `FAILED`（`MODELING_DEPENDENCY_BLOCKED`），阻止下游文件生成和上传。
+- 上传记录会更新各 artifact 的 `RUNNING`、`PARTIAL`、`COMPLETED` 状态；跨任务引用只接受明确完成状态的 artifact。
+- 主要文件：`open-claude/oc_codex_server.py`、`agent_knowledge/modeling/base.md`、`backend-agent-interaction-api.md`、`frontend/src/main.jsx`、`tests/test_ontology_knowledge.py`。

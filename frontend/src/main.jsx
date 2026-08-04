@@ -274,6 +274,11 @@ const MISSION_LABELS = {
   mode: "模式", generateAlignmentReport: "生成对齐报告", generate_alignment_report: "生成对齐报告",
   autoMergeStrategy: "自动合并策略", auto_merge_strategy: "自动合并策略", alignmentStrategy: "对齐策略",
   mergeStrategy: "整合策略", conflictResolutionStrategy: "冲突处理策略", pendingConfirmationStrategy: "待确认策略",
+  modelingPlan: "分层建模计划", identity: "任务身份", artifacts: "Artifact 清单",
+  artifactType: "Artifact 类型", layer: "层级", requested: "是否请求", source: "来源",
+  status: "状态", dependsOn: "依赖", outputs: "输出文件", key: "身份键",
+  modelVersion: "模型版本", inputFingerprint: "输入指纹", requestedElements: "请求解析要素",
+  executionOrder: "执行顺序", valid: "依赖校验通过", dependencyErrors: "依赖错误",
 };
 const MISSION_SECTION_LABELS = {
   database: "数据源", document: "文档", sourceModels: "来源模型", integrationStrategy: "整合策略",
