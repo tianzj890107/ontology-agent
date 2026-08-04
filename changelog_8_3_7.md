@@ -85,3 +85,10 @@
 - Agent 正在执行但暂时没有新的 SSE 思维链事件时，补显示一个临时“思考中”旋转节点；新事件到达、等待审批或本轮结束后自动切换/移除。
 - 页面：`frontend/src/main.jsx`。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 11. 指标规范更新与数据模型建模规范切换
+
+- 同步 `agent_knowledge/指标.md` 的最新内容，保留输入体检、候选指标识别、无数据源路径、L4 降级推断、产出下限和执行总结等规则。
+- 数据模型建模公共参考切换为 `数据模型建模规范-v0.2.xlsx`，生成对应的 `agent_knowledge/modeling/数据模型建模规范-v0.2.md`，并纳入 `modeling/base.md` 与 `all_sources.md`。
+- `modeling/base.md` 会在每个建模任务中自动注入该公共参考；V6 仍是建模决策的核心规范，v0.2 作为数据模型补充参考，不需要用户重复上传。
+- 主要文件：`agent_knowledge/指标.md`、`rules/数据模型建模规范-v0.2.xlsx`、`agent_knowledge/modeling/数据模型建模规范-v0.2.md`、`scripts/build_agent_knowledge.py`、`tests/test_ontology_knowledge.py`。
