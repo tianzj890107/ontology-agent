@@ -66,5 +66,15 @@
 - 建模任务统一生成 `repositoryId + taskCode + modelVersion + inputFingerprint` 身份，并在当前任务信息中展示 `modelingPlan` 和五类 artifact。
 - `TERM` 作为独立分支；逻辑模型强制按候选属性、逻辑实体、正式业务属性、实体关系顺序执行；业务对象必须依赖逻辑模型；规则和指标必须引用已完成业务对象。
 - 服务端在 Agent 真正执行前校验依赖，缺少上游 artifact 时回调 `FAILED`（`MODELING_DEPENDENCY_BLOCKED`），阻止下游文件生成和上传。
-- 上传记录会更新各 artifact 的 `RUNNING`、`PARTIAL`、`COMPLETED` 状态；跨任务引用只接受明确完成状态的 artifact。
+- 上传记录会更新各 artifact 的 `RUNNING`、`COMPLETED` 状态；跨任务引用只接受明确完成状态的 artifact，结果文件别名按 execution-context 的实际清单判定。
 - 主要文件：`open-claude/oc_codex_server.py`、`agent_knowledge/modeling/base.md`、`backend-agent-interaction-api.md`、`frontend/src/main.jsx`、`tests/test_ontology_knowledge.py`。
+
+## 2026-08-04
+
+### 9. 任务读取与静态知识构建一致性
+
+- 已完成任务或服务器重启后，任务信息中的 `modelingPlan` 会从当前用户绑定的本地任务快照恢复上传文件状态，不再把已上传 artifact 显示为 `PENDING`。
+- 术语、规则、指标的合法别名结果文件按 execution-context 的实际清单判定完成，不再因未同时上传其他别名文件而误报 `PARTIAL`。
+- 输入指纹生成排除数据库密码、Token、密钥等敏感字段，避免凭据变化导致同一任务身份漂移。
+- 将分层建模与 artifact 依赖说明纳入 `scripts/build_agent_knowledge.py` 的生成源，后续重新生成静态知识时不会丢失该规则。
+- 主要文件：`open-claude/oc_codex_server.py`、`scripts/build_agent_knowledge.py`、`agent_knowledge/README.md`、`agent_knowledge/modeling/all_sources.md`、`tests/test_ontology_knowledge.py`。

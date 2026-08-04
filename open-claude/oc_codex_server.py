@@ -724,6 +724,25 @@ def _artifact_reference_is_ready(context: Mapping[str, object], artifact_name: s
     return False
 
 
+_FINGERPRINT_SECRET_KEYS = {
+    "password", "passwd", "secret", "token", "authorization", "api_key",
+    "apikey", "access_key", "secret_key", "private_key",
+}
+
+
+def _fingerprint_safe(value):
+    """Remove credentials before deriving a stable input identity hash."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): _fingerprint_safe(item)
+            for key, item in value.items()
+            if str(key).strip().lower().replace("-", "_") not in _FINGERPRINT_SECRET_KEYS
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_fingerprint_safe(item) for item in value]
+    return value
+
+
 def _modeling_input_fingerprint(context: Mapping[str, object], task_code: str = "") -> str:
     """Use a supplied source fingerprint, or derive a stable one from source descriptors."""
     for key in ("inputFingerprint", "input_fingerprint", "sourceFingerprint", "source_fingerprint"):
@@ -733,6 +752,7 @@ def _modeling_input_fingerprint(context: Mapping[str, object], task_code: str = 
     source_keys = ("inputFiles", "sourceFiles", "sourceModels", "dataSource", "databaseSourceId",
                    "fileSourceId", "selectedTables", "selectedDataTables", "sourceMode", "taskType")
     source = {key: context.get(key) for key in source_keys if context.get(key) not in (None, "", [], {})}
+    source = _fingerprint_safe(source)
     if not source:
         source = {"taskCode": task_code, "parseElements": context.get("parseElements"),
                   "expectedFiles": context.get("expectedFiles")}
@@ -858,6 +878,50 @@ def enrich_modeling_context(context: dict | None, repository_id: str = "",
         return context
     enriched = dict(context)
     enriched["modelingPlan"] = build_modeling_plan(enriched, repository_id, task_code)
+    return enriched
+
+
+def enrich_mission_context_from_task(context: dict | None, repository_id: str = "",
+                                     task_code: str = "", user_id: str = "") -> dict | None:
+    """Overlay persisted artifact upload state onto a trusted task context.
+
+    ``execution-context`` is intentionally read-only and may be unavailable
+    after the platform marks a task successful.  The local Task keeps the
+    upload hashes and the last modeling plan, so the task-information endpoint
+    must expose that same state instead of rebuilding every artifact as
+    ``PENDING``.  Only a task with the exact repository/task/user binding is
+    considered, and its identity key must match the newly fetched context.
+    """
+    if not isinstance(context, dict):
+        return context
+    if normalize_task_type(context.get("taskType") or "") != "modeling":
+        return context
+    repo = str(repository_id or context.get("repositoryId") or "").strip()
+    code = str(task_code or context.get("taskCode") or "").strip()
+    with TASKS_LOCK:
+        matches = [task for task in TASKS.values()
+                   if str(getattr(task, "repository_id", "") or "") == repo
+                   and str(getattr(task, "task_code", "") or "") == code
+                   and _mission_task_user_matches(task, user_id)]
+        task = max(matches, key=lambda item: float(getattr(item, "updated", 0) or 0)) if matches else None
+    if task is None:
+        return context
+    try:
+        task.refresh_modeling_artifacts()
+    except Exception:
+        # A stale legacy task must not make a read-only task-information
+        # request fail; the trusted execution-context remains usable.
+        pass
+    local_plan = getattr(task, "modeling_plan", None)
+    current_plan = context.get("modelingPlan")
+    if not isinstance(local_plan, dict) or not isinstance(current_plan, dict):
+        return context
+    local_key = ((local_plan.get("identity") or {}).get("key") or "")
+    current_key = ((current_plan.get("identity") or {}).get("key") or "")
+    if local_key and current_key and local_key != current_key:
+        return context
+    enriched = dict(context)
+    enriched["modelingPlan"] = local_plan
     return enriched
 
 
@@ -2451,11 +2515,12 @@ class Task:
             if not requested_outputs:
                 continue
             all_requested_uploaded = requested_outputs <= set(uploaded)
-            full_artifact_requested = definition["outputs"] <= expected
-            if all_requested_uploaded and full_artifact_requested:
+            # ``outputs`` contains accepted filename aliases for TERM/RULE/
+            # METRIC.  Completion is defined by the execution-context's
+            # expectedFiles, not by requiring every alias at once (for example
+            # ``rules.csv`` is a valid replacement for ``business_rules.csv``).
+            if all_requested_uploaded:
                 item["status"] = "COMPLETED"
-            elif all_requested_uploaded:
-                item["status"] = "PARTIAL"
             else:
                 item["status"] = "RUNNING"
 
@@ -2792,6 +2857,9 @@ def restore_tasks():
             t.log = row.get("log") if isinstance(row.get("log"), list) else []
             if not t.log:
                 t.log = t.rebuild_log_from_conversation()
+            # Reconcile persisted upload hashes with the artifact plan on
+            # restart so task summaries and the task-information modal agree.
+            t.refresh_modeling_artifacts()
             TASKS[t.id] = t
         except Exception:
             traceback.print_exc()
@@ -3670,6 +3738,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(task_context, dict):
                     last_err = "任务 execution-context 格式不正确"
                     continue
+                task_context = enrich_mission_context_from_task(
+                    task_context, repo, code, self._current_user())
                 platform_status = platform_status_from_payload(payload, payload.get("data"))
                 user = self._current_user()
                 claim_legacy_mission_tasks(repo, code, user)
@@ -3682,6 +3752,8 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(task_context, dict):
                 last_err = "任务 execution-context 格式不正确"
                 continue
+            task_context = enrich_mission_context_from_task(
+                task_context, repo, code, self._current_user())
             platform_status = platform_status_from_payload(payload)
             user = self._current_user()
             claim_legacy_mission_tasks(repo, code, user)
@@ -3717,6 +3789,7 @@ class Handler(BaseHTTPRequestHandler):
             repo, code, user, allow_legacy_local=context_configuration_error)
         if cached:
             cached = enrich_modeling_context(cached, repo, code)
+            cached = enrich_mission_context_from_task(cached, repo, code, user)
             cached_kind = normalize_task_type(cached.get("taskType"))
             if cached_kind not in ("modeling", "integration"):
                 cached_kind = "integration" if code.upper().startswith("MI") else "modeling"

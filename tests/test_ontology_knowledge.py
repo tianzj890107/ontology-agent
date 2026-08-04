@@ -288,6 +288,40 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertTrue(term_plan["valid"])
             self.assertEqual(term_plan["identity"]["key"], "1/RMTERM001/V6/input-a")
             self.assertEqual(term_plan["artifacts"]["termArtifact"]["status"], "PENDING")
+            fingerprint_a = server._modeling_input_fingerprint({
+                "dataSource": {"id": 12, "password": "one"}, "parseElements": ["TERM"]},
+                "RMTERM001")
+            fingerprint_b = server._modeling_input_fingerprint({
+                "dataSource": {"id": 12, "password": "two"}, "parseElements": ["TERM"]},
+                "RMTERM001")
+            self.assertEqual(fingerprint_a, fingerprint_b)
+            alias_status_task = types.SimpleNamespace(
+                repository_id="1", task_code="RMTERM001", task_type="modeling",
+                mission_context={"taskType": "modeling", "parseElements": ["RULE"],
+                                 "expectedFiles": ["rules.csv"]},
+                platform_uploaded_files={"rules.csv": {"objectKey": "rules.csv"}},
+                modeling_plan={},
+            )
+            server.Task.refresh_modeling_artifacts(alias_status_task)
+            self.assertEqual(
+                alias_status_task.modeling_plan["artifacts"]["ruleArtifact"]["status"],
+                "COMPLETED",
+            )
+            old_tasks = server.TASKS
+            try:
+                alias_status_task.user_id = "u1"
+                alias_status_task.updated = 2
+                server.TASKS = {"task-1": alias_status_task}
+                refreshed_context = server.enrich_modeling_context(
+                    dict(alias_status_task.mission_context), "1", "RMTERM001")
+                refreshed_context = server.enrich_mission_context_from_task(
+                    refreshed_context, "1", "RMTERM001", "u1")
+                self.assertEqual(
+                    refreshed_context["modelingPlan"]["artifacts"]["ruleArtifact"]["status"],
+                    "COMPLETED",
+                )
+            finally:
+                server.TASKS = old_tasks
             object_plan = server.build_modeling_plan({
                 "taskType": "modeling", "parseElements": ["BUSINESS_OBJECT"],
                 "expectedFiles": ["business_objects.csv"],

@@ -302,6 +302,33 @@ SOURCE_DOCS = {
     "natural_language": "自然语言本体建模.docx",
 }
 
+LAYERED_MODELING_ARTIFACTS = """## 分层建模与 artifact 依赖
+
+建模不是可以任意组合的平面任务，必须按服务端提供的 `modelingPlan` 执行。计划身份固定为：
+`repositoryId + taskCode + modelVersion + inputFingerprint`。不同身份的输入、证据和结果文件禁止混用。
+
+```text
+TERM ─────────────────────────────── 独立，可单独执行
+
+候选业务属性 → 逻辑实体 → 正式业务属性 → 实体关系
+                                      ↓ 校验通过
+                       实体族 → 候选主实体 → R1–R5
+                                      ↓
+                  CONFIRMED / CANDIDATE / REJECTED 业务对象
+                                      ↓ 已完成业务对象
+                         RULE        METRIC
+```
+
+对应 artifact 必须保持以下依赖：
+
+- `termArtifact` 独立，不依赖逻辑模型或业务对象；
+- `logicalModelArtifact` 内部严格按候选属性、逻辑实体、正式业务属性、实体关系顺序执行；
+- `businessObjectArtifact` 必须引用已校验的 `logicalModelArtifact`，并保留实体族、候选主实体、R1–R5 和三类业务对象结论；
+- `ruleArtifact` 和 `metricArtifact` 都必须引用已完成的 `businessObjectArtifact`，二者彼此独立；
+- 同一任务同时请求多层时，先写入并校验上游 artifact，再进入下游；历史上游结果必须通过 execution-context 的已完成 artifact 引用接入；
+- 缺少依赖时禁止生成下游 CSV，也不得把待确认或驳回结果伪装成已完成 artifact。
+"""
+
 
 def build() -> None:
     write(OUTPUT_DIR / "README.md", f"""# Agent 静态知识库
@@ -315,6 +342,8 @@ def build() -> None:
 - `modeling/base.md` 用于所有智能建模任务；各 `modeling/*.md` 文件只保存对应输入源的专项规则，运行时由 Agent 加载器按需拼接公共规则和专项规则，避免重复复制。
 - `modeling/本体元模型.md`、`modeling/本体元模型模板.md` 和 `modeling/本体建模步骤拆解.md` 是建模参考 Markdown；同样内容也已编入 `modeling/base.md`，由 modeling system prompt 静态注入 Agent。
 - `modeling/通用业务对象与逻辑实体识别规范_V6.md` 是所有建模任务唯一的核心判定规范：业务属性、逻辑实体、关系分类、实体族、业务对象 R1–R5、UNKNOWN/冲突和一致性校验均以 V6 为准。
+- 根目录的 `业务术语.md`、`业务规则.md`、`指标.md` 是按解析要素动态加载的建模专项技能；任务的 `parseElements` 包含 `TERM`、`RULE`、`METRIC`（或其对应的结果文件）时，加载器会在 V6 与输入源专项规则后追加对应技能；未选择的技能不会注入，也不得生成额外结果文件。
+- 服务端会为每个建模任务生成 `modelingPlan`：以 `repositoryId + taskCode + modelVersion + inputFingerprint` 隔离 `termArtifact`、`logicalModelArtifact`、`businessObjectArtifact`、`ruleArtifact` 和 `metricArtifact`，并在 Agent 执行前校验层级依赖。
 - `modeling/数据模型建模规范-20260626.md`、`modeling/本体建模步骤拆解.md` 和 `modeling/自底向上业务对象识别规范_v3.md` 保留为历史参考，不再作为运行时建模判定依据。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 
@@ -331,7 +360,8 @@ def build() -> None:
             "业务属性识别与归属、逻辑实体识别、关系分类、实体族聚合、候选主实体、R1–R5、UNKNOWN、冲突处理和一致性校验"
             "必须严格按 V6 执行。历史规则、示例和来源专项说明只能补充输入提取、字段映射或模板，"
             "不得改变或覆盖 V6 的结论、枚举和判定流程。\n\n"
-            + v6 + "\n\n## 本体元模型与结果模板参考\n\n" + references)
+            + LAYERED_MODELING_ARTIFACTS.rstrip() + "\n\n" + v6
+            + "\n\n## 本体元模型与结果模板参考\n\n" + references)
     write(OUTPUT_DIR / "modeling" / "base.md", base)
     write(OUTPUT_DIR / "modeling" / "本体元模型.md",
           "# 本体元模型：静态 Markdown\n\n" + block("本体元模型.xlsx"))
