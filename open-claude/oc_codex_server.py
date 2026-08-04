@@ -750,8 +750,10 @@ def _modeling_input_fingerprint(context: Mapping[str, object], task_code: str = 
         value = str(context.get(key) or "").strip()
         if value:
             return value
+    # Task type is transport metadata, not input identity.  Gateways may omit
+    # it on a later read, so including it would make the same task's key drift.
     source_keys = ("inputFiles", "sourceFiles", "sourceModels", "dataSource", "databaseSourceId",
-                   "fileSourceId", "selectedTables", "selectedDataTables", "sourceMode", "taskType")
+                   "fileSourceId", "selectedTables", "selectedDataTables", "sourceMode")
     source = {key: context.get(key) for key in source_keys if context.get(key) not in (None, "", [], {})}
     source = _fingerprint_safe(source)
     if not source:
@@ -895,10 +897,12 @@ def enrich_mission_context_from_task(context: dict | None, repository_id: str = 
     """
     if not isinstance(context, dict):
         return context
-    if normalize_task_type(context.get("taskType") or "") != "modeling":
+    context_kind = normalize_task_type(context.get("taskType") or "")
+    context_code = str(task_code or context.get("taskCode") or "").strip()
+    if context_kind != "modeling" and not context_code.upper().startswith("RM"):
         return context
     repo = str(repository_id or context.get("repositoryId") or "").strip()
-    code = str(task_code or context.get("taskCode") or "").strip()
+    code = context_code
     with TASKS_LOCK:
         matches = [task for task in TASKS.values()
                    if str(getattr(task, "repository_id", "") or "") == repo

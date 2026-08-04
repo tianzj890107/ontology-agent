@@ -312,8 +312,10 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 alias_status_task.user_id = "u1"
                 alias_status_task.updated = 2
                 server.TASKS = {"task-1": alias_status_task}
+                context_without_type = dict(alias_status_task.mission_context)
+                context_without_type.pop("taskType", None)
                 refreshed_context = server.enrich_modeling_context(
-                    dict(alias_status_task.mission_context), "1", "RMTERM001")
+                    context_without_type, "1", "RMTERM001")
                 refreshed_context = server.enrich_mission_context_from_task(
                     refreshed_context, "1", "RMTERM001", "u1")
                 self.assertEqual(
