@@ -261,6 +261,9 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertTrue(server.upstream_reports_completed("任务已成功，不能再次执行"))
             self.assertTrue(server.upstream_reports_completed("task already success"))
             self.assertFalse(server.upstream_reports_completed("integration task does not exist"))
+            self.assertTrue(server.upstream_context_configuration_error("解析要素未配置输出文件: business_object"))
+            self.assertFalse(server.upstream_context_configuration_error("认证失败: 访问Token不存在"))
+            self.assertFalse(server.upstream_context_configuration_error("integration task does not exist"))
             self.assertEqual(server.normalize_platform_status("SUCCESS"), "COMPLETED")
             self.assertEqual(server.platform_status_from_payload({"agentStatus": "COMPLETED"}), "COMPLETED")
             wrapped_context = server.normalize_execution_context({

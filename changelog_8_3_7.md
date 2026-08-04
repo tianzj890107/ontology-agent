@@ -19,6 +19,7 @@
 - 兼容本次状态字段上线前已在本体平台成功的历史任务：当平台返回“任务已成功，不能再次执行”时，将对应本地会话迁移为 `COMPLETED`，任务栏直接显示“修改”。
 - 适配平台新版任务读取返回：兼容 `executionContext`、`taskContext`、`context` 等嵌套上下文，以及 `taskStatus`、`agentStatus`、`executionStatus` 等显式状态字段；恢复 `outputPrefix`、`expectedFiles` 和解析要素读取。
 - 平台已验证当前任务后，会将旧版 `local:` 浏览器身份下的同一任务会话安全迁移到当前平台用户，修复历史任务能查看但无法读取文件、上传或修改的权限断链。
+- 修复平台 `execution-context` 返回“解析要素未配置输出文件”时的任务不可用：仅对该明确配置异常回退到同任务的持久化上下文；若历史 `mission-output` 已具备全部期望文件，则恢复为 `COMPLETED` 显示“修改”。认证、无权限和任务不存在仍拒绝回退。
 - 同步更新 Agent 与本体平台的状态接口约定，明确 `RUNNING`、`FAILED`、用户确认 `COMPLETED` 和“修改”恢复运行中的时机。
 - 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`backend-agent-interaction-api.md`、`tests/test_ontology_knowledge.py`、`tests/test_frontend_contract.py`。
 

@@ -857,7 +857,8 @@ def normalize_execution_context(value: object) -> dict | None:
     return context.copy()
 
 
-def cached_mission_context(repository_id: str, task_code: str, user_id: str = "") -> dict | None:
+def cached_mission_context(repository_id: str, task_code: str, user_id: str = "",
+                           allow_legacy_local: bool = False) -> dict | None:
     """Read the last trusted execution-context persisted for this mission.
 
     The Ontology gateway deliberately rejects a second execution-context read
@@ -875,7 +876,8 @@ def cached_mission_context(repository_id: str, task_code: str, user_id: str = ""
                    if str(t.repository_id or "") == repository_id
                    and str(t.task_code or "") == task_code
                    and (not user_id or not getattr(t, "user_id", "")
-                        or getattr(t, "user_id", "") == user_id)
+                        or getattr(t, "user_id", "") == user_id
+                        or (allow_legacy_local and str(getattr(t, "user_id", "")).startswith("local:")))
                    and isinstance(t.mission_context, dict)
                    and t.mission_context]
         if not matches:
@@ -893,6 +895,38 @@ def upstream_reports_completed(error: object) -> bool:
             or "不能再次执行" in raw
             or "TASK ALREADY SUCCESS" in text
             or "STATUS=SUCCESS" in text)
+
+
+def upstream_context_configuration_error(error: object) -> bool:
+    """Whether the platform authenticated and found the task but failed to build context.
+
+    This narrow case is safe to recover from a persisted context.  Authentication,
+    ownership and not-found failures must never fall back to another session.
+    """
+    raw = str(error or "")
+    blocked = ("认证" , "TOKEN", "UNAUTHORIZED", "FORBIDDEN", "无权", "不存在",
+               "DOES NOT EXIST", "NOT FOUND")
+    if any(token in raw.upper() for token in blocked):
+        return False
+    return "解析要素未配置输出文件" in raw
+
+
+def cached_task_outputs_complete(repository_id: str, task_code: str, user_id: str = "") -> bool:
+    """Best-effort migration signal for pre-isolation sessions with local outputs."""
+    with TASKS_LOCK:
+        candidates = [task for task in TASKS.values()
+                      if str(task.repository_id or "") == str(repository_id or "")
+                      and str(task.task_code or "") == str(task_code or "")
+                      and _mission_task_user_matches(task, user_id)]
+    for task in candidates:
+        context = task.mission_context if isinstance(task.mission_context, dict) else {}
+        expected = normalize_expected_files(context.get("expectedFiles"))
+        if not expected:
+            continue
+        if all(os.path.isfile(resolve_file_in_base(task.cwd, f"mission-output/{name}") or "")
+               for name in expected):
+            return True
+    return False
 
 
 def mark_cached_mission_completed(repository_id: str, task_code: str,
@@ -3388,17 +3422,30 @@ class Handler(BaseHTTPRequestHandler):
         # context was persisted locally when the task was started, so expose
         # that trusted snapshot for read-only task information and file browsing.
         completed_upstream = upstream_reports_completed(last_err)
+        context_configuration_error = upstream_context_configuration_error(last_err)
+        user = self._current_user()
         if completed_upstream:
-            user = self._current_user()
             claim_legacy_mission_tasks(repo, code, user)
             mark_cached_mission_completed(repo, code, user)
-        cached = cached_mission_context(repo, code, self._current_user())
+        elif context_configuration_error:
+            # The platform has accepted this task request but cannot compose a
+            # fresh context because its parse-element/output mapping is broken.
+            # Recover only the exact old local-browser session for this task.
+            claim_legacy_mission_tasks(repo, code, user)
+            if cached_task_outputs_complete(repo, code, user):
+                mark_cached_mission_completed(repo, code, user)
+        cached = cached_mission_context(
+            repo, code, user, allow_legacy_local=context_configuration_error)
         if cached:
             cached_kind = normalize_task_type(cached.get("taskType"))
             if cached_kind not in ("modeling", "integration"):
                 cached_kind = "integration" if code.upper().startswith("MI") else "modeling"
+            cached_completed = completed_upstream or (context_configuration_error
+                                                       and cached_task_outputs_complete(repo, code, user))
             self._send_json({"ok": True, "cached": True, "kind": cached_kind,
-                             "platformStatus": "COMPLETED" if completed_upstream else "",
+                             "platformStatus": "COMPLETED" if cached_completed else "",
+                             "contextWarning": ("平台上下文配置异常，已使用该任务的已保存上下文"
+                                                if context_configuration_error else ""),
                              "task": cached})
             return
         if completed_upstream:
