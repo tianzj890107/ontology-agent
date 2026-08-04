@@ -345,6 +345,12 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 "expectedFiles": ["logical_entities.csv", "business_attributes.csv", "entity_relations.csv", "business_objects.csv"],
             }, "1", "RM123456789")
             self.assertTrue(complete_layers["valid"])
+            expanded_logical = server.build_modeling_plan({
+                "taskType": "modeling", "parseElements": ["LOGICAL_MODEL"],
+                "expectedFiles": ["logical_entities.csv", "business_attributes.csv", "entity_relations.csv"],
+            }, "1", "RM123456789")
+            self.assertIn("CANDIDATE_ATTRIBUTE", expanded_logical["requestedElements"])
+            self.assertTrue(expanded_logical["valid"])
             rule_without_object = server.build_modeling_plan({
                 "taskType": "modeling", "parseElements": ["RULE"],
                 "expectedFiles": ["business_rules.csv"],

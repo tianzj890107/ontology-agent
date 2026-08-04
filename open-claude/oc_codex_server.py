@@ -670,7 +670,8 @@ MODEL_ARTIFACT_DEFINITIONS = {
     },
 }
 
-_LOGICAL_MODEL_CODES = {"LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "ENTITY_RELATION"}
+_LOGICAL_MODEL_CODES = {"CANDIDATE_ATTRIBUTE", "LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "ENTITY_RELATION"}
+_LOGICAL_MODEL_FORMAL_CODES = {"LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "ENTITY_RELATION"}
 _LOGICAL_MODEL_OUTPUTS = {"logical_entities.csv", "business_attributes.csv", "entity_relations.csv"}
 _ARTIFACT_STATUS_READY = {"READY", "COMPLETED", "CONFIRMED", "PASSED", "SUCCESS"}
 
@@ -787,7 +788,7 @@ def build_modeling_plan(context: Mapping[str, object] | None = None,
 
     logical_ref = _artifact_reference_is_ready(context, "logicalModelArtifact")
     business_object_ref = _artifact_reference_is_ready(context, "businessObjectArtifact")
-    logical_current = (_LOGICAL_MODEL_CODES <= requested
+    logical_current = (_LOGICAL_MODEL_FORMAL_CODES <= requested
                        or _LOGICAL_MODEL_OUTPUTS <= expected)
     business_object_current = "BUSINESS_OBJECT" in requested or "business_objects.csv" in expected
     errors = []

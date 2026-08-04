@@ -76,5 +76,6 @@
 - 已完成任务或服务器重启后，任务信息中的 `modelingPlan` 会从当前用户绑定的本地任务快照恢复上传文件状态，不再把已上传 artifact 显示为 `PENDING`。
 - 术语、规则、指标的合法别名结果文件按 execution-context 的实际清单判定完成，不再因未同时上传其他别名文件而误报 `PARTIAL`。
 - 输入指纹生成排除数据库密码、Token、密钥等敏感字段，避免凭据变化导致同一任务身份漂移。
+- `LOGICAL_MODEL` 计划展开现在显式包含候选属性阶段；正式逻辑实体、业务属性和实体关系仍作为进入业务对象层的完成条件。
 - 将分层建模与 artifact 依赖说明纳入 `scripts/build_agent_knowledge.py` 的生成源，后续重新生成静态知识时不会丢失该规则。
 - 主要文件：`open-claude/oc_codex_server.py`、`scripts/build_agent_knowledge.py`、`agent_knowledge/README.md`、`agent_knowledge/modeling/all_sources.md`、`tests/test_ontology_knowledge.py`。
