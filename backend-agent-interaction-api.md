@@ -218,6 +218,13 @@ COMPLETED：
 - `objectKey`
 - `previewUrl`
 
+Agent 工作台状态约定：
+
+- 用户真正发起 Agent 执行前回调一次 `RUNNING`；仅打开页面、恢复历史会话或读取任务信息不代表执行开始。
+- 执行以不可恢复错误结束时回调 `FAILED`，并使用 `AGENT_EXECUTION_FAILED` 作为通用错误码。
+- 结果上传至对象存储后仍保持 `RUNNING`。用户在工作台检查、修改并重新上传后，主动点击“完成”才发送 `COMPLETED`；点击“修改”会回调 `RUNNING` 以恢复编辑。
+- 用户确认 `COMPLETED` 前，Agent 会校验全部 `expectedFiles` 都已上传，且本地文件内容仍与已上传文件一致。
+
 ## 5. 消歧整合接口
 
 ### 5.1 获取执行上下文
@@ -289,7 +296,7 @@ Agent 成功时还需上传：
 ontology/{repositoryId}/integration-tasks/{taskCode}/agent-output/ok.csv
 ```
 
-`ok.csv` 是整合完成标记，不放入 `expectedFiles` 列表。Agent 必须先生成并验证全部 `expectedFiles`，最后再上传 `ok.csv`；未上传 `ok.csv` 或任一结果文件校验失败时，服务端不会发送 `COMPLETED` 回调。
+`ok.csv` 是整合完成标记，不放入 `expectedFiles` 列表。Agent 必须先生成并验证全部 `expectedFiles`，最后再上传 `ok.csv`；未上传 `ok.csv` 或任一结果文件校验失败时，用户无法在工作台确认 `COMPLETED` 回调。
 
 ## 6. 本体库信息接口
 

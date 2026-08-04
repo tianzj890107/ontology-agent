@@ -344,7 +344,7 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
   );
 }
 
-function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onUploadToMinio, uploadingToMinio, onClose, onRefresh, mission, focusPath }) {
+function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onUploadToMinio, uploadingToMinio, onClose, onRefresh, mission, focusPath, platformStatus }) {
   const [collapsedDirs, setCollapsedDirs] = useState(() => new Set([""]));
   const groups = useMemo(() => {
     const map = new Map();
@@ -367,7 +367,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" onClick={onRefresh}>⟳</Button><Button size="small" onClick={onClose}>✕</Button></div>
-    <div className="file-actions"><Button size="small" disabled={!selected.length} onClick={onDownload}>⬇ 下载所选</Button>{mission && <Button size="small" type="primary" loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio} onClick={onUploadToMinio}>☁ 上传到 MinIO</Button>}{mission && <span className="panel-note">当前任务范围</span>}</div>
+    <div className="file-actions"><Button size="small" disabled={!selected.length} onClick={onDownload}>⬇ 下载所选</Button>{mission && <Tooltip title={platformStatus === "COMPLETED" ? "请先点击“修改”恢复任务后再上传" : "上传选中的任务结果"}><Button size="small" type="primary" loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || platformStatus === "COMPLETED"} onClick={onUploadToMinio}>☁ 上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">{platformStatus === "COMPLETED" ? "任务已完成" : "当前任务范围"}</span>}</div>
     {loading ? <Spin /> : !files.length ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => {
       const collapsed = collapsedDirs.has(dir);
       const paths = items.map((file) => file.path);
@@ -401,6 +401,7 @@ function App() {
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [minioUploading, setMinioUploading] = useState(false);
+  const [platformActionLoading, setPlatformActionLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [missionInfoOpen, setMissionInfoOpen] = useState(false);
@@ -573,10 +574,34 @@ function App() {
       const failed = (result.results || []).filter((item) => !item.ok);
       if (result.uploaded) messageApi.success(`已上传 ${result.uploaded}/${result.total || selectedFiles.length} 个文件到 MinIO`);
       if (failed.length) messageApi.warning(failed.map((item) => `${item.name}: ${item.error}`).join("；"));
-      if (result.callback && result.callback.ok === false && !result.callback.skipped) messageApi.warning(`任务回写失败：${result.callback.error || "请稍后重试"}`);
+      if (result.task) {
+        setActive(result.task);
+        setTasks((previous) => previous.map((task) => task.id === result.task.id ? { ...task, ...result.task } : task));
+      }
+      if (result.completionHint) messageApi.info(result.completionHint);
       await loadFiles(active);
     } finally {
       setMinioUploading(false);
+    }
+  };
+
+  const changePlatformStatus = async () => {
+    if (!MISSION || !active || platformActionLoading) return;
+    const completed = active.platformStatus === "COMPLETED";
+    setPlatformActionLoading(true);
+    try {
+      const result = await api(`/api/tasks/${active.id}/platform-status`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: completed ? "edit" : "complete" }),
+      });
+      if (result.error) { messageApi.error(result.error); return; }
+      if (result.task) {
+        setActive(result.task);
+        setTasks((previous) => previous.map((task) => task.id === result.task.id ? { ...task, ...result.task } : task));
+      }
+      messageApi.success(completed ? "已恢复为运行中，可继续修改并重新上传" : "已确认完成，结果已回写本体平台");
+    } finally {
+      setPlatformActionLoading(false);
     }
   };
 
@@ -603,12 +628,12 @@ function App() {
       </aside>
       <main className="main-content">
         {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
-          <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Switch checked={autoApprove} onChange={(value) => { autoApproveRef.current = value; setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); if (value) { const pending = events.find((event) => event.type === "approval_request"); if (pending) approve(pending.id, true, active); } }} checkedChildren="自动确认：开" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
+          <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Button type={active?.platformStatus === "COMPLETED" ? "default" : "primary"} loading={platformActionLoading} onClick={changePlatformStatus}>{active?.platformStatus === "COMPLETED" ? "修改" : "完成"}</Button>}{MISSION && <Switch checked={autoApprove} onChange={(value) => { autoApproveRef.current = value; setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); if (value) { const pending = events.find((event) => event.type === "approval_request"); if (pending) approve(pending.id, true, active); } }} checkedChildren="自动确认：开" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
           <div className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} /></div>
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
         </section>}
       </main>
-      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} />
+      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={MISSION} platformStatus={active?.platformStatus} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
       {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={() => setPreview(null)}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />

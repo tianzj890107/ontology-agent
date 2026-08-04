@@ -258,6 +258,23 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 {"TERM", "RULE", "METRIC"},
             )
             self.assertEqual(server.parse_element_for_file("business_terms.csv"), "TERM")
+            callback_calls = []
+            original_callback = server.ontology_task_callback
+            try:
+                server.ontology_task_callback = lambda kind, code, repo, payload, user_id, authorization: (
+                    callback_calls.append((kind, code, repo, payload, user_id, authorization)) or {"ok": True})
+                callback_task = types.SimpleNamespace(
+                    task_code="RM123456789", repository_id="1", task_type="modeling",
+                    mission_context={}, user_id="u1",
+                )
+                server.task_status_callback(callback_task, "RUNNING", authorization="Bearer test")
+                server.task_status_callback(callback_task, "FAILED", error_code="AGENT_EXECUTION_FAILED",
+                                            error_message="boom")
+                self.assertEqual([call[3]["agentStatus"] for call in callback_calls], ["RUNNING", "FAILED"])
+                self.assertEqual(callback_calls[1][3]["errorCode"], "AGENT_EXECUTION_FAILED")
+                self.assertEqual(callback_calls[0][5], "Bearer test")
+            finally:
+                server.ontology_task_callback = original_callback
             # Mission requests no longer accept a task-code-shaped project
             # directory.  The server resolves the shared workspace from
             # persisted task metadata (or creates a stable repository
@@ -359,6 +376,32 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 ]),
                 {"logical_entities.csv", "entity_relations.csv"},
             )
+            with tempfile.TemporaryDirectory() as task_tmp:
+                output = Path(task_tmp) / "mission-output"
+                output.mkdir()
+                result_file = output / "logical_entities.csv"
+                result_file.write_text("逻辑实体编码,逻辑实体名称\nLE1,采购订单\n", encoding="utf-8")
+                digest = hashlib.sha256(result_file.read_bytes()).hexdigest()
+                completion_task = types.SimpleNamespace(
+                    cwd=task_tmp,
+                    task_code="RM123456789",
+                    task_type="modeling",
+                    mission_context={
+                        "taskType": "modeling", "parseElements": ["LOGICAL_ENTITY"],
+                        "expectedFiles": ["logical_entities.csv"],
+                    },
+                    platform_uploaded_files={"logical_entities.csv": {
+                        "objectKey": "ontology/1/modeling-tasks/RM/agent-output/logical_entities.csv",
+                        "previewUrl": "https://files.example/preview.csv", "sha256": digest,
+                    }},
+                )
+                completion, completion_error = server.build_completed_callback_payload(completion_task)
+                self.assertIsNone(completion_error)
+                self.assertEqual(completion["agentStatus"], "COMPLETED")
+                self.assertEqual(completion["files"][0]["parseElement"], "LOGICAL_ENTITY")
+                result_file.write_text("逻辑实体编码,逻辑实体名称\nLE1,已修改采购订单\n", encoding="utf-8")
+                _, changed_error = server.build_completed_callback_payload(completion_task)
+                self.assertIn("上传后已变更", changed_error)
             bo_header = "业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
             self.assertEqual(
                 server.validate_integration_csv(

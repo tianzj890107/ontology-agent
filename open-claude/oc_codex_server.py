@@ -636,14 +636,6 @@ def allowed_output_files(parse_elements, expected_files=None):
     return allowed & expected if expected else allowed
 
 
-def fileserver_preview_url(cfg, file_url, object_key):
-    """回调用的 previewUrl:优先 put 返回的 fileUrl(本身即 /file/preview/...),
-    否则按 {preview_base}/file/preview/{bucket}/{objectKey} 拼。"""
-    if file_url and "/file/preview/" in file_url:
-        return file_url
-    return f"{cfg['preview_base']}/file/preview/{cfg['bucket']}/{object_key.lstrip('/')}"
-
-
 def ontology_task_callback(kind, task_code, repo_id, payload, user_id="", authorization=""):
     """POST /intelligent/{kind}/tasks/{taskCode}/callback,回写 Agent 状态与文件。
     返回 {ok, error?, resp?}。走与 execution-context 同一网关(带 X-App-Id)。"""
@@ -676,6 +668,108 @@ def ontology_task_callback(kind, task_code, repo_id, payload, user_id="", author
                 "error": payload_resp.get("msg") or payload_resp.get("message") or "回调失败",
                 "resp": payload_resp}
     return {"ok": True, "resp": payload_resp}
+
+
+def task_callback_kind(task) -> str:
+    """Resolve the platform callback route from the task's trusted context."""
+    context = getattr(task, "mission_context", {})
+    context = context if isinstance(context, dict) else {}
+    task_type = normalize_task_type(
+        getattr(task, "task_type", "")
+        or context.get("taskType", ""))
+    if task_type in ("modeling", "integration"):
+        return task_type
+    return "integration" if str(getattr(task, "task_code", "")).upper().startswith("MI") else "modeling"
+
+
+def task_status_callback(task, agent_status: str, *, authorization: str = "",
+                         error_code: str | None = None, error_message: str | None = None,
+                         files=None) -> dict:
+    """Report a lifecycle state without coupling it to the web chat state."""
+    task_code = str(getattr(task, "task_code", "") or "").strip()
+    if not task_code:
+        return {"ok": True, "skipped": True, "reason": "not a mission task"}
+    kind = task_callback_kind(task)
+    payload = {
+        "agentStatus": agent_status,
+        "occurredAt": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "errorCode": error_code,
+        "errorMessage": error_message,
+        "files": files,
+    }
+    result = ontology_task_callback(
+        kind, task_code, str(getattr(task, "repository_id", "") or ""), payload,
+        str(getattr(task, "user_id", "") or ""), authorization)
+    result["kind"] = kind
+    return result
+
+
+def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
+    """Validate the exact uploaded artefacts before a user confirms completion.
+
+    Uploading is deliberately not completion: a user may review and edit generated
+    CSV files several times.  The saved SHA-256 values make sure the files being
+    confirmed are still the same bytes that were uploaded to object storage.
+    """
+    context = getattr(task, "mission_context", {})
+    if not isinstance(context, dict):
+        return None, "当前任务没有可信的 execution-context，无法确认完成"
+    kind = task_callback_kind(task)
+    expected = normalize_expected_files(context.get("expectedFiles"))
+    parse_elements = normalize_parse_elements(context.get("parseElements"))
+    if kind == "integration":
+        expected.add("ok.csv")
+        allowed = set(expected)
+    else:
+        allowed = allowed_output_files(parse_elements, expected)
+    if not expected or not allowed:
+        return None, "当前任务未声明可确认的输出文件"
+
+    uploaded = getattr(task, "platform_uploaded_files", {})
+    if not isinstance(uploaded, dict):
+        uploaded = {}
+    missing = sorted(name for name in expected if name not in uploaded)
+    if missing:
+        return None, "请先上传全部结果文件后再完成：" + ", ".join(missing)
+
+    files = []
+    changed = []
+    for name in sorted(expected):
+        item = uploaded.get(name) or {}
+        if name not in allowed or not item.get("objectKey") or not item.get("sha256"):
+            changed.append(name)
+            continue
+        local = resolve_file_in_base(getattr(task, "cwd", ""), f"mission-output/{name}")
+        if not local or not os.path.isfile(local):
+            changed.append(name)
+            continue
+        try:
+            with open(local, "rb") as fh:
+                current_sha256 = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            changed.append(name)
+            continue
+        if current_sha256 != item.get("sha256"):
+            changed.append(name)
+            continue
+        if kind == "modeling":
+            files.append({
+                "parseElement": parse_element_for_file(name),
+                "filename": name,
+                "objectKey": item["objectKey"],
+                "previewUrl": item.get("previewUrl") or item.get("fileUrl") or "",
+            })
+    if changed:
+        return None, "以下文件在上传后已变更或记录不完整，请重新上传：" + ", ".join(changed)
+    if kind == "modeling" and not files:
+        return None, "没有可回写的建模结果文件"
+    return {
+        "agentStatus": "COMPLETED",
+        "occurredAt": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "errorCode": None,
+        "errorMessage": None,
+        "files": files if kind == "modeling" else None,
+    }, None
 
 
 def fetch_execution_context(task_code, repo_id="", task_type="", user_id="", authorization=""):
@@ -1648,6 +1742,7 @@ def resolve_file_in_base(base: str | None, rel: str) -> str | None:
     """Resolve a relative file path under an already selected task cwd."""
     if not base or not rel:
         return None
+    base = os.path.realpath(base)
     p = os.path.realpath(os.path.join(base, rel))
     if not (p == base or p.startswith(base + os.sep)):
         return None
@@ -1663,7 +1758,9 @@ class Task:
                  task_code: str = "", task_type: str = "", mission_context: dict | None = None,
                  resume_session_id: str | None = None, task_id: str | None = None,
                  user_id: str = "", workspace: str = "",
-                 task_workspace_relpath: str = ""):
+                 task_workspace_relpath: str = "", platform_status: str = "",
+                 platform_updated: float = 0, platform_uploaded_files: dict | None = None,
+                 platform_output_prefix: str = "", platform_last_error: str = ""):
         self.id = task_id or uuid.uuid4().hex[:12]
         self.project = project
         self.workspace = workspace or project
@@ -1679,6 +1776,15 @@ class Task:
         self.status = "idle"          # idle | working | error
         self.log: list[dict] = []     # replayable UI events
         self.lock = threading.Lock()
+        # Platform lifecycle is separate from the local web turn state above.
+        # It remains RUNNING after an agent turn and only becomes COMPLETED when
+        # the user explicitly confirms the uploaded result files.
+        self.platform_status = str(platform_status or "").upper()
+        self.platform_updated = float(platform_updated or 0)
+        self.platform_uploaded_files = (platform_uploaded_files.copy()
+                                        if isinstance(platform_uploaded_files, dict) else {})
+        self.platform_output_prefix = str(platform_output_prefix or "")
+        self.platform_last_error = str(platform_last_error or "")
 
         # 网页确认流:危险操作暂停执行,推送 approval_request 事件,等待用户点击
         self.pending_approval: dict | None = None
@@ -1881,7 +1987,31 @@ class Task:
                 "repositoryId": self.repository_id, "taskCode": self.task_code,
                 "taskType": self.task_type, "workspace": self.workspace,
                 "taskWorkspace": self.task_workspace_relpath,
+                "platformStatus": self.platform_status,
+                "platformUpdated": self.platform_updated,
+                "uploadedResultCount": len(self.platform_uploaded_files),
                 "hasConversation": self.has_conversation()}
+
+    def record_uploaded_results(self, prefix: str, results: list[dict]):
+        """Merge successful result uploads by filename for a later completion check."""
+        self.platform_output_prefix = str(prefix or "").strip().strip("/")
+        for result in results:
+            if not isinstance(result, dict) or not result.get("ok"):
+                continue
+            name = os.path.basename(str(result.get("name") or ""))
+            if not name:
+                continue
+            self.platform_uploaded_files[name] = {
+                "name": name,
+                "key": str(result.get("key") or ""),
+                "objectKey": str(result.get("objectKey") or result.get("key") or ""),
+                "fileUrl": str(result.get("fileUrl") or ""),
+                "previewUrl": str(result.get("previewUrl") or result.get("fileUrl") or ""),
+                "sha256": str(result.get("sha256") or ""),
+                "uploadedAt": time.time(),
+            }
+        self.platform_updated = time.time()
+        self.platform_last_error = ""
 
     def has_conversation(self) -> bool:
         """Whether this task has a real user/assistant conversation.
@@ -1960,9 +2090,11 @@ class Task:
 
     # -- one full agentic turn, streamed --------------------------------------
 
-    def stream_turn(self, text: str, emit, display_text: str | None = None):
+    def stream_turn(self, text: str, emit, display_text: str | None = None,
+                    platform_authorization: str = ""):
         """Run one turn; keep an optional short UI label separate from LLM input."""
         display_text = str(display_text or text).strip() or text
+        failure_message = ""
         def rec(ev):
             self.log.append(ev)
             if len(self.log) > 10000:
@@ -2015,15 +2147,31 @@ class Task:
                         continue
                     break
                 self.status = "error" if stop_reason == "error" else "idle"
+                if stop_reason == "error":
+                    failure_message = "Agent 执行返回不可恢复错误，请查看该任务的执行审计记录"
             except Exception as e:
                 traceback.print_exc()
                 self.status = "error"
-                rec({"type": "error", "error": str(e)})
+                failure_message = str(e) or "Agent 执行发生不可恢复异常"
+                rec({"type": "error", "error": failure_message})
             finally:
                 self._rec = None
                 flush_text()
                 if self.mission_context:
                     ensure_mission_output_files(self.cwd, self.mission_context)
+                if self.status == "error" and self.task_code:
+                    # A tool rejection is represented in normal tool results; only an
+                    # error-ended turn/unhandled exception reaches this branch.
+                    callback = task_status_callback(
+                        self, "FAILED", authorization=platform_authorization,
+                        error_code="AGENT_EXECUTION_FAILED",
+                        error_message=failure_message[:1000], files=None)
+                    if callback.get("ok"):
+                        self.platform_status = "FAILED"
+                        self.platform_last_error = ""
+                    else:
+                        self.platform_last_error = "FAILED 状态回调失败: " + str(callback.get("error") or "未知错误")[:800]
+                    self.platform_updated = time.time()
                 self.updated = time.time()
                 try: persist_tasks()
                 except Exception: pass
@@ -2129,6 +2277,9 @@ def persist_tasks():
         for t in TASKS.values():
             rows.append({**t.summary(), "log": t.log[-10000:],
                          "missionContext": _mask_mission_secrets(t.mission_context),
+                         "platformUploadedFiles": getattr(t, "platform_uploaded_files", {}),
+                         "platformOutputPrefix": getattr(t, "platform_output_prefix", ""),
+                         "platformLastError": getattr(t, "platform_last_error", ""),
                          "sessionId": getattr(t.conv.session, "session_id", ""),
                          "userId": getattr(t, "user_id", ""),
                          "workspace": getattr(t, "workspace", getattr(t, "project", "")),
@@ -2179,7 +2330,13 @@ def restore_tasks():
                      resume_session_id=str(row.get("sessionId") or "") or None,
                      task_id=str(row.get("id") or "") or None,
                      user_id=str(row.get("userId") or ""),
-                     workspace=workspace, task_workspace_relpath=task_rel)
+                     workspace=workspace, task_workspace_relpath=task_rel,
+                     platform_status=str(row.get("platformStatus") or ""),
+                     platform_updated=float(row.get("platformUpdated") or 0),
+                     platform_uploaded_files=(row.get("platformUploadedFiles")
+                                              if isinstance(row.get("platformUploadedFiles"), dict) else None),
+                     platform_output_prefix=str(row.get("platformOutputPrefix") or ""),
+                     platform_last_error=str(row.get("platformLastError") or ""))
             if task_rel:
                 ensure_workspace_shared_files(workspace, cwd)
             t.title = str(row.get("title") or "新任务")
@@ -2614,6 +2771,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/minio/upload":
             self._handle_minio_upload()
         else:
+            m = re.match(r"^/api/tasks/([0-9a-f]+)/platform-status$", path)
+            if m:
+                self._handle_platform_status(m.group(1))
+                return
             m = re.match(r"^/api/tasks/([0-9a-f]+)/send$", path)
             if m:
                 self._handle_send(m.group(1))
@@ -2744,7 +2905,7 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_minio_upload(self):
         """POST /api/minio/upload {project, paths:[...], prefix, taskCode, repositoryId, taskType?}
         —— 把项目里选中的文件上传到 FileServer 的 <bucket>/<prefix>/<文件名>,
-        随后调用 Ontology 后端的 callback 回写报告(COMPLETED + files)。
+        保存上传清单供用户稍后确认；上传本身绝不回调 COMPLETED。
 
         prefix 即任务执行上下文里的 outputPrefix,例如
         ontology/1/modeling-tasks/RM.../agent-output。走 FileServer 的 /sdk/object/put。"""
@@ -2756,16 +2917,35 @@ class Handler(BaseHTTPRequestHandler):
         repo_id = str(data.get("repositoryId") or "").strip()
         task_id = str(data.get("taskId") or "").strip()
         ttype = normalize_task_type(data.get("taskType") or "")
+        task = self._owned_task(task_id) if task_id else None
+        if task_id and not task:
+            return
+        if task and (str(task.task_code or "") != task_code
+                     or str(task.repository_id or "") != repo_id):
+            self._send_json({"error": "任务标识与当前会话不一致"}, status=403)
+            return
+        if task and task.platform_status == "COMPLETED":
+            self._send_json({"error": "任务已完成，请先点击“修改”恢复为运行中后再上传结果"}, status=409)
+            return
+        if task:
+            trusted_type = normalize_task_type(task.task_type or task.mission_context.get("taskType", ""))
+            if trusted_type:
+                ttype = trusted_type
         integration_upload = ttype == "integration" or (not ttype and task_code.upper().startswith("MI"))
         proj = bind_mission_project(requested_project, repo_id, task_code, task_id,
                                     self._current_user())
         if repo_id and task_code and not proj:
             self._send_json({"error": "当前任务只能操作自己的项目目录"}, status=403)
             return
-        # execution-context 是唯一许可来源；浏览器字段只作缓存，上传前强制刷新。
+        # 优先刷新 execution-context；平台对已完成任务会拒绝再次读取，
+        # 此时只能使用创建/执行时已保存的可信快照，不能退回浏览器字段。
         context = fetch_execution_context(task_code, repo_id, ttype,
                                           self._current_user(),
                                           self.headers.get("Authorization")) if task_code else None
+        if not isinstance(context, dict) and task and isinstance(task.mission_context, dict):
+            context = task.mission_context
+        if isinstance(context, dict) and task:
+            task.set_mission_context(context)
         modeling_upload = not integration_upload
         if modeling_upload and task_code and not isinstance(context, dict):
             self._send_json({"error": "无法读取当前任务 execution-context，已拒绝上传和回写结果文件"}, status=502)
@@ -2834,6 +3014,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 真实响应:previewUrl 取 preSignedUrl,objectKey 取 objectKey。
                 results.append({
                     "name": name, "ok": True, "key": key,
+                    "sha256": hashlib.sha256(blob).hexdigest(),
                     "fileUrl": info.get("fileUrl"),
                     "objectKey": info.get("objectKey") or info.get("object_key") or key,
                     "previewUrl": (info.get("preSignedUrl") or info.get("previewUrl")
@@ -2844,79 +3025,67 @@ class Handler(BaseHTTPRequestHandler):
         ok_n = sum(1 for r in results if r.get("ok"))
         resp = {"ok": ok_n > 0, "uploaded": ok_n, "total": len(results),
                 "prefix": prefix, "bucket": cfg["bucket"], "results": results}
-        # integration 只有全部 expectedFiles 已存在并且 ok.csv 已上传后才允许
-        # 回调 COMPLETED；不能因为先上传了一个 CSV 就把任务标记完成。
-        if ok_n and task_code:
-            if integration_upload:
-                uploaded_names = {r.get("name") for r in results if r.get("ok")}
-                local_names = {
-                    os.path.basename(resolve_file_in_base(base, name) or "")
-                    for name in expected_files | {"ok.csv"}
-                    if resolve_file_in_base(base, name)
-                    and os.path.isfile(resolve_file_in_base(base, name))
-                }
-                missing = sorted((set(expected_files) - local_names) | (set() if "ok.csv" in local_names else {"ok.csv"}))
-                if "ok.csv" in uploaded_names and not missing:
-                    resp["callback"] = self._callback_after_upload(
-                        cfg, task_code, repo_id, ttype, results, allowed_files, expected_files,
-                        self.headers.get("Authorization"))
-                else:
-                    resp["callback"] = {"ok": False, "skipped": True,
-                                         "error": "未回写完成：必须先生成并上传全部 expectedFiles，最后上传 ok.csv；缺少: "
-                                                  + ", ".join(missing or ["ok.csv"])}
-            else:
-                resp["callback"] = self._callback_after_upload(
-                    cfg, task_code, repo_id, ttype, results, allowed_files, expected_files,
-                    self.headers.get("Authorization"))
+        if task and ok_n:
+            task.record_uploaded_results(prefix, results)
+            persist_tasks()
+            resp["task"] = task.summary()
+            resp["completionHint"] = "结果已上传，仍保持运行中；确认无误后请点击“完成”回写平台。"
         self._send_json(resp)
 
-    def _callback_after_upload(self, cfg, task_code, repo_id, ttype, results,
-                               allowed_files=None, expected_files=None, authorization=""):
-        """按上传结果构造 COMPLETED 回调:智能建模带 files[](按文件名映射 parseElement),
-        消歧整合按文档 §5.2 不带 files。"""
-        if ttype in ("modeling", "integration"):
-            kind = ttype
-        elif task_code.upper().startswith("MI"):
-            kind = "integration"
-        else:
-            kind = "modeling"
-        occurred = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-        payload = {"agentStatus": "COMPLETED", "occurredAt": occurred,
-                   "errorCode": None, "errorMessage": None}
-        if kind == "modeling":
-            files = []
-            for r in results:
-                if not r.get("ok"):
-                    continue
-                elem = parse_element_for_file(r["name"])
-                if allowed_files is not None and r["name"] not in allowed_files:
-                    continue
-                # objectKey / previewUrl 优先用 FileServer 上传返回值,缺失才回退。
-                object_key = r.get("objectKey") or r["key"]
-                preview = r.get("previewUrl") or fileserver_preview_url(
-                    cfg, r.get("fileUrl"), object_key)
-                files.append({
-                    "parseElement": elem,
-                    "filename": r["name"],
-                    "objectKey": object_key,
-                    "previewUrl": preview,
-                })
-            if not files:
-                return {"ok": False, "skipped": True,
-                        "error": "没有可回写的解析要素文件(文件名需为 business_objects.csv 等)"}
-            expected = normalize_expected_files(expected_files)
-            actual = {f["filename"] for f in files}
-            missing = sorted(expected - actual) if expected else []
-            if missing:
-                return {"ok": False, "skipped": True,
-                        "error": "结果文件未完整生成，缺少: " + ", ".join(missing)}
-            payload["files"] = files
-        else:
-            payload["files"] = None
-        out = ontology_task_callback(kind, task_code, repo_id, payload, self._current_user(), authorization)
-        out["kind"] = kind
-        out["reported"] = len(payload.get("files") or [])
-        return out
+    def _handle_platform_status(self, task_id: str):
+        """User-controlled platform lifecycle transition: complete or reopen editing."""
+        task = self._owned_task(task_id)
+        if not task:
+            return
+        if not task.task_code or not task.repository_id:
+            self._send_json({"error": "仅本体平台任务支持完成状态回写"}, status=400)
+            return
+        data = self._read_body()
+        action = str(data.get("action") or "").strip().lower()
+        authorization = self.headers.get("Authorization") or ""
+
+        if action == "complete":
+            if task.platform_status == "COMPLETED":
+                self._send_json({"ok": True, "task": task.summary(), "message": "任务已完成"})
+                return
+            payload, error = build_completed_callback_payload(task)
+            if error:
+                self._send_json({"error": error}, status=422)
+                return
+            result = task_status_callback(task, "COMPLETED", authorization=authorization,
+                                          files=payload.get("files"))
+            if not result.get("ok"):
+                task.platform_last_error = "COMPLETED 状态回调失败: " + str(result.get("error") or "未知错误")[:800]
+                task.platform_updated = time.time()
+                persist_tasks()
+                self._send_json({"error": task.platform_last_error}, status=502)
+                return
+            task.platform_status = "COMPLETED"
+            task.platform_last_error = ""
+            task.platform_updated = time.time()
+            persist_tasks()
+            self._send_json({"ok": True, "task": task.summary(), "callback": result})
+            return
+
+        if action == "edit":
+            if task.platform_status != "COMPLETED":
+                self._send_json({"ok": True, "task": task.summary(), "message": "任务当前已可修改"})
+                return
+            result = task_status_callback(task, "RUNNING", authorization=authorization)
+            if not result.get("ok"):
+                task.platform_last_error = "RUNNING 状态回调失败: " + str(result.get("error") or "未知错误")[:800]
+                task.platform_updated = time.time()
+                persist_tasks()
+                self._send_json({"error": task.platform_last_error}, status=502)
+                return
+            task.platform_status = "RUNNING"
+            task.platform_last_error = ""
+            task.platform_updated = time.time()
+            persist_tasks()
+            self._send_json({"ok": True, "task": task.summary(), "callback": result})
+            return
+
+        self._send_json({"error": "不支持的状态操作，仅支持 complete 或 edit"}, status=400)
 
     def _handle_upload(self):
         """POST /api/upload {project, repositoryId, taskCode, name, data(base64)}."""
@@ -3196,6 +3365,36 @@ class Handler(BaseHTTPRequestHandler):
                 task.set_mission_context(client_context)
                 persist_tasks()
 
+        # A completed mission is intentionally immutable from the platform's
+        # perspective until the user explicitly chooses “修改”.  Do this before
+        # opening the stream so a rejected request never creates a phantom turn.
+        if task.platform_status == "COMPLETED":
+            self.close_connection = True
+            self.send_response(409)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "任务已完成，请先点击“修改”恢复为运行中后再继续执行"}, ensure_ascii=False).encode("utf-8"))
+            return
+
+        # Report RUNNING immediately before the first real agent turn.  Opening
+        # a history chat or merely reading execution-context must not be treated
+        # as agent execution.  A failed RUNNING callback is a start failure: do
+        # not run an invisible task that the upstream platform cannot track.
+        if task.task_code and task.platform_status != "RUNNING":
+            started = task_status_callback(task, "RUNNING",
+                                           authorization=self.headers.get("Authorization") or "")
+            if started.get("ok"):
+                task.platform_status = "RUNNING"
+                task.platform_last_error = ""
+                task.platform_updated = time.time()
+                persist_tasks()
+            else:
+                task.status = "error"
+                task.platform_last_error = "RUNNING 状态回调失败: " + str(started.get("error") or "未知错误")[:800]
+                task.platform_updated = time.time()
+                task.updated = time.time()
+                persist_tasks()
+
         self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -3223,8 +3422,13 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             return
+        if task.task_code and task.platform_status != "RUNNING":
+            emit({"type": "error", "error": task.platform_last_error or "无法回写 RUNNING 状态，未开始执行"})
+            emit({"type": "done", "status": "error"})
+            return
         try:
-            task.stream_turn(text, emit, display_text)
+            task.stream_turn(text, emit, display_text,
+                             platform_authorization=self.headers.get("Authorization") or "")
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Client disconnected mid-stream; the turn state is already saved.
             pass
