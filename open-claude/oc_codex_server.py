@@ -3362,6 +3362,7 @@ class Handler(BaseHTTPRequestHandler):
         base = ontology_api_base()
         app_id = ontology_app_id()
         last_err = None
+        context_config_err = None
         for kind in kinds:
             url = f"{base}/intelligent/{kind}/tasks/{quote(code)}/execution-context"
             try:
@@ -3379,9 +3380,13 @@ class Handler(BaseHTTPRequestHandler):
                     payload = json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
                 try:
-                    last_err = e.read().decode("utf-8") or f"HTTP {e.code}"
+                    error_text = e.read().decode("utf-8") or f"HTTP {e.code}"
                 except Exception:
-                    last_err = f"HTTP {e.code}"
+                    error_text = f"HTTP {e.code}"
+                if upstream_context_configuration_error(error_text):
+                    context_config_err = error_text
+                else:
+                    last_err = error_text
                 continue
             except Exception as e:
                 last_err = str(e)
@@ -3390,7 +3395,11 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(payload, dict) and "data" in payload and (
                     "success" in payload or "code" in payload):
                 if payload.get("success") is False:
-                    last_err = payload.get("msg") or "任务查询失败"
+                    error_text = payload.get("msg") or "任务查询失败"
+                    if upstream_context_configuration_error(error_text):
+                        context_config_err = error_text
+                    else:
+                        last_err = error_text
                     continue
                 task_context = normalize_execution_context(payload.get("data"))
                 if not isinstance(task_context, dict):
@@ -3421,6 +3430,11 @@ class Handler(BaseHTTPRequestHandler):
         # endpoint again (the gateway returns “任务已成功，不能再次执行”).  The
         # context was persisted locally when the task was started, so expose
         # that trusted snapshot for read-only task information and file browsing.
+        # The alternate task type can legitimately say "does not exist" after
+        # the correct type has already found the task but failed context
+        # composition.  Keep that actionable configuration error instead of
+        # overwriting it with the fallback probe's not-found response.
+        last_err = context_config_err or last_err
         completed_upstream = upstream_reports_completed(last_err)
         context_configuration_error = upstream_context_configuration_error(last_err)
         user = self._current_user()

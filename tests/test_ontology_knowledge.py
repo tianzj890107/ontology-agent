@@ -264,6 +264,8 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertTrue(server.upstream_context_configuration_error("解析要素未配置输出文件: business_object"))
             self.assertFalse(server.upstream_context_configuration_error("认证失败: 访问Token不存在"))
             self.assertFalse(server.upstream_context_configuration_error("integration task does not exist"))
+            self.assertIn("context_config_err or last_err",
+                          (ROOT / "open-claude" / "oc_codex_server.py").read_text(encoding="utf-8"))
             self.assertEqual(server.normalize_platform_status("SUCCESS"), "COMPLETED")
             self.assertEqual(server.platform_status_from_payload({"agentStatus": "COMPLETED"}), "COMPLETED")
             wrapped_context = server.normalize_execution_context({
