@@ -223,3 +223,9 @@
 - 发送箭头改为白色，提升蓝色发送按钮上的对比度。
 - “下载所选”按钮改用指定的灰色下载 SVG，下载逻辑保持不变。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 34. 思维链文件操作图标
+
+- “读取文件”使用文件文档 SVG；“写入文件”和“修改文件”共用编辑文件 SVG。
+- “上传到 MinIO”按钮改用指定的上传 SVG，原有文件选择、上传和状态逻辑保持不变。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。

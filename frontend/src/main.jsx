@@ -82,6 +82,36 @@ function DownloadSelectedIcon() {
   );
 }
 
+function ReadFileIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="#8F9299" d="M10.152.857a.487.487 0 0 1 .2.124l3.324 3.323a.487.487 0 0 1 .156.407v8.623c0 .253-.044.488-.134.704-.09.216-.224.414-.403.593a1.821 1.821 0 0 1-.592.402c-.216.09-.45.135-.704.135h-8c-.253 0-.488-.045-.704-.134a1.823 1.823 0 0 1-.592-.403 1.82 1.82 0 0 1-.403-.593 1.822 1.822 0 0 1-.134-.704V2.668c0-.254.044-.488.134-.704.09-.216.224-.414.403-.593A1.82 1.82 0 0 1 3.295.97c.216-.09.45-.135.704-.135h5.956a.49.49 0 0 1 .197.023Zm2.68 4.31v8.167c0 .278-.069.486-.208.625-.139.14-.347.209-.625.209h-8c-.278 0-.486-.07-.625-.209-.139-.139-.208-.347-.208-.625V2.668c0-.278.07-.487.208-.625.139-.14.347-.209.625-.209h5.5v2.167c0 .161.028.31.085.448.057.137.143.263.257.377.114.114.24.2.377.256.137.057.287.086.448.086h2.166ZM10.5 4.002v-1.46l1.626 1.627h-1.46c-.055 0-.096-.014-.124-.042-.028-.028-.042-.07-.042-.125Zm-.132 3.317H5.634a.491.491 0 0 0-.5.5.49.49 0 0 0 .277.45.488.488 0 0 0 .223.05h4.733a.492.492 0 0 0 .5-.5.491.491 0 0 0-.5-.5ZM5.634 9.684h4.733a.491.491 0 0 0 .5-.5.49.49 0 0 0-.278-.449.488.488 0 0 0-.222-.05H5.634a.492.492 0 0 0-.5.5.491.491 0 0 0 .5.5Z" />
+    </svg>
+  );
+}
+
+function WriteFileIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="#8F9299" d="M9.751 1.494c-.207.109-.391.26-.553.454l-6.971 8.364a1.821 1.821 0 0 0-.415.982l-.261 2.48a.826.826 0 0 0 .05.404c.05.121.132.23.246.324a.828.828 0 0 0 .364.182.827.827 0 0 0 .406-.024l2.393-.714c.177-.052.34-.127.486-.224.148-.098.28-.217.399-.359l6.97-8.362c.162-.194.277-.404.347-.627.07-.224.093-.462.07-.714a1.822 1.822 0 0 0-.199-.69 1.82 1.82 0 0 0-.456-.553l-.85-.706a1.821 1.821 0 0 0-.626-.346 1.82 1.82 0 0 0-.712-.069 1.822 1.822 0 0 0-.688.198Zm-6.756 9.458 6.971-8.364a.828.828 0 0 1 .251-.206.825.825 0 0 1 .313-.09c.115-.01.223 0 .324.031a.827.827 0 0 1 .285.158l.85.705a.83.83 0 0 1 .207.252c.05.094.08.199.09.313a.83.83 0 0 1-.032.325.83.83 0 0 1-.158.285l-6.97 8.362a.823.823 0 0 1-.402.265l-2.153.642.236-2.232a.827.827 0 0 1 .188-.446Z" />
+      <path fillRule="evenodd" fill="#8F9299" d="m9.433 2.737 2.644 2.196a.492.492 0 0 1 .065.704.49.49 0 0 1-.704.065L8.795 3.507a.489.489 0 0 1-.169-.5.49.49 0 0 1 .104-.204.49.49 0 0 1 .5-.168.492.492 0 0 1 .204.103Z" />
+      <path fillRule="evenodd" fill="#8F9299" d="m3.003 10.527 2.538 2.109a.49.49 0 0 1 .169.5.489.489 0 0 1-.103.204l-.002.002a.489.489 0 0 1-.499.166.487.487 0 0 1-.203-.103l-2.54-2.108a.488.488 0 0 1-.168-.5.488.488 0 0 1 .104-.204.493.493 0 0 1 .704-.065Z" />
+      <path fillRule="evenodd" fill="#8F9299" d="M13.955 13.498H6.916a.49.49 0 0 0-.5.5.49.49 0 0 0 .278.45c.067.034.141.05.222.05h7.04a.49.49 0 0 0 .5-.498V14a.49.49 0 0 0-.278-.45.488.488 0 0 0-.223-.05Z" />
+    </svg>
+  );
+}
+
+function UploadMinioIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="#8F9299" d="M8.5 10.5v3h2.75q.992-.03 1.775-.448.475-.255.873-.653.399-.399.654-.874.419-.783.448-1.775-.02-.914-.387-1.656-.223-.45-.574-.836-.373-.41-.826-.686-.68-.413-1.541-.525-.18-.869-.656-1.52-.27-.369-.633-.667-.38-.312-.811-.511Q8.857 3.019 8 3q-.86.02-1.575.35-.43.199-.808.51-.363.297-.631.664-.478.653-.658 1.523-.863.113-1.542.526-.453.276-.825.685-.35.385-.573.833Q1.02 8.834 1 9.75q.03.992.448 1.775.255.475.654.873.398.399.873.654.783.419 1.775.448H7.5v-3h-.932a.5.5 0 0 1-.385-.82l1.433-1.72a.5.5 0 0 1 .768 0l1.433 1.72a.5.5 0 0 1-.385.82H8.5Z" />
+    </svg>
+  );
+}
+
 function isExpiredApprovalError(error) {
   const text = String(error || "");
   return /没有待确认.*(?:请求|操作)|请求已过期/.test(text);
@@ -205,8 +235,11 @@ function compactEventSummary(value) {
 
 function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approvalResult = null, completed = false, durationMs = null }) {
   const [expanded, setExpanded] = useState(false);
-  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.type === "error" || event.is_error ? "error" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
-  const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "!" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : "·";
+  const isReadTool = event.type === "tool_use" && event.name === "Read";
+  const isWriteTool = event.type === "tool_use" && event.name === "Write";
+  const isEditTool = event.type === "tool_use" && event.name === "Edit";
+  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.type === "error" || event.is_error ? "error" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : isReadTool ? "read-file" : isWriteTool ? "write-file" : isEditTool ? "edit-file" : "tool-use";
+  const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "!" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : isReadTool ? <ReadFileIcon /> : isWriteTool || isEditTool ? <WriteFileIcon /> : "·";
   const detail = eventDescription(event);
   const approved = event.type === "approval_request" && approvalResult?.approved === true;
   const durationLabel = durationMs != null && !loading ? event.type === "thinking" ? `已思考 ${formatDuration(durationMs)}` : formatDuration(durationMs) : "";
@@ -467,7 +500,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" onClick={onRefresh}>⟳</Button><Button size="small" onClick={onClose}>✕</Button></div>
-    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={onDownload}>下载所选</Button>{mission && <Tooltip title="上传选中的任务结果"><Button size="small" type="primary" loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio} onClick={onUploadToMinio}>☁ 上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">当前任务范围</span>}</div>
+    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={onDownload}>下载所选</Button>{mission && <Tooltip title="上传选中的任务结果"><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">当前任务范围</span>}</div>
     {loading ? <Spin /> : !files.length ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => {
       const collapsed = collapsedDirs.has(dir);
       const paths = items.map((file) => file.path);
