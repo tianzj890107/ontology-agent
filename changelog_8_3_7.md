@@ -54,6 +54,12 @@
 - 折叠思维链摘要最大宽度从原行宽的 80% 调整为原行宽的 64%，即当前设置的 80%。
 - 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+### 17. 折叠思维链整行交互提示
+
+- 折叠状态下整行均可点击展开/收起，鼠标悬浮显示手形指针、圆角灰色背景和轻微阴影。
+- 文件链接会阻止事件冒泡，点击文件仍只打开对应预览，不会误触发思维链展开。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 3. Qwen 与团队模型重名路由修复
 
 - 修复团队模型目录与 Qwen 模型目录存在同名模型时的 Provider 污染问题。

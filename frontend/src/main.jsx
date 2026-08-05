@@ -154,7 +154,7 @@ function EventFileText({ text, files, onFile }) {
   const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`(${paths.map(escapeRegExp).join("|")})`, "g");
   return <>{source.split(pattern).map((part, index) => paths.includes(part)
-    ? <button type="button" className="event-file-link" key={`${part}-${index}`} onClick={() => onFile(part)}>{part}</button>
+    ? <button type="button" className="event-file-link" key={`${part}-${index}`} onClick={(clickEvent) => { clickEvent.stopPropagation(); onFile(part); }}>{part}</button>
     : <React.Fragment key={index}>{part}</React.Fragment>)}</>;
 }
 
@@ -182,9 +182,21 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
   const approved = event.type === "approval_request" && approvalResult?.approved === true;
   const durationLabel = durationMs != null && !loading ? event.type === "thinking" ? `已思考 ${formatDuration(durationMs)}` : formatDuration(durationMs) : "";
   const toggleExpanded = () => setExpanded((value) => !value);
+  const collapsedRowProps = expanded ? {} : {
+    className: "thought-collapsed-row thought-collapsed-row-clickable",
+    onClick: toggleExpanded,
+    onKeyDown: (keyboardEvent) => {
+      if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
+        keyboardEvent.preventDefault();
+        toggleExpanded();
+      }
+    },
+    role: "button",
+    tabIndex: 0,
+  };
   return (
     <div className={`chain-event chain-event-${kind}`}>
-      <div className="thought-collapsed-row">
+      <div {...collapsedRowProps} className={collapsedRowProps.className || "thought-collapsed-row"}>
         <div className="thought-header">
           <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>
           <button type="button" className="thought-toggle" onClick={(clickEvent) => { clickEvent.stopPropagation(); toggleExpanded(); }}>{eventTitle(event)}</button>
