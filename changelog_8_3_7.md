@@ -249,3 +249,9 @@
 - `Bash/执行命令` 思维链节点改用指定的命令 SVG，图标和标题统一为蓝色并配套浅色背景。
 - 原有任务更新和命令执行行为保持不变。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 38. 侧边栏模型设置图标颜色
+
+- 左侧“大语言模型设置”按钮的图标改为继承按钮文字颜色，与蓝色标题保持一致。
+- 模型选择和参数设置入口继续沿用各自文字颜色，不改变点击行为。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
