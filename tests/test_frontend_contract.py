@@ -39,6 +39,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('const approvalResults = events.reduce((result, event) =>', source)
         self.assertIn('event.type === "approval_result" ? "approval-result"', source)
         self.assertIn('event.type === "approval_result" && event.approved ? "✓"', source)
+        self.assertIn('event.type === "approval_request" ? "?"', source)
         self.assertIn('const executionFinished = event.type === "approval_request" && events.slice(index + 1).some((candidate) => candidate.type === "done");', source)
         self.assertIn('event.type === "approval_request" && !completed', source)
         self.assertIn('className: "thought-collapsed-row thought-collapsed-row-clickable"', source)

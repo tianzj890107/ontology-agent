@@ -176,3 +176,8 @@
 - 补齐文档结果文件映射：术语、逻辑实体、业务属性、实体关系、业务对象、规则、指标、活动及活动流均按 `expectedFiles` 受控生成和上传；同步更新接口文档和文档专项知识。
 - 新增文档解析单元测试和文档任务闭环测试，覆盖对象存储下载、DOCX 解析、建模上下文契约、结果上传及 `COMPLETED` 回调。
 - 主要文件：`open-claude/open_claude/document_parser.py`、`open-claude/oc_codex_server.py`、`scripts/build_agent_knowledge.py`、`agent_knowledge/modeling/business_document.md`、`backend-agent-interaction-api.md`、`tests/test_document_parser.py`、`tests/test_ontology_knowledge.py`。
+
+### 26. 审批请求节点图标
+
+- 审批请求思维链节点保留现有橙色样式，图标由感叹号调整为问号，更明确表示等待用户确认。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
