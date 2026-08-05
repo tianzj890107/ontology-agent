@@ -135,10 +135,10 @@ function compactEventSummary(value) {
   return firstLine.replace(/^[{"'`\s]+|[}"'`,\s]+$/g, "").replace(/^([^:]+):\s*["']?(.*?)["']?$/, "$1: $2");
 }
 
-function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approvalResult = null }) {
+function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approvalResult = null, completed = false }) {
   const [expanded, setExpanded] = useState(false);
-  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
-  const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
+  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
+  const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
   const detail = eventDescription(event);
   const approved = event.type === "approval_request" && approvalResult?.approved === true;
   const toggleExpanded = () => setExpanded((value) => !value);
@@ -152,7 +152,7 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
         {!expanded && detail && <div className="thought-summary"><EventFileText text={compactEventSummary(detail)} files={files} onFile={onFile} /></div>}
       </div>
       {expanded && <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div>}
-      {event.type === "approval_request" && (
+      {event.type === "approval_request" && !completed && (
         <div className="approval-actions">
           {approved ? <Button type="primary" size="small" disabled>✓ 已允许执行</Button> : <>
             <Button type="primary" size="small" onClick={() => onApprove(event.id, true)}>允许执行</Button>
@@ -223,7 +223,8 @@ function EventFeed({ events, onApprove, files, onFile, busy = false }) {
         if (["text", "assistant"].includes(event.type)) return <div className="assistant-message" key={`${index}-assistant`}><AssistantText text={event.text} /></div>;
         if (event.type === "done") return <div className="done-note" key={`${index}-done`}>本轮执行结束 · {event.status || "完成"}</div>;
         const loading = busy && index === events.length - 1 && event.type === "thinking";
-        return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
+        const executionFinished = event.type === "approval_request" && events.slice(index + 1).some((candidate) => candidate.type === "done");
+        return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} completed={executionFinished} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
       })}
       {waitingForNextEvent && lastEvent?.type !== "thinking" && (
         <ThoughtEvent event={{ type: "thinking", text: "" }} files={files} onFile={onFile} loading />

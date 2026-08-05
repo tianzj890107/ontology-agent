@@ -30,6 +30,12 @@
 - 当前任务信息仅作为侧栏辅助内容；上游任务信息暂不可获取时改为页面空态，不再在打开对话时弹出“获取任务信息失败”。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+### 13. 审批结果节点样式与完成后收起操作
+
+- `approval_result` 成功节点的思维链圆圈改为 `✓`，标题和内容使用与“模型切换”一致的紫色样式。
+- 当前审批对应的 Agent 执行产生 `done` 事件后，审批请求下的“✓ 已允许执行”和“拒绝”操作按钮全部隐藏。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 3. Qwen 与团队模型重名路由修复
 
 - 修复团队模型目录与 Qwen 模型目录存在同名模型时的 Provider 污染问题。
