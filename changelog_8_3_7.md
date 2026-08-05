@@ -212,3 +212,8 @@
 - 模板 2 的 `business_attributes.csv` 增加最后一列 `是否页面显示`：同一逻辑实体同时存在 `XXX编码`（主键）和 `XXX名称` 时，`XXX名称` 为 `Y`，其他业务属性统一为 `N`。
 - Agent 静态知识、建模 system prompt、服务端 CSV 校验及接口文档同步使用模板 2 的十列表头；非法值、空值或不符合编码/名称配对规则的结果会在上传前拒绝。
 - 主要文件：`rules/本体元模型2.xlsx`、`rules/本体元模型模板 2.xlsx`、`scripts/build_agent_knowledge.py`、`agent_knowledge/modeling/`、`open-claude/oc_codex_server.py`、`backend-agent-interaction-api.md`。
+
+### 32. 输入框发送箭头图标
+
+- 输入对话框的发送按钮改用 IconPark 提供的 SVG 箭头图标，保留原有发送、禁用和自动滚动行为。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。

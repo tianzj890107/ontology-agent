@@ -64,6 +64,15 @@ function truncateTitle(value, max = 15) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
+function SendArrowIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fill="#8F9299" d="m1 7 13-5-2 11-6.97-3.802L13 3 3.794 8.523 1 7Zm4 8v-4.734L8 12l-3 3Z" />
+    </svg>
+  );
+}
+
 function isExpiredApprovalError(error) {
   const text = String(error || "");
   return /没有待确认.*(?:请求|操作)|请求已过期/.test(text);
@@ -420,7 +429,7 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
         <Button type="text" onClick={onAttach} title="上传文件到项目">📎 <span>上传文件</span></Button>
         {!mission && projects?.length > 0 && <Select size="small" value={project} options={projects.map((item) => ({ value: item.name, label: item.name }))} onChange={onProject} className="project-select" placeholder="选择项目" />}
         <ModelPicker model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} />
-        <Button type={start ? "primary" : "default"} className={start ? "start-button" : "send-button"} onClick={onSend} disabled={busy}>{start ? (mission?.taskType === "integration" ? "开始智能消歧与整合" : "开始智能建模") : "↑"}</Button>
+        <Button type={start ? "primary" : "default"} className={start ? "start-button" : "send-button"} onClick={onSend} disabled={busy}>{start ? (mission?.taskType === "integration" ? "开始智能消歧与整合" : "开始智能建模") : <SendArrowIcon />}</Button>
       </div>
     </div>
   );
