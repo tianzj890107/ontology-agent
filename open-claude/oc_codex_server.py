@@ -2738,7 +2738,12 @@ class Task:
                 text_buf.append(ev["text"])
                 emit({"type": "text", "text": ev["text"]})
             elif t == "thinking_delta":
-                emit({"type": "thinking", "text": ev["text"]})
+                # Keep each thinking block in the replay log.  The browser
+                # merges adjacent deltas while preserving the first timestamp,
+                # so its duration remains visible after a task is reopened.
+                thinking_event = self._stamp_event({"type": "thinking", "text": ev["text"]})
+                self.log.append(thinking_event)
+                emit(thinking_event)
             elif t == "tool_use_end":
                 tool_uses.append({"type": "tool_use", "id": ev["id"],
                                   "name": ev["name"], "input": ev["input"]})

@@ -30,6 +30,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('approvalInFlightRef', source)
         self.assertIn('approve(pending.id, true, current)', source)
         self.assertIn('event.type === "thinking" && loading ? <Spin size="small" />', source)
+        self.assertIn('return source.reduce((events, event) =>', source)
+        self.assertIn('events[events.length - 1] = { ...last, text:', source)
         self.assertIn('const waitingForNextEvent = busy && !["done", "error", "approval_request"].includes(lastEvent?.type);', source)
         self.assertIn('event={{ type: "thinking", text: "" }}', source)
         self.assertIn('const approved = event.type === "approval_request" && approvalResult?.approved === true;', source)
@@ -88,6 +90,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertNotIn("codex_web.html", source)
         self.assertIn("def _stamp_event(event)", source)
         self.assertIn('"timestamp": time.time()', source)
+        self.assertIn('thinking_event = self._stamp_event({"type": "thinking", "text": ev["text"]})', source)
+        self.assertIn('self.log.append(thinking_event)', source)
 
     def test_legacy_static_frontends_are_removed(self):
         self.assertEqual([], sorted(ROOT.glob("*.html")))

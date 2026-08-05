@@ -89,11 +89,21 @@ function stampEvent(event) {
 
 function normalizeEvents(task) {
   const source = Array.isArray(task?.log) ? task.log : Array.isArray(task?.events) ? task.events : [];
-  return source.map((event) => {
-    if (!event || typeof event !== "object") return { type: "text", text: String(event ?? "") };
+  return source.reduce((events, event) => {
+    if (!event || typeof event !== "object") {
+      events.push({ type: "text", text: String(event ?? "") });
+      return events;
+    }
     const content = event.text ?? event.content;
-    return { ...event, text: typeof content === "string" ? content : content == null ? "" : $json(content) };
-  });
+    const normalized = { ...event, text: typeof content === "string" ? content : content == null ? "" : $json(content) };
+    const last = events[events.length - 1];
+    if ((normalized.type === "text" || normalized.type === "thinking") && last?.type === normalized.type) {
+      events[events.length - 1] = { ...last, text: `${last.text || ""}${normalized.text || ""}` };
+    } else {
+      events.push(normalized);
+    }
+    return events;
+  }, []);
 }
 
 function formatDuration(durationMs) {

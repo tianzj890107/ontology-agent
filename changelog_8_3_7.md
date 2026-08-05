@@ -157,3 +157,9 @@
 - Agent 服务现在只提供 `frontend/dist` 构建的 React + Ant Design 工作台；构建产物缺失时直接返回明确错误，不再回退到旧页面。
 - 清理开发文档和回归测试中的旧页面依赖，保留 `frontend/index.html` 与 `frontend/dist/index.html` 作为 React 前端入口。
 - 主要文件：`open-claude/oc_codex_server.py`、`frontend/README.md`、`open-claude/README.md`、`tests/test_frontend_contract.py`、`frontend/`。
+
+### 23. 思考阶段耗时完整展示
+
+- 思维链在“思考 → 输出”和“思考 → 执行工具”等连续阶段中，统一按思考节点的首个时间戳到下一个非思考事件计算并显示“已思考 …s”。
+- 服务端将思考增量写入任务回放日志，前端恢复历史会话时合并连续思考片段并保留首个时间戳，历史任务也能继续显示思考耗时。
+- 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
