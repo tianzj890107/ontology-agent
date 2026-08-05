@@ -199,3 +199,9 @@
 - 两处“大语言模型设置”入口改用 Ant Design 线性 `SettingOutlined` 图标；模型选择按钮的下拉提示改用 `DownOutlined`，替换原来的字符图标。
 - 保留原有点击、模型选择和参数设置行为，仅统一图标视觉风格。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/package.json`、`frontend/package-lock.json`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 30. 思维链行间距再次收窄
+
+- 在原 80% 间距基础上继续调整为约 75%；节点内边距改为 3px，节点间隔改为 2.4px。
+- 竖线起始位置同步调整，保持与图标中心对齐。
+- 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
