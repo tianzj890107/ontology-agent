@@ -255,3 +255,8 @@
 - 左侧“大语言模型设置”按钮的图标改为继承按钮文字颜色，与蓝色标题保持一致。
 - 模型选择和参数设置入口继续沿用各自文字颜色，不改变点击行为。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 39. 审计图标更新
+
+- `audit` 思维链节点改用新的审计 SVG 图标，保留原有灰色图标、标题和展开行为。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。

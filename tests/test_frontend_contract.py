@@ -54,6 +54,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('function WriteFileIcon()', source)
         self.assertIn('function UploadMinioIcon()', source)
         self.assertIn('function AuditIcon()', source)
+        self.assertIn('M9.75 10V7.437', source)
         self.assertIn('function TaskUpdateIcon()', source)
         self.assertIn('function CommandIcon()', source)
         model_icon_start = source.index('function ModelSettingsIcon()')
