@@ -92,3 +92,11 @@
 - 数据模型建模公共参考切换为 `数据模型建模规范-v0.2.xlsx`，生成对应的 `agent_knowledge/modeling/数据模型建模规范-v0.2.md`，并纳入 `modeling/base.md` 与 `all_sources.md`。
 - `modeling/base.md` 会在每个建模任务中自动注入该公共参考；V6 仍是建模决策的核心规范，v0.2 作为数据模型补充参考，不需要用户重复上传。
 - 主要文件：`agent_knowledge/指标.md`、`rules/数据模型建模规范-v0.2.xlsx`、`agent_knowledge/modeling/数据模型建模规范-v0.2.md`、`scripts/build_agent_knowledge.py`、`tests/test_ontology_knowledge.py`。
+
+## 2026-08-05
+
+### 12. 审批按钮状态反馈
+
+- 审批请求点击“允许执行”并成功回写后，按钮显示为禁用状态“✓已允许执行”。
+- 已允许的审批请求隐藏“拒绝”按钮，避免同一请求被重复处理。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。

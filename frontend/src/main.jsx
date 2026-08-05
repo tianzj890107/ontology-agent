@@ -135,11 +135,12 @@ function compactEventSummary(value) {
   return firstLine.replace(/^[{"'`\s]+|[}"'`,\s]+$/g, "").replace(/^([^:]+):\s*["']?(.*?)["']?$/, "$1: $2");
 }
 
-function ThoughtEvent({ event, onApprove, files, onFile, loading = false }) {
+function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approvalResult = null }) {
   const [expanded, setExpanded] = useState(false);
   const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
   const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
   const detail = eventDescription(event);
+  const approved = event.type === "approval_request" && approvalResult?.approved === true;
   const toggleExpanded = () => setExpanded((value) => !value);
   return (
     <div className={`chain-event chain-event-${kind}`}>
@@ -153,8 +154,10 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false }) {
       {expanded && <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div>}
       {event.type === "approval_request" && (
         <div className="approval-actions">
-          <Button type="primary" size="small" onClick={() => onApprove(event.id, true)}>允许执行</Button>
-          <Button size="small" onClick={() => onApprove(event.id, false)}>拒绝</Button>
+          {approved ? <Button type="primary" size="small" disabled>✓已允许执行</Button> : <>
+            <Button type="primary" size="small" onClick={() => onApprove(event.id, true)}>允许执行</Button>
+            <Button size="small" onClick={() => onApprove(event.id, false)}>拒绝</Button>
+          </>}
         </div>
       )}
     </div>
@@ -209,6 +212,10 @@ function AssistantText({ text }) {
 function EventFeed({ events, onApprove, files, onFile, busy = false }) {
   const lastEvent = events[events.length - 1];
   const waitingForNextEvent = busy && !["done", "error", "approval_request"].includes(lastEvent?.type);
+  const approvalResults = events.reduce((result, event) => {
+    if (event.type === "approval_result" && event.id) result[event.id] = event;
+    return result;
+  }, {});
   return (
     <div className="feed-list">
       {events.map((event, index) => {
@@ -216,7 +223,7 @@ function EventFeed({ events, onApprove, files, onFile, busy = false }) {
         if (["text", "assistant"].includes(event.type)) return <div className="assistant-message" key={`${index}-assistant`}><AssistantText text={event.text} /></div>;
         if (event.type === "done") return <div className="done-note" key={`${index}-done`}>本轮执行结束 · {event.status || "完成"}</div>;
         const loading = busy && index === events.length - 1 && event.type === "thinking";
-        return <ThoughtEvent event={event} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
+        return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
       })}
       {waitingForNextEvent && lastEvent?.type !== "thinking" && (
         <ThoughtEvent event={{ type: "thinking", text: "" }} files={files} onFile={onFile} loading />
