@@ -42,6 +42,7 @@ class FrontendContractTests(unittest.TestCase):
         styles = (ROOT / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
         self.assertIn('.thought-icon-approval-result{color:#7c3aed;background:#ede9fe}', styles)
         self.assertIn('.chain-event-approval-result .thought-toggle{color:#7c3aed}', styles)
+        self.assertIn('.thought-summary{flex:1;min-width:0;max-width:80%', styles)
         self.assertIn('上传到 MinIO', source)
         self.assertIn('const uploadToMinio = async () =>', source)
         self.assertIn('missionContext?.outputPrefix', source)

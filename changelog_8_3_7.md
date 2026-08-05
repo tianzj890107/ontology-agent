@@ -36,6 +36,11 @@
 - 当前审批对应的 Agent 执行产生 `done` 事件后，审批请求下的“✓ 已允许执行”和“拒绝”操作按钮全部隐藏。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+### 14. 折叠思维链摘要宽度
+
+- 思维链折叠状态下的摘要最长占当前行宽度的 80%，超出内容继续以省略号显示；展开状态不受影响。
+- 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 3. Qwen 与团队模型重名路由修复
 
 - 修复团队模型目录与 Qwen 模型目录存在同名模型时的 Provider 污染问题。
