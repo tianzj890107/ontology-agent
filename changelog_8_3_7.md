@@ -260,3 +260,9 @@
 
 - `audit` 思维链节点改用新的审计 SVG 图标，保留原有灰色图标、标题和展开行为。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 40. 输入框模型名称展示
+
+- 输入对话框中的模型切换入口最多显示 15 个字符，超出部分使用省略号。
+- 移除模型名称右侧下拉箭头，保留点击模型名称打开模型选择列表的功能。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。

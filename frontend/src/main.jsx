@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { createRoot } from "react-dom/client";
-import { DownOutlined } from "@ant-design/icons";
 import {
   App as AntApp,
   Button,
@@ -497,7 +496,7 @@ function ModelPicker({ model, models, onModel, onOpenSettings }) {
     <Button type="link" className="model-params-link" onClick={() => { setOpen(false); onOpenSettings(); }}><ModelSettingsIcon /> 修改模型参数</Button>
   </div>;
   const modelText = String(model || "模型");
-  return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="topRight" content={content} title="选择大语言模型"><button type="button" className="model-hint" aria-label={`当前模型：${model || "未选择"}`} title={model || "未选择模型"}><span className="model-name"><ModelSettingsIcon /> {modelText.length > 10 ? `${modelText.slice(0, 10)}...` : modelText}</span><DownOutlined className="model-arrow" /></button></Popover>;
+  return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="topRight" content={content} title="选择大语言模型"><button type="button" className="model-hint" aria-label={`当前模型：${model || "未选择"}`} title={model || "未选择模型"}><span className="model-name"><ModelSettingsIcon /> {modelText.length > 15 ? `${modelText.slice(0, 15)}...` : modelText}</span></button></Popover>;
 }
 
 function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, busy, hasConversation, model, models, onModel, onOpenSettings, placeholder, projects, project, onProject }) {
