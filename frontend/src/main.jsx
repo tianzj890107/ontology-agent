@@ -528,9 +528,12 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   const [collapsedDirs, setCollapsedDirs] = useState(() => new Set([""]));
   const groups = useMemo(() => {
     const map = new Map();
+    if (mission) {
+      ["mission-input", "mission-output", "project-shared"].forEach((dir) => map.set(dir, []));
+    }
     files.forEach((file) => { const dir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : ""; if (!map.has(dir)) map.set(dir, []); map.get(dir).push(file); });
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [files]);
+  }, [files, mission]);
   const toggleDir = (dir) => setCollapsedDirs((current) => {
     const next = new Set(current);
     if (next.has(dir)) next.delete(dir); else next.add(dir);
@@ -548,7 +551,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" onClick={onRefresh}>⟳</Button><Button size="small" onClick={onClose}>✕</Button></div>
     <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={onDownload}>下载所选</Button>{mission && <Tooltip title="上传选中的任务结果"><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">当前任务范围</span>}</div>
-    {loading ? <Spin /> : !files.length ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => {
+    {loading ? <Spin /> : !files.length && !mission ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => {
       const collapsed = collapsedDirs.has(dir);
       const paths = items.map((file) => file.path);
       const allSelected = paths.length > 0 && paths.every((path) => selected.includes(path));
@@ -559,7 +562,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
           <button type="button" className="file-group-toggle" onClick={() => toggleDir(dir)} aria-expanded={!collapsed}>{collapsed ? "›" : "⌄"} {groupLabel(dir)}</button>
           <span>({items.length})</span>
         </div>
-        {!collapsed && items.map((file) => <div className={`file-row ${focusPath === file.path ? "file-row-focused" : ""}`} key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{file.path.split("/").pop()}</button><small>{formatFileSize(file.size)}</small></div>)}
+        {!collapsed && (items.length ? items.map((file) => <div className={`file-row ${focusPath === file.path ? "file-row-focused" : ""}`} key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{file.path.split("/").pop()}</button><small>{formatFileSize(file.size)}</small></div>) : <div className="file-group-empty">暂无文件</div>)}
       </div>;
     })}</div>}
   </aside>;

@@ -3368,6 +3368,21 @@ class Handler(BaseHTTPRequestHandler):
             if not base:
                 self._send_json({"error": "项目不存在"}, status=404)
             else:
+                # Keep the mission directory layout visible even before the
+                # first input/output file is created.  The API returns files,
+                # not directory entries, so the React panel supplies the
+                # empty folder headers; these mkdirs keep the on-disk contract
+                # consistent for uploads, previews, and agent instructions.
+                os.makedirs(os.path.join(base, "mission-input"), exist_ok=True)
+                os.makedirs(mission_output_dir(base), exist_ok=True)
+                if task_id:
+                    with TASKS_LOCK:
+                        mission_task = TASKS.get(task_id)
+                    if (mission_task and mission_task.cwd == base
+                            and mission_task.task_workspace_relpath):
+                        ensure_workspace_shared_files(mission_task.workspace, base)
+                        ensure_mission_output_files(
+                            base, getattr(mission_task, "mission_context", {}))
                 self._send_json({"project": project, "workspace": project,
                                  "files": list_project_files(base, task_code)})
         elif path == "/api/download":

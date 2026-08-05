@@ -272,3 +272,9 @@
 - “历史任务”按钮新增与“大语言模型设置”一致的 16px 图标样式，并继承按钮文字颜色。
 - 保留历史任务展开、收起和任务选择行为。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 42. 任务文件目录显示
+
+- 本体任务文件面板始终显示 `mission-input/`、`mission-output/` 和“项目公共文件”三个目录，即使目录暂时为空也不会消失。
+- 文件接口读取任务目录时会补齐输入、输出目录，并继续使用任务专属目录隔离；项目公共资料仍保存在项目工作区根目录，任务内通过 `project-shared/` 提供只读副本。
+- 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
