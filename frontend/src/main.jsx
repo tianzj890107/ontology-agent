@@ -182,7 +182,7 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
   const approved = event.type === "approval_request" && approvalResult?.approved === true;
   const durationLabel = durationMs != null && !loading ? event.type === "thinking" ? `已思考 ${formatDuration(durationMs)}` : formatDuration(durationMs) : "";
   const toggleExpanded = () => setExpanded((value) => !value);
-  const collapsedRowProps = expanded ? {} : {
+  const collapsedRowProps = {
     className: "thought-collapsed-row thought-collapsed-row-clickable",
     onClick: toggleExpanded,
     onKeyDown: (keyboardEvent) => {
@@ -196,7 +196,7 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
   };
   return (
     <div className={`chain-event chain-event-${kind}`}>
-      <div {...collapsedRowProps} className={collapsedRowProps.className || "thought-collapsed-row"}>
+      <div {...collapsedRowProps}>
         <div className="thought-header">
           <span className={`thought-icon thought-icon-${kind}`}>{icon}</span>
           <button type="button" className="thought-toggle" onClick={(clickEvent) => { clickEvent.stopPropagation(); toggleExpanded(); }}>{eventTitle(event)}</button>

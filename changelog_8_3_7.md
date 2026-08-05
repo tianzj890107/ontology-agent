@@ -60,6 +60,11 @@
 - 文件链接会阻止事件冒泡，点击文件仍只打开对应预览，不会误触发思维链展开。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+### 18. 展开标题行折叠交互
+
+- 展开后的标题行也使用与折叠状态相同的整行悬浮样式和点击区域，点击标题行任意位置即可折叠详情。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 3. Qwen 与团队模型重名路由修复
 
 - 修复团队模型目录与 Qwen 模型目录存在同名模型时的 Provider 污染问题。
