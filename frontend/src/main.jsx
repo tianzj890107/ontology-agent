@@ -68,7 +68,16 @@ function SendArrowIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <path d="M0 0h16v16H0z" />
-      <path fill="#8F9299" d="m1 7 13-5-2 11-6.97-3.802L13 3 3.794 8.523 1 7Zm4 8v-4.734L8 12l-3 3Z" />
+      <path fill="#fff" d="m1 7 13-5-2 11-6.97-3.802L13 3 3.794 8.523 1 7Zm4 8v-4.734L8 12l-3 3Z" />
+    </svg>
+  );
+}
+
+function DownloadSelectedIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="#8F9299" d="M8.002 11.167a.488.488 0 0 0 .397-.193l2.954-2.954a.495.495 0 0 0 .002-.705l-.002-.002a.495.495 0 0 0-.705-.001l-.002.001-2.143 2.144V2a.491.491 0 0 0-.498-.5h-.002a.49.49 0 0 0-.45.277.487.487 0 0 0-.05.22v7.466l-2.15-2.15v-.001a.49.49 0 0 0-.513-.12.489.489 0 0 0-.192.12l-.002.001a.495.495 0 0 0-.002.705l.002.002 2.994 2.994a.49.49 0 0 0 .36.153h.002ZM2.5 8.003v4.664c0 .278.07.486.208.625.14.138.348.208.625.208h9.334c.277 0 .486-.07.625-.208.139-.14.208-.347.208-.625v-4.67A.491.491 0 0 1 14 7.5l.002.001a.495.495 0 0 1 .498.5v4.667c0 .253-.045.488-.134.703-.09.217-.224.414-.403.593a1.821 1.821 0 0 1-.592.403 1.82 1.82 0 0 1-.704.134H3.333a1.82 1.82 0 0 1-.703-.134 1.822 1.822 0 0 1-.593-.403 1.822 1.822 0 0 1-.403-.593 1.82 1.82 0 0 1-.134-.703V8.003a.491.491 0 0 1 .5-.5.49.49 0 0 1 .45.277c.033.067.05.142.05.223Z" />
     </svg>
   );
 }
@@ -458,7 +467,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" onClick={onRefresh}>⟳</Button><Button size="small" onClick={onClose}>✕</Button></div>
-    <div className="file-actions"><Button size="small" disabled={!selected.length} onClick={onDownload}>⬇ 下载所选</Button>{mission && <Tooltip title="上传选中的任务结果"><Button size="small" type="primary" loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio} onClick={onUploadToMinio}>☁ 上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">当前任务范围</span>}</div>
+    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={onDownload}>下载所选</Button>{mission && <Tooltip title="上传选中的任务结果"><Button size="small" type="primary" loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio} onClick={onUploadToMinio}>☁ 上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">当前任务范围</span>}</div>
     {loading ? <Spin /> : !files.length ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => {
       const collapsed = collapsedDirs.has(dir);
       const paths = items.map((file) => file.path);

@@ -217,3 +217,9 @@
 
 - 输入对话框的发送按钮改用 IconPark 提供的 SVG 箭头图标，保留原有发送、禁用和自动滚动行为。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 33. 发送和下载图标调整
+
+- 发送箭头改为白色，提升蓝色发送按钮上的对比度。
+- “下载所选”按钮改用指定的灰色下载 SVG，下载逻辑保持不变。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
