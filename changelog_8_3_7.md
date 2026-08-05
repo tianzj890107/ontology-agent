@@ -163,3 +163,8 @@
 - 思维链在“思考 → 输出”和“思考 → 执行工具”等连续阶段中，统一按思考节点的首个时间戳到下一个非思考事件计算并显示“已思考 …s”。
 - 服务端将思考增量写入任务回放日志，前端恢复历史会话时合并连续思考片段并保留首个时间戳，历史任务也能继续显示思考耗时。
 - 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 24. 思维链交互区域宽度调整
+
+- 折叠和展开状态的思维链标题交互区域统一从 64% 调整为 75%，保留整行之外的可控点击范围和摘要省略显示。
+- 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。

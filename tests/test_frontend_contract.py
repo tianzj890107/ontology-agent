@@ -59,7 +59,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('.chain-event-approval-result .thought-toggle{color:#7c3aed}', styles)
         self.assertIn('.thought-summary{flex:1;min-width:0;max-width:100%', styles)
         self.assertIn('.thought-duration{flex:none;', styles)
-        self.assertIn('.thought-collapsed-row-clickable{display:flex;width:64%;max-width:64%', styles)
+        self.assertIn('.thought-collapsed-row-clickable{display:flex;width:75%;max-width:75%', styles)
         self.assertIn('.thought-collapsed-row-clickable:hover{background:#f1f5f9;box-shadow:0 2px 8px rgba(15,23,42,.14)}', styles)
         self.assertIn('上传到 MinIO', source)
         self.assertIn('const uploadToMinio = async () =>', source)
