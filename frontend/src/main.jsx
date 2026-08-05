@@ -129,6 +129,15 @@ function ModelSettingsIcon() {
   );
 }
 
+function HistoryIcon() {
+  return (
+    <svg className="model-settings-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="currentColor" d="M15.167 8c0 .99-.175 1.907-.525 2.751a7.118 7.118 0 0 1-1.574 2.317c-.7.7-1.472 1.224-2.317 1.574A7.12 7.12 0 0 1 8 15.167c-.99 0-1.907-.175-2.751-.525a7.122 7.122 0 0 1-2.317-1.574 7.118 7.118 0 0 1-1.574-2.317 7.116 7.116 0 0 1-.525-2.75c0-.99.175-1.907.525-2.752a7.117 7.117 0 0 1 1.574-2.316c.7-.7 1.472-1.225 2.317-1.575a7.118 7.118 0 0 1 2.75-.525c.99 0 1.907.175 2.752.525.845.35 1.617.875 2.317 1.575.7.7 1.224 1.471 1.574 2.316.35.845.525 1.762.525 2.751Zm-1 0c0-.851-.15-1.64-.452-2.367A6.126 6.126 0 0 0 12.36 3.64a6.124 6.124 0 0 0-1.993-1.355A6.125 6.125 0 0 0 8 1.833c-.852 0-1.64.151-2.367.452A6.124 6.124 0 0 0 3.639 3.64a6.124 6.124 0 0 0-1.354 1.993A6.126 6.126 0 0 0 1.833 8c0 .852.15 1.64.452 2.367a6.125 6.125 0 0 0 1.354 1.994 6.124 6.124 0 0 0 1.994 1.354A6.123 6.123 0 0 0 8 14.167c.851 0 1.64-.15 2.367-.452a6.124 6.124 0 0 0 1.993-1.354 6.124 6.124 0 0 0 1.355-1.994A6.125 6.125 0 0 0 14.167 8ZM8.4 8.244h3.5a.5.5 0 0 1 0 1h-4a.5.5 0 0 1-.5-.5v-4.5a.5.5 0 0 1 1 0v4Z" />
+    </svg>
+  );
+}
+
 function TaskUpdateIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -779,7 +788,7 @@ function App() {
         <div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能</strong><Tag>Agent</Tag></div>
         <div className="sidebar-scroll">
           <Button className="new-task" onClick={async () => { setActive(null); setEvents([]); setText(""); setView("home"); if (MISSION) await createTask(); }}>✚ 新任务</Button>
-          <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}>历史任务</button>
+          <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}><HistoryIcon />历史任务</button>
           {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新任务"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任务" />}</div>}
           <Button className="settings-button" onClick={() => setSettingsOpen(true)}><ModelSettingsIcon /> 大语言模型设置</Button>
           {MISSION && <div className="current-mission">

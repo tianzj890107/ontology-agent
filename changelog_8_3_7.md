@@ -266,3 +266,9 @@
 - 输入对话框中的模型切换入口最多显示 15 个字符，超出部分使用省略号。
 - 移除模型名称右侧下拉箭头，保留点击模型名称打开模型选择列表的功能。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 41. 历史任务图标
+
+- “历史任务”按钮新增与“大语言模型设置”一致的 16px 图标样式，并继承按钮文字颜色。
+- 保留历史任务展开、收起和任务选择行为。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
