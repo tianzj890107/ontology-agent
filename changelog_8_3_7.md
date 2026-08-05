@@ -75,6 +75,11 @@
 - 发送新要求、接收思维链事件或切换任务后，会话内容在渲染完成后自动滚动到最新底部，确保新回复始终可见。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+### 21. 思维链交互区域固定宽度
+
+- 折叠和展开状态的思维链标题交互区域统一固定为当前内容行宽的 64%，摘要在该区域内自适应并以省略号截断，不再延伸到整行。
+- 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 3. Qwen 与团队模型重名路由修复
 
 - 修复团队模型目录与 Qwen 模型目录存在同名模型时的 Provider 污染问题。
