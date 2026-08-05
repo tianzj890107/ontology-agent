@@ -130,6 +130,24 @@ function ModelSettingsIcon() {
   );
 }
 
+function TaskUpdateIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="currentColor" d="M12.078 4.328c.326.365.602.774.828 1.228a.495.495 0 0 0 .668.226h.002a.495.495 0 0 0 .226-.669v-.002a6.49 6.49 0 0 0-.981-1.453 6.499 6.499 0 0 0-1.373-1.155 6.444 6.444 0 0 0-1.611-.738 6.476 6.476 0 0 0-1.86-.265c-.667 0-1.305.095-1.913.284a6.341 6.341 0 0 0-1.537.72 6.484 6.484 0 0 0-1.38 1.184V2.667a.49.49 0 0 0-.5-.5.49.49 0 0 0-.5.5v2.632a.492.492 0 0 0 .19.43c.025.02.053.037.082.051l.005.003h.001c.035.017.07.03.109.038a.467.467 0 0 0 .154.012h2.219a.495.495 0 0 0 .5-.497v-.003a.495.495 0 0 0-.498-.5H3.52a5.406 5.406 0 0 1 1.546-1.486 5.34 5.34 0 0 1 1.28-.602A5.396 5.396 0 0 1 7.977 2.5c.55 0 1.077.076 1.581.227.472.14.923.348 1.355.621.441.28.83.606 1.165.98Zm-8.984 6.116c.226.454.502.863.828 1.228.335.374.724.7 1.165.98.432.273.883.48 1.355.621a5.478 5.478 0 0 0 1.581.227c.57 0 1.113-.082 1.631-.245.446-.14.872-.34 1.28-.602a5.476 5.476 0 0 0 1.546-1.486h-1.387a.49.49 0 0 1-.449-.277.488.488 0 0 1-.05-.223.491.491 0 0 1 .5-.5h2.219a.493.493 0 0 1 .263.05.491.491 0 0 1 .204.185.492.492 0 0 1 .073.305v2.629a.495.495 0 0 1-.5.497h-.002a.495.495 0 0 1-.498-.5v-1.02a6.415 6.415 0 0 1-1.38 1.182 6.33 6.33 0 0 1-1.537.72 6.39 6.39 0 0 1-1.913.285 6.47 6.47 0 0 1-1.86-.265 6.444 6.444 0 0 1-1.61-.738 6.5 6.5 0 0 1-1.374-1.155 6.49 6.49 0 0 1-.98-1.453.49.49 0 0 1 .048-.525.487.487 0 0 1 .177-.145.49.49 0 0 1 .526.048c.06.045.108.104.144.177Z" />
+    </svg>
+  );
+}
+
+function CommandIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="currentColor" d="M8 1c.146 0 .266.047.36.14.093.094.14.214.14.36v3a.487.487 0 0 1-.14.36A.487.487 0 0 1 8 5a.487.487 0 0 1-.36-.14.487.487 0 0 1-.14-.36v-3c0-.146.047-.266.14-.36A.487.487 0 0 1 8 1Zm0 10c.146 0 .266.047.36.14.093.094.14.214.14.36v3a.487.487 0 0 1-.14.36A.487.487 0 0 1 8 15a.487.487 0 0 1-.36-.14.487.487 0 0 1-.14-.36v-3c0-.146.047-.266.14-.36A.487.487 0 0 1 8 11Zm7-3a.487.487 0 0 1-.14.36.487.487 0 0 1-.36.14h-3a.487.487 0 0 1-.36-.14A.487.487 0 0 1 11 8c0-.146.047-.266.14-.36a.487.487 0 0 1 .36-.14h3c.146 0 .266.047.36.14.093.094.14.214.14.36ZM5 8a.487.487 0 0 1-.14.36.487.487 0 0 1-.36.14h-3a.487.487 0 0 1-.36-.14.487.487 0 0 1 .14-.36h3c.146 0 .266.047.36.14.093.094.14.214.14.36ZM3.047 3.047a.522.522 0 0 1 .36-.14c.135 0 .25.046.343.14l2.125 2.125c.094.104.141.222.141.351 0 .13-.05.245-.148.344a.47.47 0 0 1-.344.15.516.516 0 0 1-.352-.142L3.047 3.75a.468.468 0 0 1-.14-.344.52.52 0 0 1 .14-.359Zm7.078 7.078a.487.487 0 0 1 .351-.156c.13 0 .248.052.352.156l2.125 2.125c.094.094.14.208.14.344a.48.48 0 0 1-.148.352.482.482 0 0 1-.351.148.467.467 0 0 1-.345-.14l-2.125-2.125a.486.486 0 0 1-.156-.352c0-.13.052-.247.156-.351l.001-.001Zm2.828-7.078c.094.104.14.224.14.36a.47.47 0 0 1-.14.343l-2.125 2.125a.513.513 0 0 1-.352.141.473.473 0 0 1-.344-.149.47.47 0 0 1-.148-.344c0-.13.047-.247.14-.35l2.125-2.126a.468.468 0 0 1 .345-.14c.135 0 .255.046.359.14Zm-7.078 7.078a.485.485 0 0 1 .156.352c0 .13-.052.247-.156.35L3.75 12.954a.468.468 0 0 1-.344.14.48.48 0 0 1-.352-.148.484.484 0 0 1-.148-.351c0-.136.047-.25.14-.345l2.126-2.125a.486.486 0 0 1 .351-.156c.13 0 .247.052.352.156v.001Z" />
+    </svg>
+  );
+}
+
 function isExpiredApprovalError(error) {
   const text = String(error || "");
   return /没有待确认.*(?:请求|操作)|请求已过期/.test(text);
@@ -257,8 +275,10 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
   const isWriteTool = event.type === "tool_use" && event.name === "Write";
   const isEditTool = event.type === "tool_use" && event.name === "Edit";
   const isAudit = event.type === "audit";
-  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.type === "error" || event.is_error ? "error" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : isReadTool ? "read-file" : isWriteTool ? "write-file" : isEditTool ? "edit-file" : isAudit ? "audit" : "tool-use";
-  const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "!" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : isReadTool ? <ReadFileIcon /> : isWriteTool || isEditTool ? <WriteFileIcon /> : isAudit ? <AuditIcon /> : "·";
+  const isTaskUpdate = event.type === "tool_use" && event.name === "TaskUpdate";
+  const isCommand = event.type === "tool_use" && event.name === "Bash";
+  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.type === "error" || event.is_error ? "error" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : isReadTool ? "read-file" : isWriteTool ? "write-file" : isEditTool ? "edit-file" : isAudit ? "audit" : isTaskUpdate ? "task-update" : isCommand ? "command" : "tool-use";
+  const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "!" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : isReadTool ? <ReadFileIcon /> : isWriteTool || isEditTool ? <WriteFileIcon /> : isAudit ? <AuditIcon /> : isTaskUpdate ? <TaskUpdateIcon /> : isCommand ? <CommandIcon /> : "·";
   const detail = eventDescription(event);
   const approved = event.type === "approval_request" && approvalResult?.approved === true;
   const durationLabel = durationMs != null && !loading ? event.type === "thinking" ? `已思考 ${formatDuration(durationMs)}` : formatDuration(durationMs) : "";

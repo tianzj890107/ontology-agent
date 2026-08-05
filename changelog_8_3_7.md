@@ -242,3 +242,10 @@
 - 侧边栏、模型选择区域和“修改模型参数”中的模型设置图标统一改用指定 SVG。
 - 原有审计展示、模型切换和设置弹窗行为保持不变。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 37. 任务更新与执行命令图标
+
+- `TaskUpdate` 思维链节点改用指定的循环更新 SVG，图标和标题统一为紫色并配套浅色背景。
+- `Bash/执行命令` 思维链节点改用指定的命令 SVG，图标和标题统一为蓝色并配套浅色背景。
+- 原有任务更新和命令执行行为保持不变。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
