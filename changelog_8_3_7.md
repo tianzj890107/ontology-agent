@@ -235,3 +235,10 @@
 - 读取、写入和修改文件图标缩小到思维链圆圈内，并分别使用与标题一致的颜色和浅色背景。
 - “上传到 MinIO”图标改为白色，以匹配蓝色按钮背景。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 36. 审计与模型设置图标
+
+- 思维链 `audit` 节点改用指定的审计 SVG 图标。
+- 侧边栏、模型选择区域和“修改模型参数”中的模型设置图标统一改用指定 SVG。
+- 原有审计展示、模型切换和设置弹窗行为保持不变。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。

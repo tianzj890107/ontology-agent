@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import { createRoot } from "react-dom/client";
-import { DownOutlined, SettingOutlined } from "@ant-design/icons";
+import { DownOutlined } from "@ant-design/icons";
 import {
   App as AntApp,
   Button,
@@ -108,6 +108,24 @@ function UploadMinioIcon() {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <path d="M0 0h16v16H0z" />
       <path fillRule="evenodd" fill="#fff" d="M8.5 10.5v3h2.75q.992-.03 1.775-.448.475-.255.873-.653.399-.399.654-.874.419-.783.448-1.775-.02-.914-.387-1.656-.223-.45-.574-.836-.373-.41-.826-.686-.68-.413-1.541-.525-.18-.869-.656-1.52-.27-.369-.633-.667-.38-.312-.811-.511Q8.857 3.019 8 3q-.86.02-1.575.35-.43.199-.808.51-.363.297-.631.664-.478.653-.658 1.523-.863.113-1.542.526-.453.276-.825.685-.35.385-.573.833Q1.02 8.834 1 9.75q.03.992.448 1.775.255.475.654.873.398.399.873.654.783.419 1.775.448H7.5v-3h-.932a.5.5 0 0 1-.385-.82l1.433-1.72a.5.5 0 0 1 .768 0l1.433 1.72a.5.5 0 0 1-.385.82H8.5Z" />
+    </svg>
+  );
+}
+
+function AuditIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fill="#8F9299" d="M13.5 6.4a3 3 0 0 1-.592 5.46A4 4 0 0 1 9 15H7.5a.5.5 0 0 1 0-1H9a3.001 3.001 0 0 0 2.83-2h-.33a.5.5 0 0 1-.5-.5v-5a.5.5 0 0 1 .5-.5h.5c.162 0 .321.013.477.038a4.5 4.5 0 0 0-8.954 0A3.02 3.02 0 0 1 4 6h.5a.5.5 0 0 1 .5.5v5a.5.5 0 0 1-.5.5H4a3 3 0 0 1-1.5-5.6 5.5 5.5 0 1 1 11 0ZM4 7a2 2 0 0 0 0 4V7Zm10 2a2 2 0 0 0-2-2v4a2 2 0 0 0 2-2Z" />
+    </svg>
+  );
+}
+
+function ModelSettingsIcon() {
+  return (
+    <svg className="model-settings-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="#8F9299" d="m14.7 8.93-2.549 4.333a1.821 1.821 0 0 1-.66.678 1.82 1.82 0 0 1-.92.225H5.429a1.82 1.82 0 0 1-.919-.225 1.82 1.82 0 0 1-.66-.678L1.3 8.929A1.818 1.818 0 0 1 1.027 8c0-.31.09-.62.273-.93l2.55-4.333a1.82 1.82 0 0 1 .66-.678c.263-.15.57-.226.92-.226h5.14c.35 0 .657.076.92.226.263.15.484.377.661.678L14.7 7.07c.182.31.273.62.273.93 0 .31-.09.62-.273.93Zm-.862-.508A.827.827 0 0 0 13.962 8a.828.828 0 0 0-.124-.423L11.29 3.244a.827.827 0 0 0-.3-.308.827.827 0 0 0-.418-.103H5.429a.825.825 0 0 0-.418.103.825.825 0 0 0-.3.308L2.16 7.577A.828.828 0 0 0 2.039 8c0 .14.041.281.124.422l2.549 4.334c.08.137.18.24.3.308s.26.102.418.102h5.142a.83.83 0 0 0 .418-.102.83.83 0 0 0 .3-.308l2.55-4.334ZM10.167 8c0 .3-.053.576-.159.832a2.157 2.157 0 0 1-.476.7c-.211.211-.445.37-.7.476a2.152 2.152 0 0 1-.832.159c-.3 0-.576-.053-.832-.159a2.16 2.16 0 0 1-.7-.476 2.152 2.152 0 0 1-.476-.7A2.152 2.152 0 0 1 5.833 8c0-.3.053-.576.159-.832.106-.255.264-.489.476-.7.211-.212.445-.37.7-.476.256-.106.533-.159.832-.159.3 0 .576.053.832.159.255.106.489.264.7.476.211.211.37.445.476.7.106.256.159.533.159.832Zm-1 0c0-.161-.029-.31-.086-.448a1.158 1.158 0 0 0-.256-.377c-.114-.114-.24-.2-.377-.256A1.16 1.16 0 0 0 8 6.833c-.161 0-.31.029-.448.086a1.155 1.155 0 0 0-.377.256c-.114.114-.2.24-.256.377A1.16 1.16 0 0 0 6.833 8c0 .16.029.31.086.448.057.137.142.263.256.377.114.114.24.2.377.256.137.057.287.086.448.086.16 0 .31-.029.448-.086.137-.057.263-.142.377-.256.114-.114.2-.24.256-.377.057-.138.086-.287.086-.448Z" />
     </svg>
   );
 }
@@ -238,8 +256,9 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
   const isReadTool = event.type === "tool_use" && event.name === "Read";
   const isWriteTool = event.type === "tool_use" && event.name === "Write";
   const isEditTool = event.type === "tool_use" && event.name === "Edit";
-  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.type === "error" || event.is_error ? "error" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : isReadTool ? "read-file" : isWriteTool ? "write-file" : isEditTool ? "edit-file" : "tool-use";
-  const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "!" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : isReadTool ? <ReadFileIcon /> : isWriteTool || isEditTool ? <WriteFileIcon /> : "·";
+  const isAudit = event.type === "audit";
+  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.type === "error" || event.is_error ? "error" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : isReadTool ? "read-file" : isWriteTool ? "write-file" : isEditTool ? "edit-file" : isAudit ? "audit" : "tool-use";
+  const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "!" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : isReadTool ? <ReadFileIcon /> : isWriteTool || isEditTool ? <WriteFileIcon /> : isAudit ? <AuditIcon /> : "·";
   const detail = eventDescription(event);
   const approved = event.type === "approval_request" && approvalResult?.approved === true;
   const durationLabel = durationMs != null && !loading ? event.type === "thinking" ? `已思考 ${formatDuration(durationMs)}` : formatDuration(durationMs) : "";
@@ -455,10 +474,10 @@ function ModelPicker({ model, models, onModel, onOpenSettings }) {
   const [open, setOpen] = useState(false);
   const content = <div className="model-picker">
     <div className="model-picker-list">{(models || []).map((item) => <button type="button" className={item.id === model ? "model-option active" : "model-option"} key={item.id} onClick={() => { onModel(item.id); setOpen(false); }}><span>{item.label || item.id}</span><small>{item.provider || ""}</small></button>)}</div>
-    <Button type="link" className="model-params-link" onClick={() => { setOpen(false); onOpenSettings(); }}><SettingOutlined /> 修改模型参数</Button>
+    <Button type="link" className="model-params-link" onClick={() => { setOpen(false); onOpenSettings(); }}><ModelSettingsIcon /> 修改模型参数</Button>
   </div>;
   const modelText = String(model || "模型");
-  return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="topRight" content={content} title="选择大语言模型"><button type="button" className="model-hint" aria-label={`当前模型：${model || "未选择"}`} title={model || "未选择模型"}><span className="model-name"><SettingOutlined /> {modelText.length > 10 ? `${modelText.slice(0, 10)}...` : modelText}</span><DownOutlined className="model-arrow" /></button></Popover>;
+  return <Popover open={open} onOpenChange={setOpen} trigger="click" placement="topRight" content={content} title="选择大语言模型"><button type="button" className="model-hint" aria-label={`当前模型：${model || "未选择"}`} title={model || "未选择模型"}><span className="model-name"><ModelSettingsIcon /> {modelText.length > 10 ? `${modelText.slice(0, 10)}...` : modelText}</span><DownOutlined className="model-arrow" /></button></Popover>;
 }
 
 function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, busy, hasConversation, model, models, onModel, onOpenSettings, placeholder, projects, project, onProject }) {
@@ -743,7 +762,7 @@ function App() {
           <Button className="new-task" onClick={async () => { setActive(null); setEvents([]); setText(""); setView("home"); if (MISSION) await createTask(); }}>✚ 新任务</Button>
           <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}>历史任务</button>
           {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新任务"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任务" />}</div>}
-          <Button className="settings-button" onClick={() => setSettingsOpen(true)}><SettingOutlined /> 大语言模型设置</Button>
+          <Button className="settings-button" onClick={() => setSettingsOpen(true)}><ModelSettingsIcon /> 大语言模型设置</Button>
           {MISSION && <div className="current-mission">
             <Button type="text" onClick={() => setMissionInfoOpen(true)}>📋 当前任务信息</Button>
             <small>{MISSION.taskCode} · 本体库 {MISSION.repositoryId}</small>
