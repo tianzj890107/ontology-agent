@@ -648,11 +648,6 @@ def _page_display_errors(rows, header):
             primary = str(row[indexes["是否主键"]] or "").strip().upper() in {"Y", "是", "TRUE", "1"}
             if primary and attr_name.endswith("编码"):
                 key_prefixes.add(attr_name[:-2])
-        if not key_prefixes:
-            for _, row in entity_rows:
-                attr_name = str(row[indexes["业务属性名称"]] or "").strip()
-                if attr_name.endswith("编码"):
-                    key_prefixes.add(attr_name[:-2])
         expected_names = {f"{prefix}名称" for prefix in key_prefixes if prefix}
         for line_no, row in entity_rows:
             attr_name = str(row[indexes["业务属性名称"]] or "").strip()
