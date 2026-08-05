@@ -82,8 +82,17 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("FRONTEND_DIST", source)
         self.assertIn("_serve_frontend_asset", source)
         self.assertIn('"..", "frontend", "dist"', source)
+        self.assertIn('html_path = os.path.join(FRONTEND_DIST, "index.html")', source)
+        self.assertIn("built React frontend not found; run npm run build", source)
+        self.assertNotIn("HTML_PATH", source)
+        self.assertNotIn("codex_web.html", source)
         self.assertIn("def _stamp_event(event)", source)
         self.assertIn('"timestamp": time.time()', source)
+
+    def test_legacy_static_frontends_are_removed(self):
+        self.assertEqual([], sorted(ROOT.glob("*.html")))
+        for name in ("codex_web.html", "generic_claude_gpt_style_chat.html"):
+            self.assertFalse((ROOT / "open-claude" / name).exists())
 
 
 if __name__ == "__main__":

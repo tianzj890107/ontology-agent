@@ -150,3 +150,10 @@
 - 审批请求点击“允许执行”并成功回写后，按钮显示为禁用状态“✓ 已允许执行”。
 - 已允许的审批请求隐藏“拒绝”按钮，避免同一请求被重复处理。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 22. 移除旧静态前端
+
+- 删除仓库根目录的旧产品原型 HTML 页面及 `open-claude` 的旧单文件聊天页面、旧桥接服务。
+- Agent 服务现在只提供 `frontend/dist` 构建的 React + Ant Design 工作台；构建产物缺失时直接返回明确错误，不再回退到旧页面。
+- 清理开发文档和回归测试中的旧页面依赖，保留 `frontend/index.html` 与 `frontend/dist/index.html` 作为 React 前端入口。
+- 主要文件：`open-claude/oc_codex_server.py`、`frontend/README.md`、`open-claude/README.md`、`tests/test_frontend_contract.py`、`frontend/`。

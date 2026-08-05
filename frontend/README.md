@@ -17,4 +17,4 @@ source ../.venv/bin/activate
 python ../open-claude/oc_codex_server.py --host 127.0.0.1 --port 47313
 ```
 
-构建产物 `dist/` 会随版本提交，保证没有 Node 环境的 Python 服务也能直接提供新页面。服务端找不到 `dist/index.html` 时会回退到旧的单文件页面，便于排查前端构建问题。
+构建产物 `dist/` 会随版本提交，保证没有 Node 环境的 Python 服务也能直接提供新页面。服务端只提供 `dist/index.html` 和 Vite 生成的 `/assets/*`；如果构建产物缺失，服务会明确返回构建错误，不会回退到旧的静态页面。

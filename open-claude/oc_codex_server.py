@@ -1,11 +1,10 @@
 """
-Codex-style web server for open-claude.
+React workbench web server for open-claude.
 
-This serves `codex_web.html` — a Codex-like coding-agent UI — and drives the
-UNMODIFIED open_claude engine underneath. Unlike the pure-chat bridge
-(oc_web_server.py), this surface has the agent's FULL tool set (Bash, Read,
-Write, Edit, Glob, Grep, Skill, Tasks, sub-agents, MCP), but every session is
-confined to a project folder inside the sandbox directory:
+This serves the built React/Vite workbench from ``frontend/dist`` and drives
+the UNMODIFIED open_claude engine underneath. The surface has the agent's FULL
+tool set (Bash, Read, Write, Edit, Glob, Grep, Skill, Tasks, sub-agents, MCP),
+but every session is confined to a project folder inside the sandbox directory:
 
     <repo>/sandbox/<project-name>/
 
@@ -85,7 +84,6 @@ from open_claude.ontology_knowledge import (
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-HTML_PATH = os.path.join(SCRIPT_DIR, "codex_web.html")
 FRONTEND_DIST = os.path.join(SCRIPT_DIR, "..", "frontend", "dist")
 SANDBOX_DIR = os.path.join(SCRIPT_DIR, "sandbox")
 STATIC_KNOWLEDGE_DIR = os.path.join(SCRIPT_DIR, "..", "agent_knowledge")
@@ -3870,16 +3868,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"ok": True, "provider": provider, "hasKey": bool(key)})
 
     def _serve_html(self, mission=None):
-        # Prefer the built React/Ant Design workbench. Keep the historical
-        # single-file page as a fallback for an unbuilt checkout.
+        # The deployed application is always the built React/Ant Design
+        # workbench. There is intentionally no legacy single-file fallback:
+        # serving an old page would silently desynchronize the UI and API
+        # contracts.
         html_path = os.path.join(FRONTEND_DIST, "index.html")
-        if not os.path.isfile(html_path):
-            html_path = HTML_PATH
         try:
             with open(html_path, "rb") as fh:
                 body = fh.read()
         except OSError:
-            self.send_error(500, "frontend html not found")
+            self.send_error(500, "built React frontend not found; run npm run build")
             return
         if mission:
             inject = ("<script>window.__MISSION__ = "
