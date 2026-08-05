@@ -49,6 +49,11 @@
 - 新产生的事件由服务端记录时间戳，重新打开会话时也可继续计算已持久化事件的耗时。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+### 16. 再次收窄折叠摘要
+
+- 折叠思维链摘要最大宽度从原行宽的 80% 调整为原行宽的 64%，即当前设置的 80%。
+- 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 3. Qwen 与团队模型重名路由修复
 
 - 修复团队模型目录与 Qwen 模型目录存在同名模型时的 Provider 污染问题。
