@@ -33,7 +33,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('const waitingForNextEvent = busy && !["done", "error", "approval_request"].includes(lastEvent?.type);', source)
         self.assertIn('event={{ type: "thinking", text: "" }}', source)
         self.assertIn('const approved = event.type === "approval_request" && approvalResult?.approved === true;', source)
-        self.assertIn('✓已允许执行', source)
+        self.assertIn('✓ 已允许执行', source)
         self.assertIn('const approvalResults = events.reduce((result, event) =>', source)
         self.assertIn('上传到 MinIO', source)
         self.assertIn('const uploadToMinio = async () =>', source)

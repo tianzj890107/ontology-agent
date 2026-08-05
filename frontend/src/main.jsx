@@ -154,7 +154,7 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
       {expanded && <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div>}
       {event.type === "approval_request" && (
         <div className="approval-actions">
-          {approved ? <Button type="primary" size="small" disabled>✓已允许执行</Button> : <>
+          {approved ? <Button type="primary" size="small" disabled>✓ 已允许执行</Button> : <>
             <Button type="primary" size="small" onClick={() => onApprove(event.id, true)}>允许执行</Button>
             <Button size="small" onClick={() => onApprove(event.id, false)}>拒绝</Button>
           </>}
