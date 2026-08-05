@@ -63,6 +63,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('.thought-duration{flex:none;', styles)
         self.assertIn('.thought-collapsed-row-clickable{display:flex;width:75%;max-width:75%', styles)
         self.assertIn('.thought-collapsed-row-clickable:hover{background:#f1f5f9;box-shadow:0 2px 8px rgba(15,23,42,.14)}', styles)
+        self.assertIn('.chain-event{position:relative;padding:4px 0;', styles)
+        self.assertIn('.feed-list{gap:3.2px}', styles)
         self.assertIn('.chain-event::before{display:none!important;content:none!important}.chain-event:not(:last-child)::after{left:17px;top:27px;bottom:-7px;width:1px;background:#cbd5e1}', styles)
         self.assertIn('.thought-icon-error{color:#b91c1c;background:#fee2e2}', styles)
         self.assertIn('上传到 MinIO', source)

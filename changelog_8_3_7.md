@@ -187,3 +187,9 @@
 - 错误思维链节点使用红色圆形感叹号图标，并兼容 `error` 与 `is_error` 事件。
 - 调整思维链竖线位置，使其穿过左侧图标圆圈的水平中心。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 28. 思维链行间距收窄
+
+- 思维链节点内边距和节点之间间隔调整为原来的约 80%，减少连续步骤之间的空白。
+- 同步调整竖线起始位置，保持与图标中心的视觉对齐。
+- 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
