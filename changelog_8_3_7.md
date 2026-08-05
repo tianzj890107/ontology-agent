@@ -70,6 +70,11 @@
 - 思维链悬浮和点击区域改为只包住标题、摘要和耗时文字的实际内容宽度，不再覆盖整行空白区域。
 - 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+### 20. 新消息自动滚动到底部
+
+- 发送新要求、接收思维链事件或切换任务后，会话内容在渲染完成后自动滚动到最新底部，确保新回复始终可见。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 3. Qwen 与团队模型重名路由修复
 
 - 修复团队模型目录与 Qwen 模型目录存在同名模型时的 Provider 污染问题。

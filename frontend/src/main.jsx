@@ -484,6 +484,7 @@ function App() {
   const approvalInFlightRef = useRef(new Set());
   const [messageApi, contextHolder] = message.useMessage();
   const fileInput = useRef(null);
+  const feedRef = useRef(null);
 
   const model = meta.model || "";
   const params = meta.params || { temperature: null, max_tokens: null, thinking: false, thinking_budget: 8000 };
@@ -517,6 +518,14 @@ function App() {
     if (task) openTask(task);
   }, [tasks, active]);
   useEffect(() => { if (active && filesOpen) loadFiles(); }, [active, filesOpen]);
+  useEffect(() => {
+    if (view !== "task" || !feedRef.current) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const feed = feedRef.current;
+      if (feed) feed.scrollTop = feed.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [events, busy, view]);
 
   const openTask = async (task) => {
     const detailQuery = MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}` : "";
@@ -686,7 +695,7 @@ function App() {
       <main className="main-content">
         {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
           <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Switch checked={autoApprove} onChange={(value) => { autoApproveRef.current = value; setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); if (value) { const pending = events.find((event) => event.type === "approval_request"); if (pending) approve(pending.id, true, active); } }} checkedChildren="自动确认：开" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
-          <div className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} /></div>
+          <div ref={feedRef} className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} /></div>
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
         </section>}
       </main>
