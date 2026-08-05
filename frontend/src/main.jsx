@@ -73,6 +73,20 @@ function normalizeFiles(value) {
   return value.map((item) => (typeof item === "string" ? item : item?.path || item?.filename)).filter(Boolean);
 }
 
+function eventClock(event) {
+  const raw = event?._receivedAt ?? event?.timestamp;
+  if (raw == null || raw === "") return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return null;
+  return value > 1e11 ? value : value > 1e9 ? value * 1000 : value;
+}
+
+function stampEvent(event) {
+  if (!event || typeof event !== "object") return { type: "text", text: String(event ?? ""), _receivedAt: Date.now() };
+  const clock = eventClock(event);
+  return clock == null ? { ...event, _receivedAt: Date.now() } : { ...event, _receivedAt: clock };
+}
+
 function normalizeEvents(task) {
   const source = Array.isArray(task?.log) ? task.log : Array.isArray(task?.events) ? task.events : [];
   return source.map((event) => {
@@ -80,6 +94,31 @@ function normalizeEvents(task) {
     const content = event.text ?? event.content;
     return { ...event, text: typeof content === "string" ? content : content == null ? "" : $json(content) };
   });
+}
+
+function formatDuration(durationMs) {
+  const milliseconds = Math.max(0, Number(durationMs) || 0);
+  if (milliseconds < 1000) return `${Math.max(1, Math.round(milliseconds))}ms`;
+  const seconds = milliseconds / 1000;
+  return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+}
+
+function eventDuration(events, index) {
+  const event = events[index];
+  const start = eventClock(event);
+  if (start == null || ["done", "tool_result", "approval_result", "audit", "error"].includes(event.type)) return null;
+  let endEvent = null;
+  if (event.type === "tool_use" && event.id) {
+    endEvent = events.slice(index + 1).find((candidate) => candidate.type === "tool_result" && candidate.tool_use_id === event.id);
+  } else if (event.type === "approval_request" && event.id) {
+    endEvent = events.slice(index + 1).find((candidate) => candidate.type === "approval_result" && candidate.id === event.id);
+  } else if (event.type === "thinking") {
+    endEvent = events.slice(index + 1).find((candidate) => candidate.type !== "thinking");
+  } else {
+    endEvent = events[index + 1];
+  }
+  const end = eventClock(endEvent);
+  return end != null && end > start ? end - start : null;
 }
 
 function eventTitle(event) {
@@ -135,12 +174,13 @@ function compactEventSummary(value) {
   return firstLine.replace(/^[{"'`\s]+|[}"'`,\s]+$/g, "").replace(/^([^:]+):\s*["']?(.*?)["']?$/, "$1: $2");
 }
 
-function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approvalResult = null, completed = false }) {
+function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approvalResult = null, completed = false, durationMs = null }) {
   const [expanded, setExpanded] = useState(false);
   const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : "tool-use";
   const icon = event.type === "thinking" && loading ? <Spin size="small" /> : event.type === "thinking" ? "·" : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "!" : "·";
   const detail = eventDescription(event);
   const approved = event.type === "approval_request" && approvalResult?.approved === true;
+  const durationLabel = durationMs != null && !loading ? event.type === "thinking" ? `已思考 ${formatDuration(durationMs)}` : formatDuration(durationMs) : "";
   const toggleExpanded = () => setExpanded((value) => !value);
   return (
     <div className={`chain-event chain-event-${kind}`}>
@@ -150,6 +190,7 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
           <button type="button" className="thought-toggle" onClick={(clickEvent) => { clickEvent.stopPropagation(); toggleExpanded(); }}>{eventTitle(event)}</button>
         </div>
         {!expanded && detail && <div className="thought-summary"><EventFileText text={compactEventSummary(detail)} files={files} onFile={onFile} /></div>}
+        {durationLabel && <span className="thought-duration">{durationLabel}</span>}
       </div>
       {expanded && <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div>}
       {event.type === "approval_request" && !completed && (
@@ -224,7 +265,7 @@ function EventFeed({ events, onApprove, files, onFile, busy = false }) {
         if (event.type === "done") return <div className="done-note" key={`${index}-done`}>本轮执行结束 · {event.status || "完成"}</div>;
         const loading = busy && index === events.length - 1 && event.type === "thinking";
         const executionFinished = event.type === "approval_request" && events.slice(index + 1).some((candidate) => candidate.type === "done");
-        return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} completed={executionFinished} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
+        return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} completed={executionFinished} durationMs={eventDuration(events, index)} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
       })}
       {waitingForNextEvent && lastEvent?.type !== "thinking" && (
         <ThoughtEvent event={{ type: "thinking", text: "" }} files={files} onFile={onFile} loading />
@@ -497,6 +538,7 @@ function App() {
   };
 
   const appendEvent = (event) => setEvents((previous) => {
+    event = stampEvent(event);
     if (event.type === "text" || event.type === "thinking") {
       const last = previous[previous.length - 1];
       if (last?.type === event.type) return [...previous.slice(0, -1), { ...last, text: `${last.text || ""}${event.text || ""}` }];

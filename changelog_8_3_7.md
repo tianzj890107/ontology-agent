@@ -41,6 +41,13 @@
 - 思维链折叠状态下的摘要最长占当前行宽度的 80%，超出内容继续以省略号显示；展开状态不受影响。
 - 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+### 15. 思维链步骤耗时
+
+- 已完成的思维链步骤在行尾显示耗时，例如 `32ms`；完成状态节点不显示额外耗时。
+- 思考节点完成后显示“已思考 …s”，执行中的思考节点仍显示旋转提示。
+- 工具执行按对应 `tool_result` 计算，审批等待按对应 `approval_result` 计算；当前尚未结束的步骤不显示耗时。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 3. Qwen 与团队模型重名路由修复
 
 - 修复团队模型目录与 Qwen 模型目录存在同名模型时的 Provider 污染问题。
