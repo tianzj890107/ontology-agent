@@ -229,3 +229,9 @@
 - “读取文件”使用文件文档 SVG；“写入文件”和“修改文件”共用编辑文件 SVG。
 - “上传到 MinIO”按钮改用指定的上传 SVG，原有文件选择、上传和状态逻辑保持不变。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 35. 文件操作图标尺寸与颜色
+
+- 读取、写入和修改文件图标缩小到思维链圆圈内，并分别使用与标题一致的颜色和浅色背景。
+- “上传到 MinIO”图标改为白色，以匹配蓝色按钮背景。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
