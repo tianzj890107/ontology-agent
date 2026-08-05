@@ -181,3 +181,9 @@
 
 - 审批请求思维链节点保留现有橙色样式，图标由感叹号调整为问号，更明确表示等待用户确认。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 27. 错误节点图标与思维链竖线对齐
+
+- 错误思维链节点使用红色圆形感叹号图标，并兼容 `error` 与 `is_error` 事件。
+- 调整思维链竖线位置，使其穿过左侧图标圆圈的水平中心。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
