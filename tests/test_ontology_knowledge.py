@@ -293,6 +293,146 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertTrue(term_plan["valid"])
             self.assertEqual(term_plan["identity"]["key"], "1/RMTERM001/V6/input-a")
             self.assertEqual(term_plan["artifacts"]["termArtifact"]["status"], "PENDING")
+            document_context = server.normalize_modeling_context({
+                "taskType": "DOCUMENT_MODELING", "repositoryId": "1", "taskCode": "RMDOC001",
+                "document": {"fileSourceId": 25, "fileType": "DOCX", "objectKey": "ontology/1/input.docx"},
+                "parseElements": ["LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "ENTITY_RELATION"],
+            })
+            self.assertEqual(document_context["sourceMode"], "DOCUMENT")
+            self.assertEqual(
+                document_context["expectedFiles"],
+                ["logical_entities.csv", "business_attributes.csv", "entity_relations.csv"],
+            )
+            contract = {item["parseElement"]: item for item in document_context["documentOutputContract"]}
+            self.assertTrue(contract["LOGICAL_ENTITY"]["requested"])
+            self.assertEqual(contract["LOGICAL_ENTITY"]["expectedFiles"], ["logical_entities.csv"])
+            self.assertIn("manifest.json", server.build_modeling_instructions(document_context))
+            self.assertIn("logical_entities.csv", server.build_modeling_instructions(document_context))
+            self.assertEqual(
+                server.normalize_modeling_context({
+                    "document": {"fileType": "PDF", "objectKey": "ontology/1/input.pdf"},
+                    "parseElements": ["TERM"],
+                    "expectedFiles": ["business_terms.csv"],
+                })["sourceMode"],
+                "DOCUMENT",
+            )
+            # Document task smoke E2E: object-store download -> document bundle
+            # -> model output -> MinIO upload and COMPLETED callback.
+            with tempfile.TemporaryDirectory() as document_tmp:
+                document_root = Path(document_tmp)
+                document_input = document_root / "mission-input"
+                document_input.mkdir()
+                from io import BytesIO
+                package = BytesIO()
+                with zipfile.ZipFile(package, "w") as zf:
+                    zf.writestr("word/document.xml", '''<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>订单章节</w:t></w:r></w:p><w:p><w:r><w:t>订单用于记录采购。</w:t></w:r></w:p></w:body></w:document>''')
+                source_bytes = package.getvalue()
+                class DownloadResponse:
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *args):
+                        return False
+                    def read(self, _limit):
+                        return source_bytes
+                class DownloadOpener:
+                    def open(self, _request, timeout=60):
+                        self.timeout = timeout
+                        return DownloadResponse()
+                old_opener = server.urllib.request.build_opener
+                try:
+                    server.urllib.request.build_opener = lambda *args, **kwargs: DownloadOpener()
+                    downloaded, download_errors = server.download_mission_files(
+                        {"preview_base": "https://files.example", "bucket": "ontology"},
+                        document_context, document_tmp,
+                    )
+                finally:
+                    server.urllib.request.build_opener = old_opener
+                self.assertEqual(download_errors, [])
+                downloaded_path = document_root / downloaded[0]["path"]
+                self.assertTrue(downloaded_path.is_file())
+                manifests, parse_errors = server.prepare_mission_documents(document_tmp)
+                self.assertEqual(parse_errors, [])
+                self.assertEqual(manifests[0]["format"], "docx")
+                self.assertIn("订单章节", (document_root / manifests[0]["bundle"] / "content.md").read_text(encoding="utf-8"))
+                output = document_root / "mission-output"
+                output.mkdir()
+                (output / "logical_entities.csv").write_text(
+                    "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n"
+                    "BO1,采购,LE1,采购订单,purchaseOrder,采购订单,是,事务数据\n", encoding="utf-8")
+                document_upload_context = server.normalize_modeling_context({
+                    **document_context,
+                    "parseElements": ["LOGICAL_ENTITY"],
+                    "expectedFiles": ["logical_entities.csv"],
+                })
+
+                class DocumentUploadTask:
+                    id = "document-upload-task"
+                    project = "project"
+                    repository_id = "1"
+                    task_code = "RMDOC001"
+                    task_type = "modeling"
+                    user_id = "u1"
+                    cwd = document_tmp
+                    platform_status = "RUNNING"
+                    platform_updated = 0
+                    platform_last_error = ""
+                    platform_output_prefix = ""
+                    platform_uploaded_files = {}
+                    mission_context = document_upload_context
+                    modeling_plan = {}
+
+                    def set_mission_context(self, context):
+                        self.mission_context = dict(context)
+
+                    def record_uploaded_results(self, prefix, results):
+                        server.Task.record_uploaded_results(self, prefix, results)
+
+                    def refresh_modeling_artifacts(self):
+                        self.modeling_plan = server.build_modeling_plan(self.mission_context, self.repository_id, self.task_code)
+
+                    def summary(self):
+                        return {"id": self.id, "platformStatus": self.platform_status,
+                                "uploadedResultCount": len(self.platform_uploaded_files)}
+
+                document_task = DocumentUploadTask()
+                document_handler = object.__new__(server.Handler)
+                document_responses, document_callbacks = [], []
+                originals = {
+                    "bind": server.bind_mission_project, "context": server.fetch_execution_context,
+                    "cwd": server.mission_task_cwd, "config": server.minio_config,
+                    "put": server.fileserver_put_object, "callback": server.task_status_callback,
+                    "persist": server.persist_tasks,
+                }
+                try:
+                    server.bind_mission_project = lambda *args: "project"
+                    server.fetch_execution_context = lambda *args: None
+                    server.mission_task_cwd = lambda *args: document_tmp
+                    server.minio_config = lambda: {"bucket": "bucket"}
+                    server.fileserver_put_object = lambda cfg, key, blob, name, ctype: {"objectKey": key}
+                    server.task_status_callback = lambda task, status, **kwargs: (
+                        document_callbacks.append((status, kwargs.get("files"))) or {"ok": True})
+                    server.persist_tasks = lambda: None
+                    document_handler.headers = {}
+                    document_handler._owned_task = lambda task_id: document_task if task_id == document_task.id else None
+                    document_handler._current_user = lambda: "u1"
+                    document_handler._send_json = lambda payload, status=200: document_responses.append((status, payload))
+                    document_handler._read_body = lambda: {
+                        "project": "project", "prefix": "ontology/1/modeling-tasks/RMDOC001/agent-output",
+                        "taskCode": "RMDOC001", "repositoryId": "1", "taskId": document_task.id,
+                        "taskType": "modeling", "paths": ["mission-output/logical_entities.csv"],
+                    }
+                    document_handler._handle_minio_upload()
+                finally:
+                    server.bind_mission_project = originals["bind"]
+                    server.fetch_execution_context = originals["context"]
+                    server.mission_task_cwd = originals["cwd"]
+                    server.minio_config = originals["config"]
+                    server.fileserver_put_object = originals["put"]
+                    server.task_status_callback = originals["callback"]
+                    server.persist_tasks = originals["persist"]
+                self.assertEqual([status for status, _ in document_callbacks], ["COMPLETED"])
+                self.assertEqual(document_callbacks[0][1][0]["parseElement"], "LOGICAL_ENTITY")
+                self.assertEqual(document_responses[-1][1]["uploaded"], 1)
             fingerprint_a = server._modeling_input_fingerprint({
                 "dataSource": {"id": 12, "password": "one"}, "parseElements": ["TERM"]},
                 "RMTERM001")

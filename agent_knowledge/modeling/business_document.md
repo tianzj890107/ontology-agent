@@ -40,3 +40,23 @@ PDF文档：业务规范、制度文件、行业标准文档、业务手册
 自动剔除文档冗余话术、无效描述、格式内容，聚焦核心业务语义，保证本体精准贴合业务诉求
 
 支持长文档分段解析、多文档合并建模，适配复杂业务体系构建场景
+
+## 文档建模输入与输出契约
+
+`DOCUMENT_MODELING` 任务会把 DOCX、PPTX、PDF 下载到当前任务的 `mission-input/`，由服务端为每个原文件生成 `manifest.json`、`content.md` 和 `tables/*.csv`。必须先读取 manifest，再完整读取正文、全部章节/页和全部表格；证据引用必须包含文件名以及章节或页码。
+
+文档中的业务语义按 `parseElement` 选择输出，文件名不能自行改名或扩展：
+
+| parseElement | 规范输出文件 | 层级与依赖 |
+| --- | --- | --- |
+| `TERM` | `business_terms.csv`（兼容 `terms.csv`） | 独立，可单独执行 |
+| `LOGICAL_ENTITY` | `logical_entities.csv` | 逻辑模型；正式业务属性和实体关系之前 |
+| `BUSINESS_ATTRIBUTE` | `business_attributes.csv` | 必须归属已识别逻辑实体 |
+| `ENTITY_RELATION` | `entity_relations.csv` | 必须引用已归属实体和属性 |
+| `BUSINESS_OBJECT` | `business_objects.csv` | 必须先完成逻辑实体、正式业务属性、实体关系 |
+| `RULE` | `business_rules.csv`（兼容 `rules.csv`） | 必须引用已完成业务对象 |
+| `METRIC` | `metrics.csv`（兼容 `indicator.csv`） | 必须引用已完成业务对象 |
+| `ACTIVITY` | `activities.csv` | 仅在 execution-context 声明时输出 |
+| `ACTIVITY_FLOW` | `activity_flows.csv`（兼容 `activity_flow.csv`） | 仅在 execution-context 声明时输出 |
+
+只生成并上传 execution-context 的 `expectedFiles` 中列出的文件。业务对象、规则和指标不能绕过前置 artifact；未选择的解析要素不得因文档内容丰富而额外生成文件。

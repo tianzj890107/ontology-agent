@@ -68,7 +68,7 @@ open-claude
 
 It reads `pyproject.toml` and:
 
-1. Installs dependencies: `anthropic`, `rich`, `prompt_toolkit`
+1. Installs dependencies: `anthropic`, `openai`, `rich`, `prompt_toolkit`, `pypdf`
 2. Registers the `open-claude` command on your PATH (via `[project.scripts]`)
 3. `-e` (editable) means changes to the source code take effect immediately without reinstalling
 
@@ -79,7 +79,7 @@ After this step, you can run `open-claude` from any directory.
 If you don't want to `pip install`, install dependencies manually and run as a Python module:
 
 ```bash
-pip install anthropic rich prompt_toolkit
+pip install anthropic openai rich prompt_toolkit pypdf
 python -m open_claude
 
 # or

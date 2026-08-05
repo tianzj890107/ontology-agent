@@ -304,6 +304,26 @@ SOURCE_DOCS = {
     "natural_language": "自然语言本体建模.docx",
 }
 
+DOCUMENT_OUTPUT_CONTRACT = """## 文档建模输入与输出契约
+
+`DOCUMENT_MODELING` 任务会把 DOCX、PPTX、PDF 下载到当前任务的 `mission-input/`，由服务端为每个原文件生成 `manifest.json`、`content.md` 和 `tables/*.csv`。必须先读取 manifest，再完整读取正文、全部章节/页和全部表格；证据引用必须包含文件名以及章节或页码。
+
+文档中的业务语义按 `parseElement` 选择输出，文件名不能自行改名或扩展：
+
+| parseElement | 规范输出文件 | 层级与依赖 |
+| --- | --- | --- |
+| `TERM` | `business_terms.csv`（兼容 `terms.csv`） | 独立，可单独执行 |
+| `LOGICAL_ENTITY` | `logical_entities.csv` | 逻辑模型；正式业务属性和实体关系之前 |
+| `BUSINESS_ATTRIBUTE` | `business_attributes.csv` | 必须归属已识别逻辑实体 |
+| `ENTITY_RELATION` | `entity_relations.csv` | 必须引用已归属实体和属性 |
+| `BUSINESS_OBJECT` | `business_objects.csv` | 必须先完成逻辑实体、正式业务属性、实体关系 |
+| `RULE` | `business_rules.csv`（兼容 `rules.csv`） | 必须引用已完成业务对象 |
+| `METRIC` | `metrics.csv`（兼容 `indicator.csv`） | 必须引用已完成业务对象 |
+| `ACTIVITY` | `activities.csv` | 仅在 execution-context 声明时输出 |
+| `ACTIVITY_FLOW` | `activity_flows.csv`（兼容 `activity_flow.csv`） | 仅在 execution-context 声明时输出 |
+
+只生成并上传 execution-context 的 `expectedFiles` 中列出的文件。业务对象、规则和指标不能绕过前置 artifact；未选择的解析要素不得因文档内容丰富而额外生成文件。"""
+
 LAYERED_MODELING_ARTIFACTS = """## 分层建模与 artifact 依赖
 
 建模不是可以任意组合的平面任务，必须按服务端提供的 `modelingPlan` 执行。计划身份固定为：
@@ -386,12 +406,15 @@ def build() -> None:
           + v6)
     # 专项文件只保存对应输入源的规则，不重复复制公共建模规范。
     # 运行时由 ontology_knowledge.load_static_knowledge() 按需拼接 base.md。
-    all_parts = [base] + [block(name) for name in SOURCE_DOCS.values()]
+    document_rules = block("业务文档本体建模.docx") + "\n\n" + DOCUMENT_OUTPUT_CONTRACT
+    all_parts = [base] + [document_rules if name == SOURCE_DOCS["business_document"] else block(name)
+                           for name in SOURCE_DOCS.values()]
     write(OUTPUT_DIR / "modeling" / "all_sources.md",
           "# 智能建模任务：全部输入源静态私有知识\n\n" + "\n\n".join(all_parts))
     for key, name in SOURCE_DOCS.items():
         write(OUTPUT_DIR / "modeling" / f"{key}.md",
-              f"# 智能建模任务：{name}专项静态私有知识\n\n{block(name)}")
+              f"# 智能建模任务：{name}专项静态私有知识\n\n"
+              f"{document_rules if key == 'business_document' else block(name)}")
 
     integration_base = "# 智能消歧与整合：目标与规则\n\n" + "\n\n".join(
         block(x) for x in ("智能消歧与整合.docx", "智能消歧与整合规则v0.1.docx"))

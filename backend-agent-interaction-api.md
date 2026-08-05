@@ -159,6 +159,12 @@ X-Ontology-Repository-Id: 1
 | `BUSINESS_ATTRIBUTE` | `business_attributes.csv` |
 | `ENTITY_RELATION` | `entity_relations.csv` |
 | `RULE` | `business_rules.csv` |
+| `TERM` | `business_terms.csv`（兼容 `terms.csv`） |
+| `METRIC` | `metrics.csv`（兼容 `indicator.csv`） |
+| `ACTIVITY` | `activities.csv` |
+| `ACTIVITY_FLOW` | `activity_flows.csv`（兼容 `activity_flow.csv`） |
+
+文档任务还会将 DOCX、PPTX、PDF 原文件下载至当前任务的 `mission-input/`，并生成同目录的文档 bundle：`manifest.json` 记录章节/页和表格，`content.md` 保存完整文本，`tables/*.csv` 保存可识别表格。Agent 必须先读取 manifest，再完整读取全部正文、章节/页和表格；输出文件严格受 `expectedFiles` 和上表映射约束。TERM 可独立执行；BUSINESS_OBJECT 必须依赖完整逻辑模型；RULE/METRIC 必须引用已完成业务对象。
 
 ### 4.2 状态回调
 

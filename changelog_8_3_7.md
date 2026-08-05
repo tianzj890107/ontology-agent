@@ -168,3 +168,11 @@
 
 - 折叠和展开状态的思维链标题交互区域统一从 64% 调整为 75%，保留整行之外的可控点击范围和摘要省略显示。
 - 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 25. 文档逆向建模闭环
+
+- 根据 `DOCUMENT_MODELING`、`document`/`documents` 和 `sourceMode` 自动识别文档输入模式；任务上下文会附带明确的 `parseElement` 与文档输出文件契约，保持 TERM 独立、逻辑模型先于业务对象、规则/指标引用业务对象的分层依赖。
+- DOCX、PPTX、PDF 输入在当前任务 `mission-input/` 中统一解析为 `manifest.json`、完整 `content.md` 和 `tables/*.csv`；manifest 记录来源指纹、章节/页和表格，Agent 按章节/页读取证据，避免只读摘要或第一页。
+- 补齐文档结果文件映射：术语、逻辑实体、业务属性、实体关系、业务对象、规则、指标、活动及活动流均按 `expectedFiles` 受控生成和上传；同步更新接口文档和文档专项知识。
+- 新增文档解析单元测试和文档任务闭环测试，覆盖对象存储下载、DOCX 解析、建模上下文契约、结果上传及 `COMPLETED` 回调。
+- 主要文件：`open-claude/open_claude/document_parser.py`、`open-claude/oc_codex_server.py`、`scripts/build_agent_knowledge.py`、`agent_knowledge/modeling/business_document.md`、`backend-agent-interaction-api.md`、`tests/test_document_parser.py`、`tests/test_ontology_knowledge.py`。
