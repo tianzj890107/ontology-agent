@@ -72,6 +72,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("FRONTEND_DIST", source)
         self.assertIn("_serve_frontend_asset", source)
         self.assertIn('"..", "frontend", "dist"', source)
+        self.assertIn("def _stamp_event(event)", source)
+        self.assertIn('"timestamp": time.time()', source)
 
 
 if __name__ == "__main__":

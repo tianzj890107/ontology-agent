@@ -46,6 +46,7 @@
 - 已完成的思维链步骤在行尾显示耗时，例如 `32ms`；完成状态节点不显示额外耗时。
 - 思考节点完成后显示“已思考 …s”，执行中的思考节点仍显示旋转提示。
 - 工具执行按对应 `tool_result` 计算，审批等待按对应 `approval_result` 计算；当前尚未结束的步骤不显示耗时。
+- 新产生的事件由服务端记录时间戳，重新打开会话时也可继续计算已持久化事件的耗时。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
 ### 3. Qwen 与团队模型重名路由修复

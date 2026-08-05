@@ -2606,21 +2606,33 @@ class Task:
 
     # -- one full agentic turn, streamed --------------------------------------
 
+    @staticmethod
+    def _stamp_event(event):
+        """Attach a wall-clock timestamp so replayed steps can show duration."""
+        if not isinstance(event, dict) or "timestamp" in event:
+            return event
+        return {**event, "timestamp": time.time()}
+
     def stream_turn(self, text: str, emit, display_text: str | None = None,
                     platform_authorization: str = ""):
         """Run one turn; keep an optional short UI label separate from LLM input."""
         display_text = str(display_text or text).strip() or text
         failure_message = ""
+
+        def emit_timed(ev):
+            try:
+                emit(self._stamp_event(ev))
+            except OSError:
+                pass
+
         def rec(ev):
-            self.log.append(ev)
+            event = self._stamp_event(ev)
+            self.log.append(event)
             if len(self.log) > 10000:
                 del self.log[:-10000]
             try: persist_tasks()
             except Exception: pass
-            try:
-                emit(ev)                    # 客户端断开时继续后台执行,不中断回合
-            except OSError:
-                pass
+            emit_timed(event)                # 客户端断开时继续后台执行,不中断回合
 
         with self.lock:
             self._rec = rec
@@ -2629,7 +2641,7 @@ class Task:
             self.updated = time.time()
             if self.title == "新任务" and display_text:
                 self.title = display_text[:48]
-            self.log.append({"type": "user", "text": display_text})
+            self.log.append(self._stamp_event({"type": "user", "text": display_text}))
             conv.add_user_message(text)
             # 用户消息和“working”状态先持久化，进程中断后仍能恢复该任务。
             persist_tasks()
@@ -2638,13 +2650,13 @@ class Task:
 
             def flush_text():
                 if text_buf:
-                    self.log.append({"type": "assistant", "text": "".join(text_buf)})
+                    self.log.append(self._stamp_event({"type": "assistant", "text": "".join(text_buf)}))
                     text_buf.clear()
 
             try:
                 for _ in range(max(1, conv.profile.max_iterations)):
                     conv._maybe_compact()
-                    stop_reason = self._stream_once(conv, emit, text_buf, flush_text)
+                    stop_reason = self._stream_once(conv, emit_timed, text_buf, flush_text)
 
                     if stop_reason == "tool_use":
                         # Reuse open-claude's exact execution path (permissions,
@@ -2692,11 +2704,8 @@ class Task:
                 try: persist_tasks()
                 except Exception: pass
                 cost = getattr(conv.cost_tracker, "total_cost_usd", 0.0)
-                try:
-                    emit({"type": "done", "model": conv.model, "cost": round(cost, 5),
-                          "status": self.status})
-                except OSError:
-                    pass
+                emit_timed({"type": "done", "model": conv.model, "cost": round(cost, 5),
+                            "status": self.status})
 
     def _stream_once(self, conv, emit, text_buf, flush_text) -> str:
         tool_uses = []
@@ -2707,12 +2716,12 @@ class Task:
         api_key = user_api_key(self.user_id, provider)
         if not api_key and provider != "anthropic":
             message = "当前用户未配置该模型提供方的 API Key，请在“LLM模型参数”中配置自己的 Key"
-            self.log.append({"type": "error", "error": message})
+            self.log.append(self._stamp_event({"type": "error", "error": message}))
             emit({"type": "error", "error": message})
             return "error"
         allowed, budget_error = check_user_budget(self.user_id)
         if not allowed:
-            self.log.append({"type": "error", "error": budget_error})
+            self.log.append(self._stamp_event({"type": "error", "error": budget_error}))
             emit({"type": "error", "error": budget_error})
             return "error"
 
@@ -2738,10 +2747,12 @@ class Task:
                 flush_text()
                 tool_event = {"type": "tool_use", "id": ev["id"],
                               "name": ev["name"], "input": ev["input"]}
+                tool_event = self._stamp_event(tool_event)
                 self.log.append(tool_event)
                 emit(tool_event)
                 audit = build_tool_audit(ev["name"], ev.get("input"))
                 if audit:
+                    audit = self._stamp_event(audit)
                     self.log.append(audit)
                     emit(audit)
             elif t == "message_end":
@@ -2758,11 +2769,12 @@ class Task:
                     record_user_usage(self.user_id, u, conv.model)
             elif t == "model_switch":
                 conv.model = ev.get("to") or conv.model
+                ev = self._stamp_event(ev)
                 self.log.append(ev)
                 emit(ev)
             elif t == "error":
                 flush_text()
-                self.log.append({"type": "error", "error": ev["error"]})
+                self.log.append(self._stamp_event({"type": "error", "error": ev["error"]}))
                 emit({"type": "error", "error": ev["error"]})
                 stop_reason = "error"
                 break
