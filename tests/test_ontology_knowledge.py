@@ -83,8 +83,11 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("唯一的核心判定规范", modeling)
         self.assertIn("COMPOSITION 和 EXTENSION", modeling)
         self.assertNotIn("自底向上业务对象识别规范_v3.md", modeling)
-        self.assertIn("本体元模型.xlsx", modeling)
-        self.assertIn("本体元模型模板.xlsx", modeling)
+        self.assertIn("本体元模型2.xlsx", modeling)
+        self.assertIn("本体元模型模板 2.xlsx", modeling)
+        self.assertIn("是否页面显示", modeling)
+        self.assertNotIn("本体元模型.xlsx", modeling)
+        self.assertNotIn("本体元模型模板.xlsx", modeling)
         self.assertNotIn("本体建模步骤拆解.xlsx", modeling)
         self.assertEqual(modeling_skill_modules({}), ())
         self.assertEqual(
@@ -104,6 +107,8 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         metric_rules = (ROOT / "agent_knowledge" / "指标.md").read_text(encoding="utf-8")
         self.assertFalse(metric_rules.startswith("````"))
         self.assertIn("产出下限约束", metric_rules)
+        self.assertIn("本体元模型2.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型2.md").read_text(encoding="utf-8"))
+        self.assertIn("本体元模型模板 2.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板 2.md").read_text(encoding="utf-8"))
         self.assertIn("本体元模型.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型.md").read_text(encoding="utf-8"))
         self.assertIn("本体元模型模板.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板.md").read_text(encoding="utf-8"))
         data_model_rules = (ROOT / "agent_knowledge" / "modeling" / "数据模型建模规范-v0.2.md").read_text(encoding="utf-8")
@@ -218,6 +223,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertIn("COMPOSITION 和 EXTENSION", server.build_modeling_instructions({}))
             self.assertIn("候选业务属性", server.build_modeling_instructions({}))
             self.assertIn("属性归属", server.build_modeling_instructions({}))
+            self.assertIn("是否页面显示", server.build_modeling_instructions({}))
             layered_instructions = server.build_modeling_instructions({
                 "taskType": "modeling", "repositoryId": "1", "taskCode": "RM123456789",
                 "parseElements": ["LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "ENTITY_RELATION", "BUSINESS_OBJECT", "RULE", "METRIC"],
@@ -256,6 +262,14 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 binary = Path(tmp) / "binary.xlsx"
                 binary.write_bytes(b"PK\x03\x04" + b"\x00" * 32)
                 self.assertIn("不能使用 Read", execute_read({"file_path": str(binary)}, tmp))
+            with tempfile.TemporaryDirectory() as reference_tmp:
+                references = server.ensure_mission_reference_files(reference_tmp)
+                self.assertEqual(
+                    references,
+                    ["mission-input/本体元模型2.xlsx", "mission-input/本体元模型模板 2.xlsx"],
+                )
+                self.assertTrue((Path(reference_tmp) / references[0]).is_file())
+                self.assertTrue((Path(reference_tmp) / references[1]).is_file())
             handler = object.__new__(server.Handler)
             self.assertEqual(handler._mission_from("1", "RM123456789", "modeling")["taskCode"],
                              "RM123456789")
@@ -279,6 +293,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertFalse(server.upstream_context_configuration_error("认证失败: 访问Token不存在"))
             self.assertFalse(server.upstream_context_configuration_error("integration task does not exist"))
             server_source = (ROOT / "open-claude" / "oc_codex_server.py").read_text(encoding="utf-8")
+            self.assertIn('reference_names = ("本体元模型2.xlsx", "本体元模型模板 2.xlsx")', server_source)
             self.assertIn("context_config_err or last_err", server_source)
             self.assertIn('task_status_callback(\n                    task, "COMPLETED"', server_source)
             self.assertIn('"MODELING_DEPENDENCY_BLOCKED"', server_source)
@@ -694,8 +709,8 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 )
                 business_attribute = output / "business_attributes.csv"
                 business_attribute.write_text(
-                    "逻辑实体编码,逻辑实体名称,业务属性编码,业务属性名称,业务属性英文名称,业务属性定义,数据类型,是否主键,是否非空\n"
-                    "LE1,采购订单,BA1,订单号,orderNumber,订单标识,文本,true,true\n",
+                    "逻辑实体编码,逻辑实体名称,业务属性编码,业务属性名称,业务属性英文名称,业务属性定义,数据类型,是否主键,是否非空,是否页面显示\n"
+                    "LE1,采购订单,BA1,订单号,orderNumber,订单标识,文本,true,true,N\n",
                     encoding="utf-8",
                 )
 
@@ -797,6 +812,18 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertEqual(server.validate_integration_csv(
                 "business_rules.csv", "规则编码,规则名称,分类,规则描述,来源内容\nR1,规则,约束规则,描述,源模型\n".encode("utf-8")
             ), [])
+            page_header = "逻辑实体编码,逻辑实体名称,业务属性编码,业务属性名称,业务属性英文名称,业务属性定义,数据类型,是否主键,是否非空,是否页面显示\n"
+            page_valid = page_header + (
+                "LE1,采购订单,BA1,订单编码,orderCode,订单唯一标识,文本,是,是,N\n"
+                "LE1,采购订单,BA2,订单名称,orderName,订单显示名称,文本,否,否,Y\n"
+            )
+            self.assertEqual(server.validate_modeling_csv("business_attributes.csv", page_valid.encode("utf-8")), [])
+            self.assertEqual(server.validate_integration_csv("business_attributes.csv", page_valid.encode("utf-8")), [])
+            page_invalid = page_valid.replace("订单名称,orderName,订单显示名称,文本,否,否,Y", "订单名称,orderName,订单显示名称,文本,否,否,N")
+            self.assertTrue(server.validate_modeling_csv("business_attributes.csv", page_invalid.encode("utf-8")))
+            self.assertTrue(server.validate_modeling_csv(
+                "business_attributes.csv", (page_header + "LE1,采购订单,BA1\n").encode("utf-8")
+            ))
             relation_header = "关系编码,源逻辑实体编码,源逻辑实体名称,目标逻辑实体编码,目标逻辑实体名称,关系分类编码,关系分类,关系中文名称,关系英文名称,关系基数,反向关系中文名称,反向关系英文名称,关系描述,源关联属性编码,源关联属性英文名,源关联属性中文名,目标关联属性编码,目标关联属性英文名,目标关联属性中文名\n"
             bad_relation = relation_header + "R1,E1,订单,E2,客户,REL,错误分类,属于,belongs,一对多,,,,,,,,,\n"
             self.assertTrue(server.validate_integration_csv("entity_relations.csv", bad_relation.encode("utf-8")))

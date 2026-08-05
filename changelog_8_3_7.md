@@ -205,3 +205,10 @@
 - 在原 80% 间距基础上继续调整为约 75%；节点内边距改为 3px，节点间隔改为 2.4px。
 - 竖线起始位置同步调整，保持与图标中心对齐。
 - 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 31. 本体元模型 2 与页面显示字段
+
+- 本体建模任务的两份固定参考输入更新为 `mission-input/本体元模型2.xlsx` 和 `mission-input/本体元模型模板 2.xlsx`；旧版元模型和模板仅保留为历史参考，不再自动复制到任务目录。
+- 模板 2 的 `business_attributes.csv` 增加最后一列 `是否页面显示`：同一逻辑实体同时存在 `XXX编码`（主键）和 `XXX名称` 时，`XXX名称` 为 `Y`，其他业务属性统一为 `N`。
+- Agent 静态知识、建模 system prompt、服务端 CSV 校验及接口文档同步使用模板 2 的十列表头；非法值、空值或不符合编码/名称配对规则的结果会在上传前拒绝。
+- 主要文件：`rules/本体元模型2.xlsx`、`rules/本体元模型模板 2.xlsx`、`scripts/build_agent_knowledge.py`、`agent_knowledge/modeling/`、`open-claude/oc_codex_server.py`、`backend-agent-interaction-api.md`。

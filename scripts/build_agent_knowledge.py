@@ -169,7 +169,7 @@ INTEGRATION_OUTPUT_SCHEMA = """# 智能消歧与整合输出文件字段契约
 
 ## 本体元素结果文件
 
-这些文件沿用《本体元模型模板》的字段名称，字段顺序不能改变。
+这些文件沿用《本体元模型模板 2》的字段名称，字段顺序不能改变。
 
 ### `business_objects.csv`：业务对象
 
@@ -207,6 +207,7 @@ INTEGRATION_OUTPUT_SCHEMA = """# 智能消歧与整合输出文件字段契约
 | 数据类型 | 是 | 统一的数据类型名称 |
 | 是否主键 | 是 | 统一使用 `是` 或 `否` |
 | 是否非空 | 是 | 统一使用 `是` 或 `否` |
+| 是否页面显示 | 是 | 逻辑实体同时存在 `XXX编码`（主键）和 `XXX名称` 时，`XXX名称` 为 `Y`；其他业务属性为 `N` |
 
 ### `entity_relations.csv`：实体关系
 
@@ -289,9 +290,13 @@ INTEGRATION_OUTPUT_SCHEMA = """# 智能消歧与整合输出文件字段契约
 
 
 BASE_REFERENCE_SOURCES = [
-    "本体元模型.xlsx",
-    "本体元模型模板.xlsx",
+    "本体元模型2.xlsx",
+    "本体元模型模板 2.xlsx",
     "数据模型建模规范-v0.2.xlsx",
+]
+MISSION_REFERENCE_SOURCES = [
+    "本体元模型2.xlsx",
+    "本体元模型模板 2.xlsx",
 ]
 DATA_MODELING_STANDARD_FILENAME = "数据模型建模规范-v0.2.md"
 V6_STANDARD_FILENAME = "通用业务对象与逻辑实体识别规范_V6.md"
@@ -351,6 +356,15 @@ TERM ─────────────────────────
 - 缺少依赖时禁止生成下游 CSV，也不得把待确认或驳回结果伪装成已完成 artifact。
 """
 
+PAGE_DISPLAY_RULES = """## 业务属性页面显示规则
+
+`business_attributes.csv` 必须严格使用本体元模型模板 2 的最后一列 `是否页面显示`：
+
+- 当同一逻辑实体存在 `XXX编码`（且为主键）和 `XXX名称` 两个业务属性时，将 `XXX名称` 的值设置为 `Y`。
+- 其他所有业务属性的值统一设置为 `N`，不得留空、使用其他大小写或自行扩展枚举。
+- `XXX编码` 与 `XXX名称` 必须属于同一逻辑实体；仅有编码或仅有名称时，不触发页面显示，全部使用 `N`。
+"""
+
 
 def build() -> None:
     write(OUTPUT_DIR / "README.md", f"""# Agent 静态知识库
@@ -362,7 +376,8 @@ def build() -> None:
 - 运行服务只读取已经生成的 Markdown，不会在服务器实时解析 DOCX/XLSX，也不会修改本目录。
 - `integration/` 用于智能消歧与整合：`base.md` 是目标和规则，`template.md` 是 Excel 模板，`output_schema.md` 是十类结果 CSV 的字段契约，`all_sources.md` 是组合后的 system prompt 知识。
 - `modeling/base.md` 用于所有智能建模任务；各 `modeling/*.md` 文件只保存对应输入源的专项规则，运行时由 Agent 加载器按需拼接公共规则和专项规则，避免重复复制。
-- `modeling/本体元模型.md`、`modeling/本体元模型模板.md` 和 `modeling/本体建模步骤拆解.md` 是建模参考 Markdown；同样内容也已编入 `modeling/base.md`，由 modeling system prompt 静态注入 Agent。
+- `modeling/本体元模型2.md`、`modeling/本体元模型模板 2.md` 和 `modeling/本体建模步骤拆解.md` 是当前建模参考 Markdown；同样内容也已编入 `modeling/base.md`，由 modeling system prompt 静态注入 Agent。
+- 每个任务固定输入文件为 `本体元模型2.xlsx` 和 `本体元模型模板 2.xlsx`；旧版 `本体元模型.xlsx`、`本体元模型模板.xlsx` 仅保留为历史参考，不再复制到任务目录。
 - `modeling/通用业务对象与逻辑实体识别规范_V6.md` 是所有建模任务唯一的核心判定规范：业务属性、逻辑实体、关系分类、实体族、业务对象 R1–R5、UNKNOWN/冲突和一致性校验均以 V6 为准。
 - `modeling/数据模型建模规范-v0.2.md` 已编入 `modeling/base.md`，作为每个建模任务都会注入的公共数据模型参考；它不能覆盖 V6，也不需要用户在每个任务中重复上传。
 - 根目录的 `业务术语.md`、`业务规则.md`、`指标.md` 是按解析要素动态加载的建模专项技能；任务的 `parseElements` 包含 `TERM`、`RULE`、`METRIC`（或其对应的结果文件）时，加载器会在 V6 与输入源专项规则后追加对应技能；未选择的技能不会注入，也不得生成额外结果文件。
@@ -383,13 +398,17 @@ def build() -> None:
             "业务属性识别与归属、逻辑实体识别、关系分类、实体族聚合、候选主实体、R1–R5、UNKNOWN、冲突处理和一致性校验"
             "必须严格按 V6 执行。历史规则、示例和来源专项说明只能补充输入提取、字段映射或模板，"
             "不得改变或覆盖 V6 的结论、枚举和判定流程。\n\n"
-            + LAYERED_MODELING_ARTIFACTS.rstrip() + "\n\n" + v6
+            + LAYERED_MODELING_ARTIFACTS.rstrip() + "\n\n" + PAGE_DISPLAY_RULES.rstrip() + "\n\n" + v6
             + "\n\n## 本体元模型与结果模板参考\n\n" + references)
     write(OUTPUT_DIR / "modeling" / "base.md", base)
+    write(OUTPUT_DIR / "modeling" / "本体元模型2.md",
+          "# 本体元模型 2：静态 Markdown\n\n" + block("本体元模型2.xlsx"))
     write(OUTPUT_DIR / "modeling" / "本体元模型.md",
           "# 本体元模型：静态 Markdown\n\n" + block("本体元模型.xlsx"))
+    write(OUTPUT_DIR / "modeling" / "本体元模型模板 2.md",
+          "# 本体元模型模板 2：静态 Markdown\n\n" + block("本体元模型模板 2.xlsx"))
     write(OUTPUT_DIR / "modeling" / "本体元模型模板.md",
-          "# 本体元模型模板：静态 Markdown\n\n" + block("本体元模型模板.xlsx"))
+          "# 本体元模型模板（历史版本）：静态 Markdown\n\n" + block("本体元模型模板.xlsx"))
     write(OUTPUT_DIR / "modeling" / "本体建模步骤拆解.md",
           "# 本体建模步骤拆解：静态 Markdown\n\n" + block("本体建模步骤拆解.xlsx"))
     write(OUTPUT_DIR / "modeling" / "数据模型建模规范-20260626.md",

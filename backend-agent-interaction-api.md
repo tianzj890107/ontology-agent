@@ -166,6 +166,8 @@ X-Ontology-Repository-Id: 1
 
 文档任务还会将 DOCX、PPTX、PDF 原文件下载至当前任务的 `mission-input/`，并生成同目录的文档 bundle：`manifest.json` 记录章节/页和表格，`content.md` 保存完整文本，`tables/*.csv` 保存可识别表格。Agent 必须先读取 manifest，再完整读取全部正文、章节/页和表格；输出文件严格受 `expectedFiles` 和上表映射约束。TERM 可独立执行；BUSINESS_OBJECT 必须依赖完整逻辑模型；RULE/METRIC 必须引用已完成业务对象。
 
+所有本体建模任务还会自动在 `mission-input/` 放入两份固定参考文件：`本体元模型2.xlsx` 和 `本体元模型模板 2.xlsx`。旧版本体元模型文件不会再作为任务固定输入。`business_attributes.csv` 必须严格使用模板 2 的十列表头，最后一列为 `是否页面显示`：同一逻辑实体同时存在 `XXX编码`（主键）和 `XXX名称` 时，`XXX名称` 填 `Y`；其他业务属性统一填 `N`。
+
 ### 4.2 状态回调
 
 ```http
