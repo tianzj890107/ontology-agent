@@ -83,6 +83,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('clickEvent.stopPropagation(); onFile(part);', source)
         self.assertIn('const feedRef = useRef(null);', source)
         self.assertIn('const feedPinnedRef = useRef(true);', source)
+        self.assertIn('if (MISSION) await loadMission();', source)
+        self.assertIn('await loadTasks();', source)
         self.assertIn('if (feed && feedPinnedRef.current) feed.scrollTop = feed.scrollHeight;', source)
         self.assertIn('feedPinnedRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight <= 56;', source)
         self.assertIn('onScroll={handleFeedScroll}', source)
