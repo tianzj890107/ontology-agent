@@ -229,7 +229,17 @@ def _mission_task_user_matches(task, user_id: str) -> bool:
     """
     owner = str(getattr(task, "user_id", "") or "")
     current = str(user_id or "")
-    if not owner or not current or owner == current:
+    # A persisted task without an owner is a legacy record, not a public
+    # record.  It may be claimed only after the mission endpoint has
+    # authenticated the same repository/task tuple (see
+    # ``claim_legacy_mission_tasks``), or in the explicitly enabled local
+    # development mode.  Treating an empty owner as universally visible made
+    # an unclaimed task an IDOR boundary.
+    if not current:
+        return False
+    if not owner:
+        return _local_dev_auth_enabled() and current.startswith("local:")
+    if owner == current:
         return True
     return _local_dev_auth_enabled() and current.startswith("local:") and owner.startswith("local:")
 
@@ -1371,9 +1381,10 @@ def cached_mission_context(repository_id: str, task_code: str, user_id: str = ""
         matches = [t for t in TASKS.values()
                    if str(t.repository_id or "") == repository_id
                    and str(t.task_code or "") == task_code
-                   and (not user_id or not getattr(t, "user_id", "")
-                        or getattr(t, "user_id", "") == user_id
-                        or (allow_legacy_local and str(getattr(t, "user_id", "")).startswith("local:")))
+                   and (not user_id
+                        or _mission_task_user_matches(t, user_id)
+                        or (allow_legacy_local
+                            and str(getattr(t, "user_id", "")).startswith("local:")))
                    and isinstance(t.mission_context, dict)
                    and t.mission_context]
         if not matches:
@@ -1450,18 +1461,21 @@ def claim_legacy_mission_tasks(repository_id: str, task_code: str, user_id: str 
     """Attach pre-JWT local-browser sessions to their platform-authorised owner.
 
     This is intentionally limited to records owned by the old `local:` browser
-    identity and is called only after the platform accepts the same
-    repository/task tuple for the current authenticated user.
+    identity (or an ownerless pre-auth record) and is called only after the
+    platform accepts the same repository/task tuple for the current
+    authenticated user.  Explicit local development auth may claim an
+    ownerless legacy record as well.
     """
     current = _safe_user_id(user_id)
-    if not current or current.startswith("local:"):
+    if not current or (current.startswith("local:") and not _local_dev_auth_enabled()):
         return 0
     changed = 0
     with TASKS_LOCK:
         for task in TASKS.values():
+            owner = str(task.user_id or "")
             if (str(task.repository_id or "") != str(repository_id or "")
                     or str(task.task_code or "") != str(task_code or "")
-                    or not str(task.user_id or "").startswith("local:")):
+                    or not (owner.startswith("local:") or not owner)):
                 continue
             task.user_id = current
             task.conv.model = user_model(current)
@@ -3369,6 +3383,19 @@ class Handler(BaseHTTPRequestHandler):
             persist_tasks()
         return task
 
+    def _owned_task_for_detail(self, task_id, repository_id="", task_code=""):
+        """Resolve a task detail only after ownership and mission identity checks."""
+        task = self._owned_task(task_id)
+        if not task:
+            return None
+        repository_id = str(repository_id or "").strip()
+        task_code = str(task_code or "").strip()
+        if ((repository_id and str(task.repository_id or "") != repository_id)
+                or (task_code and str(task.task_code or "") != task_code)):
+            self._send_json({"error": "任务标识与当前会话不一致"}, status=403)
+            return None
+        return task
+
     def _send_json(self, obj, status=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -3492,10 +3519,7 @@ class Handler(BaseHTTPRequestHandler):
             task_code = (query.get("taskCode") or [""])[0]
             with TASKS_LOCK:
                 items = [t for t in TASKS.values()
-                         if ((t.user_id == user)
-                             or (repository_id and task_code
-                                 and t.repository_id == repository_id
-                                 and t.task_code == task_code))
+                         if _mission_task_user_matches(t, user)
                          and (not repository_id or t.repository_id == repository_id)
                          and (not task_code or t.task_code == task_code)]
                 items.sort(key=lambda t: t.updated, reverse=True)
@@ -3506,11 +3530,7 @@ class Handler(BaseHTTPRequestHandler):
                 detail_query = parse_qs(urlparse(self.path).query)
                 requested_repo = (detail_query.get("repositoryId") or [""])[0]
                 requested_code = (detail_query.get("taskCode") or [""])[0]
-                task = TASKS.get(m.group(1))
-                mission_match = bool(task and requested_repo and requested_code
-                                     and task.repository_id == requested_repo
-                                     and task.task_code == requested_code)
-                task = self._owned_task(m.group(1)) if not mission_match else task
+                task = self._owned_task_for_detail(m.group(1), requested_repo, requested_code)
                 if not task: return
                 if not task.log:
                     task.log = task.rebuild_log_from_conversation()

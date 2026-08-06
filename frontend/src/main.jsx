@@ -640,7 +640,17 @@ function App() {
     setMissionLoading(false);
   };
 
-  useEffect(() => { loadMeta(); loadTasks(); loadMission(); }, []);
+  useEffect(() => {
+    // Mission loading also authenticates and claims compatible legacy local
+    // sessions.  Serialize it before loading/opening tasks so a historical
+    // conversation cannot race that ownership migration.
+    const bootstrap = async () => {
+      await loadMeta();
+      if (MISSION) await loadMission();
+      await loadTasks();
+    };
+    void bootstrap();
+  }, []);
   useEffect(() => { if (!selectedProject && meta.projects?.length) setSelectedProject(meta.projects[0].name); }, [meta.projects, selectedProject]);
   useEffect(() => {
     if (!MISSION || !tasks.length || active) return;

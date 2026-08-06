@@ -576,6 +576,13 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 server.persist_tasks = lambda: None
                 self.assertEqual(server.claim_legacy_mission_tasks("1", "RM123456789", "platform-user"), 1)
                 self.assertEqual(legacy_task.user_id, "platform-user")
+                unowned_task = types.SimpleNamespace(
+                    repository_id="1", task_code="RM123456789", user_id="",
+                    conv=types.SimpleNamespace(model="old-model"),
+                )
+                server.TASKS = {"unowned": unowned_task}
+                self.assertEqual(server.claim_legacy_mission_tasks("1", "RM123456789", "platform-user"), 1)
+                self.assertEqual(unowned_task.user_id, "platform-user")
             finally:
                 server.TASKS, server.persist_tasks = original_tasks, original_persist
             callback_calls = []
@@ -636,6 +643,30 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     )
                     self.assertTrue(server._mission_task_user_matches(existing, "local:current-browser"))
                     self.assertFalse(server._mission_task_user_matches(existing, "external-user"))
+                    unclaimed = types.SimpleNamespace(user_id="")
+                    self.assertFalse(server._mission_task_user_matches(unclaimed, "external-user"))
+                    old_local_auth = os.environ.get("ONTOLOGY_ALLOW_LOCAL_DEV_AUTH")
+                    try:
+                        os.environ["ONTOLOGY_ALLOW_LOCAL_DEV_AUTH"] = "true"
+                        self.assertTrue(server._mission_task_user_matches(unclaimed, "local:current-browser"))
+                    finally:
+                        if old_local_auth is None:
+                            os.environ.pop("ONTOLOGY_ALLOW_LOCAL_DEV_AUTH", None)
+                        else:
+                            os.environ["ONTOLOGY_ALLOW_LOCAL_DEV_AUTH"] = old_local_auth
+                    # A mission query must not turn a foreign task into a
+                    # readable detail record.  The route helper performs the
+                    # ownership check before validating the tuple.
+                    owned_detail = types.SimpleNamespace(
+                        repository_id="1", task_code="RM123456789", user_id="current-user",
+                    )
+                    detail_handler = object.__new__(server.Handler)
+                    detail_handler._owned_task = lambda task_id: owned_detail
+                    detail_responses = []
+                    detail_handler._send_json = lambda payload, status=200: detail_responses.append((payload, status))
+                    self.assertIsNone(detail_handler._owned_task_for_detail(
+                        "task-1", "2", "RM123456789"))
+                    self.assertEqual(detail_responses[-1][1], 403)
                     legacy_input = Path(server.SCRIPT_DIR) / "mission-input"
                     legacy_input.mkdir(parents=True)
                     object_key = "bucket/source.xlsx"
