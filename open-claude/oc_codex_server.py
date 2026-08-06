@@ -2866,15 +2866,7 @@ class Task:
         """
         display_text = str(display_text or text).strip() or text
         failure_message = ""
-        original_system_prompt = self.conv.system_prompt
-        if conversational:
-            self.conv.system_prompt = original_system_prompt + (
-                "\n\n[当前回合是普通咨询，不是建模启动指令]\n"
-                "只回答用户当前的问题或确认停止意图，不执行当前任务，不调用工具，"
-                "不创建、修改、上传或校验任何结果文件。即使 modelingPlan 中存在"
-                "dependencyErrors，也不得把它当作本回合的拒答理由；如需说明，"
-                "用简短自然语言告知当前任务状态即可。"
-            )
+        original_system_prompt = None
 
         def emit_timed(ev):
             try:
@@ -2892,6 +2884,15 @@ class Task:
             emit_timed(event)                # 客户端断开时继续后台执行,不中断回合
 
         with self.lock:
+            original_system_prompt = self.conv.system_prompt
+            if conversational:
+                self.conv.system_prompt = original_system_prompt + (
+                    "\n\n[当前回合是普通咨询，不是建模启动指令]\n"
+                    "只回答用户当前的问题或确认停止意图，不执行当前任务，不调用工具，"
+                    "不创建、修改、上传或校验任何结果文件。即使 modelingPlan 中存在"
+                    "dependencyErrors，也不得把它当作本回合的拒答理由；如需说明，"
+                    "用简短自然语言告知当前任务状态即可。"
+                )
             self._rec = rec
             conv = self.conv
             self.status = "working"
@@ -2942,7 +2943,7 @@ class Task:
             finally:
                 self._rec = None
                 flush_text()
-                if conversational:
+                if conversational and original_system_prompt is not None:
                     self.conv.system_prompt = original_system_prompt
                 if self.mission_context:
                     ensure_mission_output_files(self.cwd, self.mission_context)
