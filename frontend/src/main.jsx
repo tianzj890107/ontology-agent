@@ -597,6 +597,7 @@ function App() {
   const [messageApi, contextHolder] = message.useMessage();
   const fileInput = useRef(null);
   const feedRef = useRef(null);
+  const feedPinnedRef = useRef(true);
 
   const model = meta.model || "";
   const params = meta.params || { temperature: null, max_tokens: null, thinking: false, thinking_budget: 8000 };
@@ -634,16 +635,26 @@ function App() {
     if (view !== "task" || !feedRef.current) return undefined;
     const frame = window.requestAnimationFrame(() => {
       const feed = feedRef.current;
-      if (feed) feed.scrollTop = feed.scrollHeight;
+      if (feed && feedPinnedRef.current) feed.scrollTop = feed.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
   }, [events, busy, view]);
+
+  const handleFeedScroll = () => {
+    const feed = feedRef.current;
+    if (!feed) return;
+    // Follow the live stream only while the user is already at the bottom.
+    // Once they scroll up, incoming thought-chain events must not pull them
+    // back down; returning to the bottom resumes live following automatically.
+    feedPinnedRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight <= 56;
+  };
 
   const openTask = async (task) => {
     const detailQuery = MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}` : "";
     const result = await api(`/api/tasks/${task.id}${detailQuery}`);
     if (result.error) { messageApi.error(`打开历史任务失败：${result.error}`); return; }
     const current = result;
+    feedPinnedRef.current = true;
     setActive(current); setEvents(normalizeEvents(current)); setView("task"); setText("");
     if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, current.id);
     // 页面刷新或重新打开历史任务时，审批请求可能已经在服务端挂起，
@@ -667,6 +678,7 @@ function App() {
   const createTask = async () => {
     const result = await api("/api/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: MISSION ? "" : selectedProject || meta.projects?.[0]?.name || "", repositoryId: MISSION?.repositoryId || "", taskCode: MISSION?.taskCode || "", taskType: MISSION?.taskType || "" }) });
     if (result.error) { messageApi.error(result.error); return null; }
+    feedPinnedRef.current = true;
     setTasks((previous) => [result, ...previous.filter((task) => task.id !== result.id)]); setActive(result); setEvents([]); setView("task"); return result;
   };
 
@@ -711,6 +723,9 @@ function App() {
   };
 
   const sendToTask = async (task, content, displayMessage = content) => {
+    // An explicit new request is a user action that should start at the latest
+    // message even if the previous turn was left scrolled up.
+    feedPinnedRef.current = true;
     setBusy(true); appendEvent({ type: "user", text: displayMessage });
     let response;
     try {
@@ -807,7 +822,7 @@ function App() {
       <main className="main-content">
         {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
           <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{MISSION && <Switch checked={autoApprove} onChange={(value) => { autoApproveRef.current = value; setAutoApprove(value); localStorage.setItem("oc_auto_approve", value ? "1" : "0"); if (value) { const pending = events.find((event) => event.type === "approval_request"); if (pending) approve(pending.id, true, active); } }} checkedChildren="自动确认：开" unCheckedChildren="自动确认：关" />}<Button onClick={() => { setFilesOpen(true); loadFiles(); }}>📂 文件</Button></header>
-          <div ref={feedRef} className="feed"><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} /></div>
+          <div ref={feedRef} className="feed" onScroll={handleFeedScroll}><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} /></div>
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></div>
         </section>}
       </main>

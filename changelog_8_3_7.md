@@ -288,3 +288,10 @@
 - 会话压缩不会再把 assistant 工具调用和后续工具结果拆到不同上下文，避免产生孤立 `role=tool` 消息。
 - 保留 DeepSeek 思考模式返回的 `reasoning_content`，在下一轮工具调用时原样回传；流式、非流式、网页 Agent、CLI 和子 Agent 共用同一兼容逻辑。
 - 主要文件：`open-claude/open_claude/openai_compat.py`、`open-claude/open_claude/compact.py`、`open-claude/oc_codex_server.py`、`open-claude/open_claude/repl.py`、`open-claude/open_claude/agent.py`、`tests/test_openai_compat.py`。
+
+### 44. 思考过程支持上滑查看历史内容
+
+- Agent 思考或执行任务期间，只在用户位于会话底部时自动跟随最新事件。
+- 用户向上滚动后保持当前位置，不再被持续到达的思维链事件强制拉回底部；滚回底部后自动恢复跟随。
+- 发送新的用户要求、切换历史任务或新建任务时仍自动定位到最新消息。
+- 主要文件：`frontend/src/main.jsx`、`tests/test_frontend_contract.py`。
