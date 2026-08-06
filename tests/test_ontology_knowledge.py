@@ -667,6 +667,26 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     self.assertIsNone(detail_handler._owned_task_for_detail(
                         "task-1", "2", "RM123456789"))
                     self.assertEqual(detail_responses[-1][1], 403)
+                    old_tasks_for_auth = server.TASKS
+                    old_trust_proxy = os.environ.get("ONTOLOGY_TRUST_PROXY_AUTH")
+                    try:
+                        os.environ["ONTOLOGY_TRUST_PROXY_AUTH"] = "true"
+                        server.TASKS = {"foreign": types.SimpleNamespace(
+                            repository_id="1", task_code="RM123456789", user_id="other-user",
+                        )}
+                        foreign_handler = object.__new__(server.Handler)
+                        foreign_handler.headers = {"X-User-Id": "current-user"}
+                        foreign_responses = []
+                        foreign_handler._send_json = lambda payload, status=200: foreign_responses.append((payload, status))
+                        self.assertIsNone(foreign_handler._owned_task_for_detail(
+                            "foreign", "1", "RM123456789"))
+                        self.assertEqual(foreign_responses[-1][1], 403)
+                    finally:
+                        server.TASKS = old_tasks_for_auth
+                        if old_trust_proxy is None:
+                            os.environ.pop("ONTOLOGY_TRUST_PROXY_AUTH", None)
+                        else:
+                            os.environ["ONTOLOGY_TRUST_PROXY_AUTH"] = old_trust_proxy
                     legacy_input = Path(server.SCRIPT_DIR) / "mission-input"
                     legacy_input.mkdir(parents=True)
                     object_key = "bucket/source.xlsx"
