@@ -322,3 +322,8 @@
 - owner 为空的旧任务不再对所有外部用户可见，仅在同一任务经过本体平台鉴权后迁移到当前用户；本地开发模式继续支持显式的旧会话兼容。
 - React 工作台启动时先完成当前任务信息读取和旧会话归属迁移，再加载并打开历史任务，避免首次进入页面时出现“任务详情/文件读取失败”的竞态。
 - 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`tests/test_ontology_knowledge.py`。
+
+### 46. 鉴权密钥文件句柄清理
+
+- 鉴权 Cookie 密钥读取改用上下文管理器，避免每次请求留下未关闭的文件句柄；密钥生成、权限和回退行为保持不变。
+- 主要文件：`open-claude/oc_codex_server.py`。

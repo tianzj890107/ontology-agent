@@ -122,7 +122,8 @@ def _auth_secret():
                 os.chmod(_AUTH_SECRET_PATH, 0o600)
             except OSError:
                 pass
-        return open(_AUTH_SECRET_PATH, encoding="ascii").read().strip().encode("utf-8")
+        with open(_AUTH_SECRET_PATH, encoding="ascii") as fh:
+            return fh.read().strip().encode("utf-8")
     except OSError:
         return b"ontology-agent-local-auth-secret"
 
