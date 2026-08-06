@@ -218,6 +218,15 @@
 - 输入对话框的发送按钮改用 IconPark 提供的 SVG 箭头图标，保留原有发送、禁用和自动滚动行为。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+## 2026-08-06
+
+### 33. 普通咨询不提前触发建模失败
+
+- 任务会话中的普通提问、停止/取消指令不再在 Agent 调用前触发建模依赖校验，也不会因为历史建模计划不完整直接回调 `FAILED`。
+- 这类回合以只读咨询模式交给 Agent，只回答当前问题，不调用工具、不生成或修改结果文件；明确点击“开始任务”以及“继续做/生成/执行”等建模指令仍保留严格依赖门禁。
+- 前端向发送接口传递 `startTask`，服务端区分启动请求和普通会话请求；平台上下文漏声明实体关系时，将其作为业务对象任务的内部前置校验，不扩大 expectedFiles 或上传白名单。
+- 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_ontology_knowledge.py`、`tests/test_frontend_contract.py`。
+
 ### 33. 发送和下载图标调整
 
 - 发送箭头改为白色，提升蓝色发送按钮上的对比度。
