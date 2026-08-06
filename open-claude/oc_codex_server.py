@@ -924,6 +924,17 @@ def build_modeling_plan(context: Mapping[str, object] | None = None,
         if element in {"TERM", "RULE", "METRIC", "BUSINESS_OBJECT", "LOGICAL_ENTITY",
                        "BUSINESS_ATTRIBUTE", "ENTITY_RELATION"}:
             requested.add(element)
+    # Some platform versions declare a business-object output together with
+    # logical entities/attributes but omit ENTITY_RELATION from parseElements.
+    # Relation recognition is still a mandatory first-layer validation, but it
+    # is an internal prerequisite in that contract and must not silently widen
+    # expectedFiles or the upload allow-list.
+    implicit_dependencies = set()
+    if ("BUSINESS_OBJECT" in requested
+            and {"LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE"} <= requested
+            and "ENTITY_RELATION" not in requested):
+        requested.add("ENTITY_RELATION")
+        implicit_dependencies.add("ENTITY_RELATION")
     repo = str(context.get("repositoryId") or repository_id or "").strip()
     code = str(context.get("taskCode") or task_code or "").strip()
     model_version = str(context.get("modelVersion") or context.get("model_version")
@@ -975,6 +986,7 @@ def build_modeling_plan(context: Mapping[str, object] | None = None,
             "key": identity_key,
         },
         "requestedElements": sorted(requested),
+        "implicitDependencies": sorted(implicit_dependencies),
         "executionOrder": ["TERM", "CANDIDATE_ATTRIBUTE", "LOGICAL_ENTITY",
                             "BUSINESS_ATTRIBUTE", "ENTITY_RELATION", "BUSINESS_OBJECT",
                             "RULE", "METRIC"],
@@ -987,6 +999,37 @@ def build_modeling_plan(context: Mapping[str, object] | None = None,
 def modeling_dependency_errors(context: Mapping[str, object] | None = None,
                                repository_id: str = "", task_code: str = "") -> list[str]:
     return list(build_modeling_plan(context, repository_id, task_code).get("dependencyErrors") or [])
+
+
+def is_conversational_turn(text: object, *, explicit_start: bool = False) -> bool:
+    """识别不应触发建模前置门禁的普通咨询/控制消息。
+
+    任务工作台的“发送”接口同时承载两类请求：开始/继续建模，以及在任务
+    上下文中向 Agent 提问。后者不应因为历史任务的建模计划不完整而在模型
+    调用前被服务端判定失败。显式点击“开始任务”拥有最高优先级；其余消息
+    只对明显的提问、停止/取消指令做咨询模式判定，普通的“继续做/生成”等
+    建模指令仍走严格依赖校验。
+    """
+    if explicit_start:
+        return False
+    value = str(text or "").strip()
+    if not value:
+        return False
+    # 用户明确表示停止或只是想咨询时，不要把该回合当作下游建模启动。
+    control_patterns = (
+        r"(?:不用|别|不要|先不|暂停|停止|取消).{0,12}(?:做|执行|继续|跑|生成)",
+        r"(?:别做了|不用做了|不要做了|先别执行|先不执行|停止执行|取消任务)",
+        r"(?:问你|想问|问一下|请问|咨询一下|问个问题)",
+    )
+    if any(re.search(pattern, value, flags=re.IGNORECASE) for pattern in control_patterns):
+        return True
+    if any(mark in value for mark in ("?", "？")):
+        return True
+    # 中文问句常常没有问号，覆盖常见疑问词/句式，同时避免把“怎么
+    # 生成/如何执行”这类明确的任务指令误判为咨询。
+    if re.search(r"(?:为什么|是什么|什么是|哪个|哪些|是否|能否|可以吗|怎么回事|发生了什么|能不能|如何查看|怎么看|告诉我|解释一下)", value):
+        return True
+    return bool(re.search(r"(?:吗|呢)$", value))
 
 
 def modeling_upload_dependency_errors(task, context: Mapping[str, object] | None,
@@ -1002,7 +1045,14 @@ def modeling_upload_dependency_errors(task, context: Mapping[str, object] | None
     logical_ref = _artifact_reference_is_ready(context, "logicalModelArtifact")
     business_ref = _artifact_reference_is_ready(context, "businessObjectArtifact")
     if "business_objects.csv" in selected and not logical_ref:
-        missing = sorted(_LOGICAL_MODEL_OUTPUTS - available)
+        expected = normalize_expected_files(context.get("expectedFiles"))
+        # Only files declared by the platform are upload obligations.  A
+        # missing expected logical output means the context is incomplete, so
+        # retain the strict all-layer fallback for legacy/underspecified tasks.
+        required_logical_outputs = _LOGICAL_MODEL_OUTPUTS & expected
+        if not required_logical_outputs:
+            required_logical_outputs = set(_LOGICAL_MODEL_OUTPUTS)
+        missing = sorted(required_logical_outputs - available)
         if missing:
             errors.append("上传 business_objects.csv 前必须先上传并校验：" + ", ".join(missing))
     governance_selected = selected & (MODEL_ARTIFACT_DEFINITIONS["ruleArtifact"]["outputs"]
@@ -2805,10 +2855,26 @@ class Task:
         return {**event, "timestamp": time.time()}
 
     def stream_turn(self, text: str, emit, display_text: str | None = None,
-                    platform_authorization: str = ""):
-        """Run one turn; keep an optional short UI label separate from LLM input."""
+                    platform_authorization: str = "", conversational: bool = False):
+        """Run one turn; keep an optional short UI label separate from LLM input.
+
+        ``conversational`` is used for a normal question/cancellation inside a
+        task chat.  It keeps the task context available for answering, but tells
+        the Agent not to execute tools or produce modelling artefacts for that
+        turn.  This is intentionally a per-turn overlay rather than a mutation
+        of the persisted mission context.
+        """
         display_text = str(display_text or text).strip() or text
         failure_message = ""
+        original_system_prompt = self.conv.system_prompt
+        if conversational:
+            self.conv.system_prompt = original_system_prompt + (
+                "\n\n[当前回合是普通咨询，不是建模启动指令]\n"
+                "只回答用户当前的问题或确认停止意图，不执行当前任务，不调用工具，"
+                "不创建、修改、上传或校验任何结果文件。即使 modelingPlan 中存在"
+                "dependencyErrors，也不得把它当作本回合的拒答理由；如需说明，"
+                "用简短自然语言告知当前任务状态即可。"
+            )
 
         def emit_timed(ev):
             try:
@@ -2876,6 +2942,8 @@ class Task:
             finally:
                 self._rec = None
                 flush_text()
+                if conversational:
+                    self.conv.system_prompt = original_system_prompt
                 if self.mission_context:
                     ensure_mission_output_files(self.cwd, self.mission_context)
                 if self.status == "error" and self.task_code:
@@ -4142,6 +4210,12 @@ class Handler(BaseHTTPRequestHandler):
         display_text = (data.get("displayMessage") or "").strip()
         if not display_text:
             display_text = text
+        # /send also serves ordinary questions in an existing task chat.  Keep
+        # an explicit start marker for the first-run button, then use the
+        # conservative conversational classifier for typed follow-up messages.
+        start_task = bool(data.get("startTask"))
+        conversational_turn = is_conversational_turn(text, explicit_start=start_task)
+        task_execution_request = not conversational_turn
         if task:
             client_context = data.get("missionContext") if isinstance(data.get("missionContext"), dict) else None
             # 任务绑定后，服务端重新读取 execution-context，避免浏览器篡改任务规则/输出范围。
@@ -4163,7 +4237,8 @@ class Handler(BaseHTTPRequestHandler):
         # Enforce the modeling artifact graph before opening a model turn.  A
         # prompt-only rule is insufficient: downstream RULE/METRIC work must
         # never start when its upstream artifact is missing.
-        if task.task_code and normalize_task_type(task.task_type or task.mission_context.get("taskType", "")) == "modeling":
+        if (task.task_code and task_execution_request
+                and normalize_task_type(task.task_type or task.mission_context.get("taskType", "")) == "modeling"):
             dependency_errors = modeling_dependency_errors(
                 task.mission_context, task.repository_id, task.task_code)
             if dependency_errors:
@@ -4205,7 +4280,7 @@ class Handler(BaseHTTPRequestHandler):
         # a history chat or merely reading execution-context must not be treated
         # as agent execution.  A failed RUNNING callback is a start failure: do
         # not run an invisible task that the upstream platform cannot track.
-        if task.task_code and task.platform_status != "RUNNING":
+        if task.task_code and task_execution_request and task.platform_status != "RUNNING":
             started = task_status_callback(task, "RUNNING",
                                            authorization=self.headers.get("Authorization") or "")
             if started.get("ok"):
@@ -4247,13 +4322,14 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass
             return
-        if task.task_code and task.platform_status != "RUNNING":
+        if task.task_code and task_execution_request and task.platform_status != "RUNNING":
             emit({"type": "error", "error": task.platform_last_error or "无法回写 RUNNING 状态，未开始执行"})
             emit({"type": "done", "status": "error"})
             return
         try:
             task.stream_turn(text, emit, display_text,
-                             platform_authorization=self.headers.get("Authorization") or "")
+                             platform_authorization=self.headers.get("Authorization") or "",
+                             conversational=conversational_turn)
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Client disconnected mid-stream; the turn state is already saved.
             pass

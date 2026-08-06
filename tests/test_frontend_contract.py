@@ -85,6 +85,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('feed.scrollTop = feed.scrollHeight;', source)
         self.assertIn('}, [events, busy, view]);', source)
         self.assertIn('<div ref={feedRef} className="feed" onScroll={handleFeedScroll}>', source)
+        self.assertIn('startTask, missionContext: MISSION ? missionContext : null', source)
+        self.assertIn('sendToTask(task, messageText, display, start)', source)
         self.assertIn('function formatDuration(durationMs)', source)
         self.assertIn('`已思考 ${formatDuration(durationMs)}`', source)
         self.assertIn('durationMs={eventDuration(events, index)}', source)

@@ -722,14 +722,14 @@ function App() {
     setPendingFiles([]); return names;
   };
 
-  const sendToTask = async (task, content, displayMessage = content) => {
+  const sendToTask = async (task, content, displayMessage = content, startTask = false) => {
     // An explicit new request is a user action that should start at the latest
     // message even if the previous turn was left scrolled up.
     feedPinnedRef.current = true;
     setBusy(true); appendEvent({ type: "user", text: displayMessage });
     let response;
     try {
-      response = await fetch(`/api/tasks/${task.id}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ message: content, displayMessage, missionContext: MISSION ? missionContext : null }) });
+      response = await fetch(`/api/tasks/${task.id}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ message: content, displayMessage, startTask, missionContext: MISSION ? missionContext : null }) });
     } catch (error) { appendEvent({ type: "error", error: error.message }); setBusy(false); return; }
     if (!response.ok || !response.body) { appendEvent({ type: "error", error: `请求失败(${response.status})` }); setBusy(false); return; }
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
@@ -762,7 +762,7 @@ function App() {
     const names = pendingFiles.length ? await uploadFiles(task, pendingFiles) : [];
     const messageText = start ? "请直接开始执行当前任务\n不需要等待我补充提示词。严格按照当前 execution-context 和系统规则完成全部工作。" : `${userText}${names.length ? `\n\n[用户上传了文件: ${names.join(", ")}]` : ""}`;
     const display = start ? "请直接开始执行当前任务" : userText;
-    setText(""); await sendToTask(task, messageText, display);
+    setText(""); await sendToTask(task, messageText, display, start);
   };
 
   const onAttach = () => fileInput.current?.click();

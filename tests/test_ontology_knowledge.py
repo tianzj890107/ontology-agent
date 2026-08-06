@@ -490,6 +490,25 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             }, "1", "RM123456789")
             self.assertFalse(object_plan["valid"])
             self.assertIn("BUSINESS_OBJECT 必须在逻辑实体", object_plan["dependencyErrors"][0])
+            # A platform context may omit ENTITY_RELATION while still asking
+            # for the first-layer entity/attribute outputs and a downstream
+            # business object.  The server should run relation recognition as
+            # an internal prerequisite, without requiring an undeclared output
+            # file or rejecting a follow-up question before the model call.
+            inferred_relation_plan = server.build_modeling_plan({
+                "taskType": "DOCUMENT_MODELING",
+                "parseElements": ["LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "BUSINESS_OBJECT"],
+                "expectedFiles": ["logical_entities.csv", "business_attributes.csv", "business_objects.csv"],
+            }, "1", "RM123456789")
+            self.assertTrue(inferred_relation_plan["valid"])
+            self.assertIn("ENTITY_RELATION", inferred_relation_plan["requestedElements"])
+            self.assertEqual(inferred_relation_plan.get("implicitDependencies"), ["ENTITY_RELATION"])
+            self.assertTrue(server.is_conversational_turn("你不用做了，问你点问题"))
+            self.assertTrue(server.is_conversational_turn("为什么会失败？"))
+            self.assertTrue(server.is_conversational_turn("别做了"))
+            self.assertFalse(server.is_conversational_turn("继续做"))
+            self.assertFalse(server.is_conversational_turn(
+                "请直接开始执行当前任务", explicit_start=True))
             upload_gate_task = types.SimpleNamespace(
                 repository_id="1", task_code="RM123456789",
                 platform_uploaded_files={"logical_entities.csv": {"sha256": "x"}},
@@ -501,6 +520,23 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 ["mission-output/business_objects.csv"],
             )
             self.assertIn("business_attributes.csv", upload_gate_errors[0])
+            partial_contract_task = types.SimpleNamespace(
+                repository_id="1", task_code="RM123456789",
+                platform_uploaded_files={
+                    "logical_entities.csv": {"sha256": "x"},
+                    "business_attributes.csv": {"sha256": "y"},
+                },
+            )
+            self.assertEqual(
+                server.modeling_upload_dependency_errors(
+                    partial_contract_task,
+                    {"taskType": "DOCUMENT_MODELING",
+                     "parseElements": ["LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "BUSINESS_OBJECT"],
+                     "expectedFiles": ["logical_entities.csv", "business_attributes.csv", "business_objects.csv"]},
+                    ["mission-output/business_objects.csv"],
+                ),
+                [],
+            )
             complete_layers = server.build_modeling_plan({
                 "taskType": "modeling",
                 "parseElements": ["LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "ENTITY_RELATION", "BUSINESS_OBJECT"],
