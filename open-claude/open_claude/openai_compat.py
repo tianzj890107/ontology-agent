@@ -59,76 +59,186 @@ def _is_quota_error(error: Exception) -> bool:
 # Format conversion: Anthropic blocks <-> OpenAI messages
 # ---------------------------------------------------------------------------
 
+def _tool_result_text(content: Any) -> str:
+    """Convert an Anthropic tool result to the string OpenAI expects."""
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or json.dumps(item, ensure_ascii=False)))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _orphan_tool_result_text(tool_id: str, content: Any) -> str:
+    """Keep malformed historical tool output without sending it as ``role=tool``.
+
+    OpenAI-compatible APIs reject a tool message unless it immediately follows
+    an assistant message containing the matching ``tool_calls`` entry.  Older
+    sessions can contain a result whose assistant call was compacted away or
+    whose call id was not persisted.  Representing that output as a normal user
+    message preserves the context while keeping the request valid.
+    """
+    suffix = f"，{tool_id}" if tool_id else ""
+    label = f"工具结果（历史记录{suffix}）"
+    return f"{label}：\n{_tool_result_text(content)}"
+
+
 def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert internal Anthropic-style history to a valid OpenAI message list.
+
+    In particular, never emit an orphan ``role=tool`` message.  A compacted or
+    partially persisted session may contain a tool result without its preceding
+    assistant tool call; forwarding that record makes DeepSeek/LiteLLM return a
+    400 before it can answer the next user message.
+    """
     out: list[dict[str, Any]] = []
     if system_prompt:
         out.append({"role": "system", "content": system_prompt})
 
+    # Only tool results belonging to the immediately preceding assistant tool
+    # call may be emitted with role=tool.  This also handles duplicate or stale
+    # ids in old transcripts without weakening the provider contract.
+    pending_tool_ids: set[str] = set()
+
     for msg in messages:
+        if not isinstance(msg, dict):
+            continue
         role = msg.get("role")
         content = msg.get("content")
+        top_level_reasoning = str(msg.get("reasoning_content") or msg.get("reasoning") or "")
 
         if isinstance(content, str):
-            out.append({"role": role, "content": content})
+            if role == "tool":
+                tool_id = str(msg.get("tool_call_id") or msg.get("tool_use_id") or "")
+                if not tool_id and len(pending_tool_ids) == 1:
+                    tool_id = next(iter(pending_tool_ids))
+                if tool_id and tool_id in pending_tool_ids:
+                    out.append({"role": "tool", "tool_call_id": tool_id,
+                                "content": content})
+                    pending_tool_ids.discard(tool_id)
+                else:
+                    out.append({"role": "user", "content":
+                                _orphan_tool_result_text(tool_id, content)})
+                continue
+            converted: dict[str, Any] = {
+                "role": role if role in ("user", "assistant", "system") else "user",
+                "content": content,
+            }
+            if role == "assistant" and top_level_reasoning:
+                converted["reasoning_content"] = top_level_reasoning
+            out.append(converted)
+            pending_tool_ids.clear()
             continue
         if not isinstance(content, list):
             continue
 
         if role == "assistant":
             text_parts = []
+            reasoning_parts = [top_level_reasoning] if top_level_reasoning else []
             tool_calls = []
             for blk in content:
                 if not isinstance(blk, dict):
                     continue
                 if blk.get("type") == "text":
-                    text_parts.append(blk.get("text", ""))
-                elif blk.get("type") == "tool_use":
+                    text_parts.append(str(blk.get("text") or ""))
+                elif blk.get("type") in ("thinking", "reasoning"):
+                    reasoning_parts.append(str(
+                        blk.get("thinking") or blk.get("reasoning_content") or blk.get("text") or ""
+                    ))
+                elif blk.get("type") in ("tool_use", "tool_call"):
+                    tool_id = str(blk.get("id") or "")
+                    # A stable id is required by the OpenAI protocol.  The
+                    # streaming adapter normally supplies this fallback, but
+                    # it also protects sessions written by older versions.
+                    if not tool_id:
+                        tool_id = f"call_{len(tool_calls)}"
                     tool_calls.append({
-                        "id": blk.get("id", ""),
+                        "id": tool_id,
                         "type": "function",
                         "function": {
-                            "name": blk.get("name", ""),
-                            "arguments": json.dumps(blk.get("input", {}), ensure_ascii=False),
+                            "name": str(blk.get("name") or ""),
+                            "arguments": json.dumps(blk.get("input") or blk.get("arguments") or {},
+                                                      ensure_ascii=False),
                         },
                     })
-            m: dict[str, Any] = {"role": "assistant", "content": "".join(text_parts) or None}
             if tool_calls:
-                m["tool_calls"] = tool_calls
-            out.append(m)
-        else:
-            # user message: either tool_result blocks or text blocks
-            tool_results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
-            if tool_results:
-                for blk in tool_results:
-                    c = blk.get("content", "")
-                    if isinstance(c, list):
-                        c = "\n".join(
-                            x.get("text") if isinstance(x, dict) else str(x) for x in c
-                        )
-                    out.append({
-                        "role": "tool",
-                        "tool_call_id": blk.get("tool_use_id", ""),
-                        "content": str(c),
-                    })
+                assistant_message: dict[str, Any] = {
+                    "role": "assistant", "content": "".join(text_parts) or None,
+                    "tool_calls": tool_calls,
+                }
+                if reasoning_parts:
+                    assistant_message["reasoning_content"] = "".join(reasoning_parts)
+                out.append(assistant_message)
+                pending_tool_ids = {str(call["id"]) for call in tool_calls}
+            elif text_parts:
+                assistant_message = {"role": "assistant", "content": "".join(text_parts)}
+                if reasoning_parts:
+                    assistant_message["reasoning_content"] = "".join(reasoning_parts)
+                out.append(assistant_message)
+                pending_tool_ids.clear()
+            elif reasoning_parts:
+                out.append({"role": "assistant", "content": None,
+                            "reasoning_content": "".join(reasoning_parts)})
+                pending_tool_ids.clear()
             else:
-                # Preserve Anthropic-style base64 images for Qwen-VL and other
-                # OpenAI-compatible multimodal endpoints.
-                parts = []
-                for blk in content:
-                    if not isinstance(blk, dict):
-                        continue
-                    if blk.get("type") == "text":
-                        parts.append({"type": "text", "text": blk.get("text", "")})
-                    elif blk.get("type") == "image":
-                        source = blk.get("source") or {}
-                        if source.get("type") == "base64" and source.get("data"):
-                            media = source.get("media_type", "image/png")
-                            parts.append({"type": "image_url", "image_url": {
-                                "url": f"data:{media};base64,{source['data']}"
-                            }})
-                        elif blk.get("image_url"):
-                            parts.append({"type": "image_url", "image_url": blk["image_url"]})
-                out.append({"role": "user", "content": parts or ""})
+                pending_tool_ids.clear()
+            continue
+
+        # User messages can contain text, images, and/or Anthropic tool
+        # results.  Keep valid results first, then preserve any text/image
+        # content as a normal user message.
+        tool_results = [
+            b for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result"
+        ]
+        text_or_image_blocks = [
+            b for b in content
+            if isinstance(b, dict) and b.get("type") != "tool_result"
+        ]
+        orphan_results: list[str] = []
+        for blk in tool_results:
+            tool_id = str(blk.get("tool_use_id") or blk.get("tool_call_id") or "")
+            if not tool_id and len(pending_tool_ids) == 1:
+                tool_id = next(iter(pending_tool_ids))
+            result = _tool_result_text(blk.get("content", ""))
+            if tool_id and tool_id in pending_tool_ids:
+                out.append({"role": "tool", "tool_call_id": tool_id,
+                            "content": result})
+                pending_tool_ids.discard(tool_id)
+            else:
+                orphan_results.append(_orphan_tool_result_text(tool_id, result))
+
+        if orphan_results:
+            out.append({"role": "user", "content": "\n\n".join(orphan_results)})
+
+        if text_or_image_blocks:
+            # Preserve Anthropic-style base64 images for Qwen-VL and other
+            # OpenAI-compatible multimodal endpoints.
+            parts = []
+            for blk in text_or_image_blocks:
+                if not isinstance(blk, dict):
+                    continue
+                if blk.get("type") == "text":
+                    parts.append({"type": "text", "text": str(blk.get("text") or "")})
+                elif blk.get("type") == "image":
+                    source = blk.get("source") or {}
+                    if source.get("type") == "base64" and source.get("data"):
+                        media = source.get("media_type", "image/png")
+                        parts.append({"type": "image_url", "image_url": {
+                            "url": f"data:{media};base64,{source['data']}"
+                        }})
+                    elif blk.get("image_url"):
+                        parts.append({"type": "image_url", "image_url": blk["image_url"]})
+            if parts:
+                out.append({"role": "user", "content": parts})
+
+        # A plain user message after a tool call invalidates that pending call
+        # sequence; any stale result later in the transcript is orphaned.
+        if text_or_image_blocks or orphan_results:
+            pending_tool_ids.clear()
 
     return out
 
@@ -207,6 +317,16 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
 
             if getattr(delta, "content", None):
                 yield {"type": "text_delta", "text": delta.content}
+
+            # DeepSeek-compatible gateways require the model's reasoning
+            # content to be passed back verbatim when the response also
+            # contains tool calls.  Normalize both common SDK field names so
+            # the web/REPL history can persist it for the next turn.
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning is None:
+                reasoning = getattr(delta, "reasoning", None)
+            if reasoning:
+                yield {"type": "thinking_delta", "text": reasoning}
 
             for tc in (getattr(delta, "tool_calls", None) or []):
                 idx = tc.index if tc.index is not None else 0
@@ -287,6 +407,11 @@ def send(provider: str, model: str, messages: list[dict[str, Any]], system_promp
     msg = resp.choices[0].message
 
     content: list[dict[str, Any]] = []
+    reasoning = getattr(msg, "reasoning_content", None)
+    if reasoning is None:
+        reasoning = getattr(msg, "reasoning", None)
+    if reasoning:
+        content.append({"type": "thinking", "thinking": reasoning})
     if getattr(msg, "content", None):
         content.append({"type": "text", "text": msg.content})
     for tc in (getattr(msg, "tool_calls", None) or []):

@@ -2901,6 +2901,7 @@ class Task:
     def _stream_once(self, conv, emit, text_buf, flush_text) -> str:
         tool_uses = []
         turn_text: list[str] = []
+        turn_thinking: list[str] = []
         stop_reason = "end_turn"
 
         provider = get_model_provider(conv.model)
@@ -2931,6 +2932,7 @@ class Task:
                 text_buf.append(ev["text"])
                 emit({"type": "text", "text": ev["text"]})
             elif t == "thinking_delta":
+                turn_thinking.append(str(ev.get("text") or ""))
                 # Keep each thinking block in the replay log.  The browser
                 # merges adjacent deltas while preserving the first timestamp,
                 # so its duration remains visible after a task is reopened.
@@ -2977,6 +2979,12 @@ class Task:
 
         # Persist the assistant message exactly like the REPL does.
         content = []
+        thinking = "".join(turn_thinking)
+        if thinking:
+            # Keep provider reasoning in the durable message history.  The
+            # OpenAI-compatible adapter maps this block back to the exact
+            # ``reasoning_content`` field required by DeepSeek tool turns.
+            content.append({"type": "thinking", "thinking": thinking})
         full = "".join(turn_text)
         if full:
             content.append({"type": "text", "text": full})

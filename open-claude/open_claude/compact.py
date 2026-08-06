@@ -74,13 +74,23 @@ def compact_conversation(
         return messages
 
     # Split into old (to summarize) and recent (to keep)
-    # Keep at least PRESERVE_RECENT_PAIRS * 2 messages
+    # Keep at least PRESERVE_RECENT_PAIRS * 2 messages.  Never split between
+    # an assistant tool call and its following tool results: doing so leaves a
+    # ``role=tool`` record in the recent history without the preceding
+    # ``tool_calls`` message, which OpenAI-compatible providers reject.
     keep_count = min(PRESERVE_RECENT_PAIRS * 2, len(messages) // 2)
     keep_count = max(keep_count, 2)  # Always keep at least 2
 
     # Ensure we split at a clean boundary (after an assistant message)
     split_idx = len(messages) - keep_count
     while split_idx > 0 and messages[split_idx - 1].get("role") != "assistant":
+        split_idx -= 1
+    if (split_idx > 0
+            and _has_tool_use(messages[split_idx - 1])
+            and _has_tool_result(messages[split_idx])):
+        # Keep the complete assistant/tool-result pair in the recent portion.
+        # The summary boundary may therefore be before a user message; that is
+        # preferable to producing an invalid provider history.
         split_idx -= 1
     if split_idx <= 0:
         split_idx = max(1, len(messages) - keep_count)
@@ -115,6 +125,22 @@ def compact_conversation(
     compacted.extend(recent_messages)
 
     return compacted
+
+
+def _has_tool_use(message: dict[str, Any]) -> bool:
+    content = message.get("content") if isinstance(message, dict) else None
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") in ("tool_use", "tool_call")
+        for block in content
+    )
+
+
+def _has_tool_result(message: dict[str, Any]) -> bool:
+    content = message.get("content") if isinstance(message, dict) else None
+    return isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "tool_result"
+        for block in content
+    )
 
 
 def _generate_summary(
@@ -197,6 +223,10 @@ def _messages_to_text(messages: list[dict[str, Any]]) -> str:
                         if isinstance(result, str) and len(result) > 500:
                             result = result[:500] + "..."
                         parts.append(f"[TOOL_RESULT]: {result}")
+                    elif btype in ("thinking", "reasoning"):
+                        reasoning = block.get("thinking") or block.get("reasoning_content") or block.get("text", "")
+                        if reasoning:
+                            parts.append(f"[REASONING]: {reasoning}")
                 elif isinstance(block, str):
                     parts.append(f"[{role}]: {block}")
 

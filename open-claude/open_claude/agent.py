@@ -234,6 +234,11 @@ def execute_agent(params: dict[str, Any], cwd: str, client: anthropic.Anthropic,
             if block.get("type") == "text":
                 text_parts.append(block.get("text", ""))
                 assistant_content.append({"type": "text", "text": block.get("text", "")})
+            elif block.get("type") in ("thinking", "reasoning"):
+                assistant_content.append({
+                    "type": "thinking",
+                    "thinking": block.get("thinking") or block.get("reasoning_content") or block.get("text", ""),
+                })
             elif block.get("type") == "tool_use":
                 tool_use = {
                     "type": "tool_use",

@@ -471,6 +471,7 @@ class Conversation:
     def _stream_assistant_response(self) -> str:
         """Stream one assistant response (live Markdown). Returns stop_reason."""
         tool_uses: list[dict[str, Any]] = []
+        thinking_parts: list[str] = []
         stop_reason = "end_turn"
 
         md_stream = tui.MarkdownStream(console)
@@ -494,7 +495,7 @@ class Conversation:
                 etype = event["type"]
 
                 if etype == "thinking_delta":
-                    pass  # extended thinking not surfaced
+                    thinking_parts.append(str(event.get("text") or ""))
 
                 elif etype == "text_delta":
                     if spinner_active:
@@ -544,6 +545,9 @@ class Conversation:
 
         # Build the assistant message content blocks
         content: list[dict[str, Any]] = []
+        thinking = "".join(thinking_parts)
+        if thinking:
+            content.append({"type": "thinking", "thinking": thinking})
         if md_stream.buffer:
             content.append({"type": "text", "text": md_stream.buffer})
         for tu in tool_uses:

@@ -278,3 +278,13 @@
 - 本体任务文件面板始终显示 `mission-input/`、`mission-output/` 和“项目公共文件”三个目录，即使目录暂时为空也不会消失。
 - 文件接口读取任务目录时会补齐输入、输出目录，并继续使用任务专属目录隔离；项目公共资料仍保存在项目工作区根目录，任务内通过 `project-shared/` 提供只读副本。
 - 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+## 2026-08-06
+
+### 43. DeepSeek/LiteLLM 工具消息兼容修复
+
+- 修复团队 DeepSeek 兼容网关返回 `Messages with role 'tool' must be a response to a preceding message with 'tool_calls'` 的 400 错误。
+- OpenAI 兼容消息转换现在只发送紧跟匹配 assistant `tool_calls` 的工具结果；旧会话中缺失调用、调用已被压缩或工具 ID 缺失的记录会安全转换为普通历史文本，不再阻断后续对话。
+- 会话压缩不会再把 assistant 工具调用和后续工具结果拆到不同上下文，避免产生孤立 `role=tool` 消息。
+- 保留 DeepSeek 思考模式返回的 `reasoning_content`，在下一轮工具调用时原样回传；流式、非流式、网页 Agent、CLI 和子 Agent 共用同一兼容逻辑。
+- 主要文件：`open-claude/open_claude/openai_compat.py`、`open-claude/open_claude/compact.py`、`open-claude/oc_codex_server.py`、`open-claude/open_claude/repl.py`、`open-claude/open_claude/agent.py`、`tests/test_openai_compat.py`。
