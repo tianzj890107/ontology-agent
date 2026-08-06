@@ -72,6 +72,24 @@ function SendArrowIcon() {
   );
 }
 
+function CurrentMissionIcon() {
+  return (
+    <svg className="current-mission-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="#8F9299" d="M10.152.857a.487.487 0 0 1 .2.124l3.324 3.323a.487.487 0 0 1 .156.407v8.623c0 .253-.044.488-.134.704-.09.216-.224.414-.403.593a1.821 1.821 0 0 1-.592.402c-.216.09-.45.135-.704.135h-8c-.253 0-.488-.045-.704-.134a1.823 1.823 0 0 1-.592-.403 1.82 1.82 0 0 1-.403-.593 1.822 1.822 0 0 1-.134-.704V2.668c0-.254.044-.488.134-.704.09-.216.224-.414.403-.593A1.82 1.82 0 0 1 3.295.97c.216-.09.45-.135.704-.135h5.956a.49.49 0 0 1 .197.023Zm2.68 4.31v8.167c0 .278-.069.486-.208.625-.139.14-.347.209-.625.209h-8c-.278 0-.486-.07-.625-.209-.139-.139-.208-.347-.208-.625V2.668c0-.278.07-.487.208-.625.139-.14.347-.209.625-.209h5.5v2.167c0 .161.028.31.085.448.057.137.143.263.257.377.114.114.24.2.377.256.137.057.287.086.448.086h2.166ZM10.5 4.002v-1.46l1.626 1.627h-1.46c-.055 0-.096-.014-.124-.042-.028-.028-.042-.07-.042-.125Zm-.132 3.317H5.634a.491.491 0 0 1-.5-.5.49.49 0 0 1 .277-.45.488.488 0 0 1 .223-.05h4.733a.492.492 0 0 1 .5.5.491.491 0 0 1-.5.5ZM5.634 9.684h4.733a.491.491 0 0 0 .5-.5.49.49 0 0 0-.278-.449.488.488 0 0 0-.222-.05H5.634a.492.492 0 0 0-.5.5.491.491 0 0 0 .5.5Z" />
+    </svg>
+  );
+}
+
+function UploadFileIcon() {
+  return (
+    <svg className="composer-upload-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M0 0h16v16H0z" />
+      <path fillRule="evenodd" fill="#8F9299" d="m4.646 4.646 2.955-2.954a.491.491 0 0 1 .396-.192H8a.48.48 0 0 1 .359.152l2.995 2.994.002.003a.495.495 0 0 1-.004.707.49.49 0 0 1-.512.12.49.49 0 0 1-.192-.121l-.002-.001-2.149-2.15v7.465a.49.49 0 0 1-.5.498h-.002a.49.49 0 0 1-.498-.5V3.21L5.354 5.354h-.002a.495.495 0 0 1-.706-.001l-.001-.001a.495.495 0 0 1 .002-.705ZM2.5 8.003v4.664c0 .277.07.486.208.625.14.139.348.208.625.208h9.334c.277 0 .486-.069.625-.208.139-.14.208-.348.208-.625v-4.67A.49.49 0 0 1 14 7.5l.002.001a.495.495 0 0 1 .498.5v4.667c0 .253-.045.488-.134.703a1.82 1.82 0 0 1-.403.593c-.179.18-.377.313-.593.403a1.82 1.82 0 0 1-.703.134H3.333c-.253 0-.487-.045-.703-.134a1.821 1.821 0 0 1-.593-.403 1.82 1.82 0 0 1-.403-.593 1.82 1.82 0 0 1-.134-.703V8.003a.49.49 0 0 1 .5-.5.49.49 0 0 1 .5.5Z" />
+    </svg>
+  );
+}
+
 function DownloadSelectedIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -515,7 +533,7 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
       <Input.TextArea value={value} onChange={(event) => onChange(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); onSend(); } }} autoSize={{ minRows: 1, maxRows: 8 }} placeholder={placeholder} disabled={busy} />
       {!!pendingFiles.length && <div className="pending-files">{pendingFiles.map((file) => <Tag key={file.name}>📎 {file.name}</Tag>)}</div>}
       <div className="composer-row">
-        <Button type="text" onClick={onAttach} title="上传文件到项目">📎 <span>上传文件</span></Button>
+        <Button type="text" onClick={onAttach} title="上传文件到项目"><UploadFileIcon /> <span>上传文件</span></Button>
         {!mission && projects?.length > 0 && <Select size="small" value={project} options={projects.map((item) => ({ value: item.name, label: item.name }))} onChange={onProject} className="project-select" placeholder="选择项目" />}
         <ModelPicker model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} />
         <Button type={start ? "primary" : "default"} className={start ? "start-button" : "send-button"} onClick={onSend} disabled={busy}>{start ? (mission?.taskType === "integration" ? "开始智能消歧与整合" : "开始智能建模") : <SendArrowIcon />}</Button>
@@ -810,7 +828,7 @@ function App() {
           {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新任务"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任务" />}</div>}
           <Button className="settings-button" onClick={() => setSettingsOpen(true)}><ModelSettingsIcon /> 大语言模型设置</Button>
           {MISSION && <div className="current-mission">
-            <Button type="text" onClick={() => setMissionInfoOpen(true)}>📋 当前任务信息</Button>
+            <Button type="text" className="current-mission-trigger" onClick={() => setMissionInfoOpen(true)}><CurrentMissionIcon /> 当前任务信息</Button>
             <small>{MISSION.taskCode} · 本体库 {MISSION.repositoryId}</small>
             <div className="sidebar-mission-info">
               {missionLoading ? <Spin size="small" /> : missionContext ? <RecursiveInfo value={missionContext} /> : <span className="sidebar-mission-empty">暂未获取到完整任务信息</span>}

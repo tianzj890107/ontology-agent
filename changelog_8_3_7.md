@@ -227,6 +227,12 @@
 - 前端向发送接口传递 `startTask`，服务端区分启动请求和普通会话请求；平台上下文漏声明实体关系时，将其作为业务对象任务的内部前置校验，不扩大 expectedFiles 或上传白名单。
 - 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_ontology_knowledge.py`、`tests/test_frontend_contract.py`。
 
+### 34. 操作按钮与任务入口图标统一
+
+- “允许执行”和“✓ 已允许执行”按钮统一使用“上传到 MinIO”相同的实色蓝；输入框发送按钮统一使用“+ 新任务”的渐变蓝。
+- 当前任务信息入口替换为文件信息 SVG 图标；输入框上传文件入口替换为上传 SVG 图标，保留原有点击和上传行为。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 33. 发送和下载图标调整
 
 - 发送箭头改为白色，提升蓝色发送按钮上的对比度。
