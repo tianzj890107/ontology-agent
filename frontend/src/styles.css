@@ -38,4 +38,5 @@ html,body,#root,.workbench{height:100dvh;min-height:0;overflow:hidden}.sidebar,.
 .model-name,.settings-button,.model-params-link{display:inline-flex;align-items:center;gap:6px}.model-name .anticon,.settings-button .anticon,.model-params-link .anticon{font-size:13px;line-height:1}.model-settings-icon{display:block;flex:none;width:16px;height:16px}.model-arrow{font-size:11px!important;line-height:1}
 .section-toggle{gap:6px}
 .file-group-empty{padding:5px 7px;color:#94a3b8;font-size:11px}
+.file-row>input[type=checkbox]{margin-left:19px;flex:none}
 .new-task,.start-button,.send-button{background:linear-gradient(135deg,#2563eb,#1e40af)!important;color:#fff!important;border-color:transparent!important}.approval-actions .ant-btn-primary,.file-actions .ant-btn-primary{background:#2563eb!important;border-color:#2563eb!important;color:#fff!important}.approval-actions .ant-btn-primary:disabled{opacity:1!important}.composer-row>.ant-btn:first-child,.current-mission-trigger{display:inline-flex!important;align-items:center;gap:6px}.composer-upload-icon,.current-mission-icon{display:block;flex:none;width:16px;height:16px}.current-mission-trigger{color:#496b89!important}

@@ -109,6 +109,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('.thought-icon-error{color:#b91c1c;background:#fee2e2}', styles)
         self.assertIn('.approval-actions .ant-btn-primary,.file-actions .ant-btn-primary{background:#2563eb!important', styles)
         self.assertIn('.new-task,.start-button,.send-button{background:linear-gradient(135deg,#2563eb,#1e40af)!important', styles)
+        self.assertIn('.file-row>input[type=checkbox]{margin-left:19px', styles)
         self.assertIn('.thought-icon-read-file{color:#0f766e;background:#ccfbf1}', styles)
         self.assertIn('.thought-icon-write-file,.thought-icon-edit-file{color:#c2410c;background:#ffedd5}', styles)
         self.assertIn('.thought-icon-read-file svg,.thought-icon-write-file svg,.thought-icon-edit-file svg,.thought-icon-audit svg,.thought-icon-task-update svg,.thought-icon-command svg{width:12px;height:12px}', styles)

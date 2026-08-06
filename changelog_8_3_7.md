@@ -233,6 +233,11 @@
 - 当前任务信息入口替换为文件信息 SVG 图标；输入框上传文件入口替换为上传 SVG 图标，保留原有点击和上传行为。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 
+### 35. 文件复选框对齐文件夹箭头
+
+- 文件列表中每个文件的复选框向右缩进，与文件夹标题左侧箭头保持竖直对齐；文件名、文件大小和选择行为不变。
+- 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
 ### 33. 发送和下载图标调整
 
 - 发送箭头改为白色，提升蓝色发送按钮上的对比度。
