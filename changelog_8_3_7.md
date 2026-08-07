@@ -333,3 +333,9 @@
 - 输入对话框“上传文件”图标改为继承按钮文字颜色，与“上传文件”文字保持一致的蓝色。
 - 上传行为和文件选择逻辑不变。
 - 主要文件：`frontend/src/main.jsx`、`tests/test_frontend_contract.py`。
+
+### 48. 会话入口文案统一
+
+- 侧边栏“+ 新任务”改为“+ 新会话”，“历史任务”改为“历史会话”。
+- 空列表提示和打开失败提示同步使用“会话”文案，任务创建、历史恢复和消息处理逻辑不变。
+- 主要文件：`frontend/src/main.jsx`、`tests/test_frontend_contract.py`。

@@ -680,12 +680,12 @@ function App() {
   const openTask = async (task) => {
     const detailQuery = MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}` : "";
     const result = await api(`/api/tasks/${task.id}${detailQuery}`);
-    if (result.error) { messageApi.error(`打开历史任务失败：${result.error}`); return; }
+    if (result.error) { messageApi.error(`打开历史会话失败：${result.error}`); return; }
     const current = result;
     feedPinnedRef.current = true;
     setActive(current); setEvents(normalizeEvents(current)); setView("task"); setText("");
     if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, current.id);
-    // 页面刷新或重新打开历史任务时，审批请求可能已经在服务端挂起，
+    // 页面刷新或重新打开历史会话时，审批请求可能已经在服务端挂起，
     // 不会再次经过 SSE；自动确认开启时要主动恢复这类请求。
     if (autoApproveRef.current) {
       const pending = normalizeEvents(current).find((event) => event.type === "approval_request");
@@ -833,9 +833,9 @@ function App() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能</strong><Tag>Agent</Tag></div>
         <div className="sidebar-scroll">
-          <Button className="new-task" onClick={async () => { setActive(null); setEvents([]); setText(""); setView("home"); if (MISSION) await createTask(); }}>✚ 新任务</Button>
-          <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}><HistoryIcon />历史任务</button>
-          {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新任务"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任务" />}</div>}
+          <Button className="new-task" onClick={async () => { setActive(null); setEvents([]); setText(""); setView("home"); if (MISSION) await createTask(); }}>✚ 新会话</Button>
+          <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}><HistoryIcon />历史会话</button>
+          {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新会话"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有会话" />}</div>}
           <Button className="settings-button" onClick={() => setSettingsOpen(true)}><ModelSettingsIcon /> 大语言模型设置</Button>
           {MISSION && <div className="current-mission">
             <Button type="text" className="current-mission-trigger" onClick={() => setMissionInfoOpen(true)}><CurrentMissionIcon /> 当前任务信息</Button>
