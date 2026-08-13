@@ -339,3 +339,46 @@
 - 侧边栏“+ 新任务”改为“+ 新会话”，“历史任务”改为“历史会话”。
 - 空列表提示和打开失败提示同步使用“会话”文案，任务创建、历史恢复和消息处理逻辑不变。
 - 主要文件：`frontend/src/main.jsx`、`tests/test_frontend_contract.py`。
+
+## 2026-08-07
+
+### 49. 恢复用户确认完成任务
+
+- MinIO 上传只保存结果文件并保持任务 `RUNNING`，不再自动回调 `COMPLETED`。
+- 会话顶部新增“完成”按钮，用户确认后才校验结果文件并回写 `COMPLETED`；已完成任务点击“修改”会先删除旧结果对象（包括整合任务的 `ok.csv`），再恢复编辑。
+- 主要文件：`open-claude/oc_codex_server.py`、`frontend/src/main.jsx`、`backend-agent-interaction-api.md`。
+
+### 50. 完成按钮渐变蓝样式
+
+- 任务顶部的“完成”按钮改用与“新会话”一致的蓝色渐变和阴影样式。
+- “修改”按钮继续使用默认按钮样式，不改变状态切换行为。
+- 主要文件：`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 51. 自动确认按钮状态样式与提示
+
+- 自动确认关闭时显示蓝色边框和蓝色文字，开启后切换为与“完成”按钮一致的蓝色渐变。
+- 点击切换时分别提示“已开启自动确认”或“已关闭自动确认”，开启后的待确认请求仍会自动处理。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 52. 自动确认入口移动到输入框
+
+- 自动确认按钮从任务顶部移动到输入对话框“上传文件”右侧。
+- “完成/修改”和“文件”入口继续保留在任务顶部。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 53. 任务与文件目录图标统一
+
+- “完成”按钮使用勾选图标，“修改”按钮使用编辑图标，“文件”按钮使用文件夹图标。
+- 文件面板中的 `mission-input/`、`mission-output/` 和项目根目录统一使用文件夹图标。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 54. 完成图标改为白色
+
+- “完成”按钮的勾选图标改为白色，与渐变蓝按钮背景保持对比度。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+
+### 55. 文件目录箭头垂直对齐
+
+- 文件目录折叠和展开箭头改用统一尺寸的 SVG 图标，固定在目录标题行中垂直居中。
+- 折叠与展开状态的箭头保持同一位置，不再受文字基线影响产生上下偏移。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。

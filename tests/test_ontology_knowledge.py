@@ -7,6 +7,7 @@ import zipfile
 import base64
 import hashlib
 import hmac
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
@@ -48,21 +49,21 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     os.environ["CLAUDE_MAX_TOKENS"] = original_max
 
     def test_task_modes_select_fixed_files(self):
-        self.assertEqual(knowledge_filename("integration"), "integration/all_sources.md")
+        self.assertEqual(knowledge_filename("integration"), "integration/all_sourcesv0.0.1.md")
         self.assertEqual(normalize_task_type("DOCUMENT_MODELING"), "modeling")
         self.assertEqual(normalize_task_type("DATA_SOURCE_MODELING"), "modeling")
         self.assertEqual(normalize_task_type("INTEGRATION_TASK"), "integration")
         self.assertEqual(
             knowledge_filename("modeling", {"sourceMode": "DATABASE"}),
-            "modeling/multi_source_data.md",
+            "modeling/multi_source_datav0.0.1.md",
         )
         self.assertEqual(
             knowledge_filename("modeling", {"sourceMode": "DOCUMENT"}),
-            "modeling/business_document.md",
+            "modeling/business_documentv0.0.1.md",
         )
         self.assertEqual(
             knowledge_filename("modeling", {"sourceMode": "unrecognized"}),
-            "modeling/all_sources.md",
+            "modeling/all_sourcesv0.0.1.md",
         )
         self.assertEqual(knowledge_filename("unknown"), "")
 
@@ -71,58 +72,74 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                                          {"sourceMode": "DATABASE"})
         integration = load_static_knowledge(ROOT / "agent_knowledge", "integration")
         self.assertIn("# 智能建模任务", modeling)
-        self.assertIn("多源数据建模.docx", modeling)
-        self.assertNotIn("业务文档本体建模.docx", modeling)
+        self.assertIn("多源数据建模v0.0.1.docx", modeling)
+        self.assertNotIn("业务文档本体建模v0.0.1.docx", modeling)
         self.assertIn("# 智能消歧与整合", integration)
-        self.assertIn("智能消歧与整合规则v0.1.docx", integration)
-        self.assertIn("智能消歧与整合模板.xlsx", integration)
+        self.assertIn("智能消歧与整合规则v0.0.1.docx", integration)
+        self.assertIn("智能消歧与整合模板v0.0.1.xlsx", integration)
+        self.assertIn("Ontology平台模型编码规范v0.0.1.xlsx", integration)
+        self.assertIn("REL000006", integration)
         self.assertIn("检核项", integration)
         self.assertIn("business_attributes.csv", integration)
         self.assertIn("关系编码", integration)
-        self.assertIn("通用业务对象与逻辑实体识别规范_V6.md", modeling)
+        self.assertIn("通用业务对象与逻辑实体识别规范v0.0.1.md", modeling)
         self.assertIn("唯一的核心判定规范", modeling)
         self.assertIn("COMPOSITION 和 EXTENSION", modeling)
         self.assertNotIn("自底向上业务对象识别规范_v3.md", modeling)
-        self.assertIn("本体元模型2.xlsx", modeling)
-        self.assertIn("本体元模型模板 2.xlsx", modeling)
+        self.assertIn("本体元模型v0.0.1.xlsx", modeling)
+        self.assertIn("本体元模型模板v0.0.1.xlsx", modeling)
+        self.assertIn("Ontology平台模型编码规范v0.0.1.xlsx", modeling)
+        self.assertIn("BO0005", modeling)
+        self.assertIn("业务属性 | `AT` + 7 位流水码", modeling)
+        self.assertIn("本体元模型模板（含样例数据）.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板（含样例数据）.md").read_text(encoding="utf-8"))
+        self.assertIn("是否逻辑主键", modeling)
+        self.assertIn("当前不生成维度", modeling)
         self.assertIn("是否页面显示", modeling)
+        self.assertIn("对象关系连接业务对象，实体关系连接逻辑实体", modeling)
+        self.assertIn("普通类型、分类、布尔标志和处理结果不是生命周期状态", modeling)
+        self.assertIn("普通数据行、静态属性、状态值本身不是事件", modeling)
+        self.assertIn("数据长度", modeling)
+        self.assertIn("规则编码,规则名称,规则描述,触发条件,判断或结果,处置动作", modeling)
         self.assertNotIn("本体元模型.xlsx", modeling)
         self.assertNotIn("本体元模型模板.xlsx", modeling)
         self.assertNotIn("本体建模步骤拆解.xlsx", modeling)
         self.assertEqual(modeling_skill_modules({}), ())
         self.assertEqual(
+            modeling_skill_modules({"expectedFiles": ["metrics.csv"]}),
+            (),
+        )
+        self.assertEqual(
             modeling_skill_modules({"parseElements": "BUSINESS_OBJECTTERMRULEMETRIC"}),
-            (("TERM", "业务术语.md"), ("RULE", "业务规则.md"), ("METRIC", "指标.md")),
+            (("TERM", "业务术语v0.0.1.md"), ("RULE", "业务规则v0.0.1.md"), ("METRIC", "指标v0.0.1.md")),
         )
         specialized = load_static_knowledge(
             ROOT / "agent_knowledge", "modeling",
-            {"sourceMode": "DATABASE", "expectedFiles": "terms.csvbusiness_rules.csvmetrics.csv"},
+            {"sourceMode": "DATABASE", "parseElements": ["TERM", "RULE", "METRIC"],
+             "expectedFiles": "terms.csvbusiness_rules.csvmetrics.csv"},
         )
-        self.assertIn("建模专项技能：业务术语.md", specialized)
+        self.assertIn("建模专项技能：业务术语v0.0.1.md", specialized)
         self.assertIn("优先发现已有的人工语义资产", specialized)
-        self.assertIn("建模专项技能：业务规则.md", specialized)
+        self.assertIn("建模专项技能：业务规则v0.0.1.md", specialized)
         self.assertIn("规则的存在与规则被强制是两件事", specialized)
-        self.assertIn("建模专项技能：指标.md", specialized)
+        self.assertIn("建模专项技能：指标v0.0.1.md", specialized)
         self.assertIn("口径以实际执行的 SQL 为事实依据", specialized)
-        metric_rules = (ROOT / "agent_knowledge" / "指标.md").read_text(encoding="utf-8")
+        metric_rules = (ROOT / "agent_knowledge" / "指标v0.0.1.md").read_text(encoding="utf-8")
         self.assertFalse(metric_rules.startswith("````"))
         self.assertIn("产出下限约束", metric_rules)
-        self.assertIn("本体元模型2.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型2.md").read_text(encoding="utf-8"))
-        self.assertIn("本体元模型模板 2.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板 2.md").read_text(encoding="utf-8"))
-        self.assertIn("本体元模型.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型.md").read_text(encoding="utf-8"))
-        self.assertIn("本体元模型模板.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板.md").read_text(encoding="utf-8"))
-        data_model_rules = (ROOT / "agent_knowledge" / "modeling" / "数据模型建模规范-v0.2.md").read_text(encoding="utf-8")
-        self.assertIn("数据模型建模规范-v0.2.xlsx", data_model_rules)
+        self.assertIn("本体元模型v0.0.1.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型v0.0.1.md").read_text(encoding="utf-8"))
+        self.assertIn("本体元模型模板v0.0.1.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板v0.0.1.md").read_text(encoding="utf-8"))
+        data_model_rules = (ROOT / "agent_knowledge" / "modeling" / "数据模型建模规范v0.0.1.md").read_text(encoding="utf-8")
+        self.assertIn("数据模型建模规范v0.0.1.xlsx", data_model_rules)
         self.assertIn("主题域分类", data_model_rules)
-        self.assertIn("数据模型建模规范-v0.2.xlsx", modeling)
+        self.assertIn("数据模型建模规范v0.0.1.xlsx", modeling)
         self.assertNotIn("数据模型建模规范-20260626.xlsx", modeling)
-        v6_rules = (ROOT / "agent_knowledge" / "modeling" / "通用业务对象与逻辑实体识别规范_V6.md").read_text(encoding="utf-8")
+        v6_rules = (ROOT / "agent_knowledge" / "modeling" / "通用业务对象与逻辑实体识别规范v0.0.1.md").read_text(encoding="utf-8")
         self.assertIn("通用业务对象与逻辑实体识别规范 V6", v6_rules)
         self.assertIn("业务对象判定标准", v6_rules)
         self.assertIn("UNKNOWN 闭环校验", v6_rules)
         self.assertIn("业务属性识别", v6_rules)
         self.assertIn("业务属性正式归属", v6_rules)
-        v6_source = (ROOT / "agent_knowledge" / "通用业务对象与逻辑实体识别规范_V6.md").read_text(encoding="utf-8")
+        v6_source = (ROOT / "agent_knowledge" / "通用业务对象与逻辑实体识别规范v0.0.1.md").read_text(encoding="utf-8")
         top_level_numbers = [
             int(line.split(". ", 1)[0].removeprefix("## "))
             for line in v6_source.splitlines() if line.startswith("## ") and ". " in line
@@ -132,29 +149,30 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("## 7. 逻辑实体识别", v6_source)
         source_digest = hashlib.sha256(v6_source.encode("utf-8")).hexdigest()[:12]
         self.assertIn(f"SHA-256（前12位）：`{source_digest}`", v6_rules)
-        integration_template = (ROOT / "agent_knowledge" / "integration" / "template.md").read_text(encoding="utf-8")
-        self.assertIn("智能消歧与整合模板.xlsx", integration_template)
+        integration_template = (ROOT / "agent_knowledge" / "integration" / "templatev0.0.1.md").read_text(encoding="utf-8")
+        self.assertIn("智能消歧与整合模板v0.0.1.xlsx", integration_template)
         self.assertIn("推荐名称", integration_template)
         self.assertIn("business_rules.csv", integration_template)
 
     def test_modeling_source_files_are_specialized_and_composed_at_runtime(self):
-        source_code = (ROOT / "agent_knowledge" / "modeling" / "source_code.md").read_text(encoding="utf-8")
-        document = (ROOT / "agent_knowledge" / "modeling" / "business_document.md").read_text(encoding="utf-8")
-        self.assertIn("源代码本体建模.docx", source_code)
-        self.assertNotIn("业务文档本体建模.docx", source_code)
-        self.assertIn("业务文档本体建模.docx", document)
-        self.assertNotIn("源代码本体建模.docx", document)
+        source_code = (ROOT / "agent_knowledge" / "modeling" / "source_codev0.0.1.md").read_text(encoding="utf-8")
+        document = (ROOT / "agent_knowledge" / "modeling" / "business_documentv0.0.1.md").read_text(encoding="utf-8")
+        self.assertIn("源代码本体建模v0.0.1.docx", source_code)
+        self.assertNotIn("业务文档本体建模v0.0.1.docx", source_code)
+        self.assertIn("业务文档本体建模v0.0.1.docx", document)
+        self.assertNotIn("源代码本体建模v0.0.1.docx", document)
 
         composed = load_static_knowledge(ROOT / "agent_knowledge", "modeling",
                                          {"sourceMode": "SOURCE_CODE"})
-        self.assertIn("通用业务对象与逻辑实体识别规范_V6.md", composed)
-        self.assertIn("源代码本体建模.docx", composed)
-        self.assertNotIn("业务文档本体建模.docx", composed)
+        self.assertIn("通用业务对象与逻辑实体识别规范v0.0.1.md", composed)
+        self.assertIn("源代码本体建模v0.0.1.docx", composed)
+        self.assertNotIn("业务文档本体建模v0.0.1.docx", composed)
 
     def test_integration_output_contract_covers_expected_files(self):
-        schema = (ROOT / "agent_knowledge" / "integration" / "output_schema.md").read_text(encoding="utf-8")
+        schema = (ROOT / "agent_knowledge" / "integration" / "output_schemav0.0.1.md").read_text(encoding="utf-8")
         for name in (
             "business_attributes.csv", "business_objects.csv", "business_rules.csv",
+            "business_object_relations.csv", "statuses.csv", "events.csv",
             "conflict_elements.csv", "entity_relations.csv", "integration_report.csv",
             "logical_entities.csv", "merged_elements.csv", "missing_elements.csv",
             "pending_elements.csv",
@@ -204,6 +222,98 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             server = importlib.util.module_from_spec(spec)
             assert spec.loader is not None
             spec.loader.exec_module(server)
+            delete_request = {}
+
+            class DeleteResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def read(self):
+                    return b'{"success":true,"data":{"deleted":true}}'
+
+            class DeleteOpener:
+                def open(self, request, timeout=30):
+                    delete_request["request"] = request
+                    delete_request["timeout"] = timeout
+                    return DeleteResponse()
+
+            old_opener = server.urllib.request.build_opener
+            try:
+                server.urllib.request.build_opener = lambda *args, **kwargs: DeleteOpener()
+                self.assertEqual(
+                    server.fileserver_delete_object(
+                        {"url": "https://files.example", "bucket": "ontology",
+                         "secret_key": "secret", "access_key": "access"},
+                        "ontology/1/integration-tasks/MI1/agent-output/ok.csv",
+                    ),
+                    {"deleted": True},
+                )
+            finally:
+                server.urllib.request.build_opener = old_opener
+            request = delete_request["request"]
+            self.assertEqual(request.full_url, "https://files.example/sdk/object/delete")
+            request_body = json.loads(request.data.decode("utf-8"))
+            self.assertEqual(request_body, {
+                "bucketName": "ontology",
+                "objectKey": "ontology/1/integration-tasks/MI1/agent-output/ok.csv",
+            })
+            self.assertEqual(request.get_header("Content-type"), "application/json")
+            self.assertEqual(delete_request["timeout"], 30)
+            self.assertEqual(
+                request.get_header("Authorization"),
+                server._fileserver_auth("POST", "/sdk/object/delete", "secret", "access",
+                                         body=request.data.decode("utf-8")),
+            )
+            reopen_task = types.SimpleNamespace(
+                platform_status="COMPLETED",
+                platform_uploaded_files={"ok.csv": {"objectKey": "ontology/1/integration-tasks/MI1/agent-output/ok.csv"}},
+                platform_output_prefix="ontology/1/integration-tasks/MI1/agent-output",
+                mission_context={"taskType": "integration", "outputPrefix": "ontology/1/integration-tasks/MI1/agent-output"},
+                task_type="integration", task_code="MI1", platform_last_error="", platform_updated=0,
+            )
+            deleted_keys = []
+            original_reopen = {
+                "config": server.minio_config,
+                "delete": server.fileserver_delete_object,
+                "callback": server.task_status_callback,
+                "persist": server.persist_tasks,
+            }
+            try:
+                server.minio_config = lambda: {"bucket": "ontology"}
+                server.fileserver_delete_object = lambda cfg, key: deleted_keys.append(key) or {}
+                server.task_status_callback = lambda task, status, **kwargs: {"ok": True, "status": status}
+                server.persist_tasks = lambda: None
+                reopened, reopen_error = server.reopen_completed_mission(
+                    reopen_task, authorization="Bearer token")
+                self.assertTrue(reopened)
+                self.assertIsNone(reopen_error)
+                self.assertEqual(deleted_keys, ["ontology/1/integration-tasks/MI1/agent-output/ok.csv"])
+                self.assertEqual(reopen_task.platform_status, "RUNNING")
+                self.assertEqual(reopen_task.platform_uploaded_files, {})
+            finally:
+                server.minio_config = original_reopen["config"]
+                server.fileserver_delete_object = original_reopen["delete"]
+                server.task_status_callback = original_reopen["callback"]
+                server.persist_tasks = original_reopen["persist"]
+
+            original_tasks = server.TASKS
+            original_bound = server.mission_bound_project
+            try:
+                existing = types.SimpleNamespace(
+                    repository_id="1", task_code="RM1", user_id="u1", updated=10,
+                )
+                server.TASKS = {"existing": existing}
+                server.mission_bound_project = lambda *args: "mission-1-RM1"
+                self.assertIs(
+                    server.create_task("", "1", "RM1", "modeling", "u1"),
+                    existing,
+                )
+            finally:
+                server.TASKS = original_tasks
+                server.mission_bound_project = original_bound
             self.assertTrue(server.Handler._requires_auth("/api/meta"))
             self.assertTrue(server.Handler._requires_auth("/p/project/private.csv"))
             self.assertFalse(server.Handler._requires_auth("/"))
@@ -235,9 +345,9 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertIn("repositoryId + taskCode + modelVersion + inputFingerprint", layered_instructions)
             skill_instructions = server.build_modeling_instructions(
                 {"parseElements": ["TERM", "RULE", "METRIC"]})
-            self.assertIn("业务术语.md", skill_instructions)
-            self.assertIn("业务规则.md", skill_instructions)
-            self.assertIn("指标.md", skill_instructions)
+            self.assertIn("业务术语v0.0.1.md", skill_instructions)
+            self.assertIn("业务规则v0.0.1.md", skill_instructions)
+            self.assertIn("指标v0.0.1.md", skill_instructions)
             self.assertIn("规则文件名和章节标题", server.build_integration_instructions({}))
             self.assertEqual(
                 server.build_tool_audit("Bash", {"command": "head -n 5 input.csv"})["severity"],
@@ -263,13 +373,29 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 binary.write_bytes(b"PK\x03\x04" + b"\x00" * 32)
                 self.assertIn("不能使用 Read", execute_read({"file_path": str(binary)}, tmp))
             with tempfile.TemporaryDirectory() as reference_tmp:
+                legacy_reference = Path(reference_tmp) / "mission-input" / "本体元模型3.xlsx"
+                legacy_reference.parent.mkdir()
+                legacy_reference.write_bytes(b"legacy-system-reference")
                 references = server.ensure_mission_reference_files(reference_tmp)
                 self.assertEqual(
                     references,
-                    ["mission-input/本体元模型2.xlsx", "mission-input/本体元模型模板 2.xlsx"],
+                    [
+                        "mission-input/Ontology平台模型编码规范v0.0.1.xlsx",
+                        "mission-input/本体元模型v0.0.1.xlsx",
+                        "mission-input/本体元模型模板v0.0.1.xlsx",
+                        "mission-input/本体元模型模板v0.0.1（含样例数据）.xlsx",
+                    ],
                 )
                 self.assertTrue((Path(reference_tmp) / references[0]).is_file())
                 self.assertTrue((Path(reference_tmp) / references[1]).is_file())
+                self.assertTrue((Path(reference_tmp) / references[2]).is_file())
+                self.assertTrue((Path(reference_tmp) / references[3]).is_file())
+                self.assertFalse(legacy_reference.exists())
+                source_template = ROOT / "rules" / "本体元模型模板v0.0.1.xlsx"
+                copied_template = Path(reference_tmp) / "mission-input" / source_template.name
+                copied_template.write_bytes(b"0" * source_template.stat().st_size)
+                server.ensure_mission_reference_files(reference_tmp)
+                self.assertEqual(copied_template.read_bytes(), source_template.read_bytes())
             handler = object.__new__(server.Handler)
             self.assertEqual(handler._mission_from("1", "RM123456789", "modeling")["taskCode"],
                              "RM123456789")
@@ -293,13 +419,48 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertFalse(server.upstream_context_configuration_error("认证失败: 访问Token不存在"))
             self.assertFalse(server.upstream_context_configuration_error("integration task does not exist"))
             server_source = (ROOT / "open-claude" / "oc_codex_server.py").read_text(encoding="utf-8")
-            self.assertIn('reference_names = ("本体元模型2.xlsx", "本体元模型模板 2.xlsx")', server_source)
+            self.assertIn('"本体元模型模板v0.0.1（含样例数据）.xlsx"', server_source)
             self.assertIn("context_config_err or last_err", server_source)
-            self.assertIn('task_status_callback(\n                    task, "COMPLETED"', server_source)
-            self.assertIn('"MODELING_DEPENDENCY_BLOCKED"', server_source)
-            self.assertNotIn("/platform-status", server_source)
+            self.assertIn('"agentStatus": "SUCCEED"', server_source)
+            self.assertIn('"MODELING_CONTEXT_INVALID"', server_source)
+            self.assertIn('"MISSION_CONTEXT_UNAVAILABLE"', server_source)
+            self.assertNotIn('client_context = data.get("missionContext")', server_source)
+            self.assertIn("/platform-status", server_source)
             self.assertEqual(server.normalize_platform_status("SUCCESS"), "COMPLETED")
+            self.assertEqual(server.normalize_platform_status("SUCCEED"), "COMPLETED")
             self.assertEqual(server.platform_status_from_payload({"agentStatus": "COMPLETED"}), "COMPLETED")
+            self.assertEqual(server.platform_status_from_payload({"agentStatus": "SUCCEED"}), "COMPLETED")
+            self.assertEqual(server._MODELING_HEADERS["business_terms.csv"], ["术语编码", "术语名称", "别名", "英文名", "缩略语", "术语定义"])
+            self.assertEqual(server._MODELING_HEADERS["metrics.csv"][0], "指标编码")
+            self.assertEqual(server._MODELING_HEADERS["business_rules.csv"], ["规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"])
+            valid_term_csv = "术语编码,术语名称,别名,英文名,缩略语,术语定义\nT001,订单,,Order,,业务术语\n"
+            self.assertEqual(server.validate_modeling_csv("business_terms.csv", valid_term_csv.encode()), [])
+            self.assertTrue(server.validate_modeling_csv("business_terms.csv", b"id,name,description\n1,x,y\n"))
+            valid_metric_csv = "指标编码,指标名称,指标别名,指标英文名,指标定义,计算公式,统计口径,指标类型,来源业务对象,来源逻辑实体,来源业务属性,聚合类型,时间维度,计算规则,过滤条件\nM001,订单数,,,,,,,,,,,,,\n"
+            self.assertEqual(server.validate_modeling_csv("metrics.csv", valid_metric_csv.encode()), [])
+            valid_rule_csv = "规则编码,规则名称,规则描述,触发条件,判断或结果,处置动作\nR0000001,订单校验,订单必须有效,订单提交,校验通过,允许提交\n"
+            self.assertEqual(server.validate_modeling_csv("business_rules.csv", valid_rule_csv.encode()), [])
+            self.assertTrue(server.validate_modeling_csv(
+                "business_rules.csv", valid_rule_csv.replace("R0000001", "R000001").encode()
+            ))
+            self.assertTrue(server.validate_modeling_csv(
+                "rules.csv", (valid_rule_csv + "R0000001,重复规则,,,,\n").encode()
+            ))
+            self.assertEqual(server.parse_element_for_file("business_object_relations.csv"), "BUSINESS_OBJECT_RELATION")
+            self.assertEqual(server.parse_element_for_file("statuses.csv"), "STATUS")
+            self.assertEqual(server.parse_element_for_file("events.csv"), "EVENT")
+            valid_object_relation = "关系编码,源业务对象编码,源业务对象名称,关系类型,关系英文名称,关系中文名名称,目标业务对象编码,目标业务对象名称,关系基数,关系描述\nREL000001,BO00001,合同,依赖关系,generates,生成,BO00002,订单,1:1,合同生成订单\n"
+            self.assertEqual(server.validate_modeling_csv("business_object_relations.csv", valid_object_relation.encode()), [])
+            valid_status = "业务对象编码,业务对象名称,状态编码,状态英文名,状态中文名,状态含义,触发条件,是否终态,是否主终态\nBO00001,合同,ACTIVE,Active,生效,合同已生效,审批通过,N,N\n"
+            self.assertEqual(server.validate_modeling_csv("statuses.csv", valid_status.encode()), [])
+            invalid_status = valid_status.replace(",N,N\n", ",N,Y\n")
+            self.assertTrue(server.validate_modeling_csv("statuses.csv", invalid_status.encode()))
+            valid_event = "事件编码,事件名称,事件中文名称,事件含义,触发结果\nE001,ContractApproved,合同审批通过,合同完成审批,合同进入生效状态\n"
+            self.assertEqual(server.validate_modeling_csv("events.csv", valid_event.encode()), [])
+            self.assertEqual(server.validate_integration_csv("business_object_relations.csv", valid_object_relation.encode()), [])
+            self.assertEqual(server.validate_integration_csv("statuses.csv", valid_status.encode()), [])
+            self.assertTrue(server.validate_integration_csv("statuses.csv", invalid_status.encode()))
+            self.assertEqual(server.validate_integration_csv("events.csv", valid_event.encode()), [])
             term_plan = server.build_modeling_plan({
                 "taskType": "DOCUMENT_MODELING", "repositoryId": "1", "taskCode": "RMTERM001",
                 "modelVersion": "V6", "inputFingerprint": "input-a",
@@ -307,6 +468,13 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             })
             self.assertTrue(term_plan["valid"])
             self.assertEqual(term_plan["identity"]["key"], "1/RMTERM001/V6/input-a")
+            self.assertEqual(server.modeling_context_contract_errors({
+                "parseElements": ["TERM"], "expectedFiles": ["business_terms.csv"],
+            }), [])
+            self.assertTrue(server.modeling_context_contract_errors({
+                "parseElements": ["TERM"], "expectedFiles": ["metrics.csv"],
+            }))
+            self.assertTrue(server.is_conversational_turn("谢谢，结果不错"))
             self.assertEqual(term_plan["artifacts"]["termArtifact"]["status"], "PENDING")
             document_context = server.normalize_modeling_context({
                 "taskType": "DOCUMENT_MODELING", "repositoryId": "1", "taskCode": "RMDOC001",
@@ -373,11 +541,12 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 output.mkdir()
                 (output / "logical_entities.csv").write_text(
                     "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n"
-                    "BO1,采购,LE1,采购订单,purchaseOrder,采购订单,是,事务数据\n", encoding="utf-8")
+                    "BO1,采购,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n", encoding="utf-8")
                 document_upload_context = server.normalize_modeling_context({
                     **document_context,
                     "parseElements": ["LOGICAL_ENTITY"],
                     "expectedFiles": ["logical_entities.csv"],
+                    "outputPrefix": "ontology/1/modeling-tasks/RMDOC001/agent-output",
                 })
 
                 class DocumentUploadTask:
@@ -393,6 +562,8 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     platform_last_error = ""
                     platform_output_prefix = ""
                     platform_uploaded_files = {}
+                    platform_lock = threading.Lock()
+                    status = "idle"
                     mission_context = document_upload_context
                     modeling_plan = {}
 
@@ -420,10 +591,14 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 }
                 try:
                     server.bind_mission_project = lambda *args: "project"
-                    server.fetch_execution_context = lambda *args: None
+                    server.fetch_execution_context = lambda *args: {
+                        **document_upload_context, "_platformStatus": "RUNNING",
+                    }
                     server.mission_task_cwd = lambda *args: document_tmp
                     server.minio_config = lambda: {"bucket": "bucket"}
-                    server.fileserver_put_object = lambda cfg, key, blob, name, ctype: {"objectKey": key}
+                    server.fileserver_put_object = lambda cfg, key, blob, name, ctype: {
+                        "objectKey": key, "previewUrl": "https://files.example/" + name,
+                    }
                     server.task_status_callback = lambda task, status, **kwargs: (
                         document_callbacks.append((status, kwargs.get("files"))) or {"ok": True})
                     server.persist_tasks = lambda: None
@@ -445,8 +620,9 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     server.fileserver_put_object = originals["put"]
                     server.task_status_callback = originals["callback"]
                     server.persist_tasks = originals["persist"]
-                self.assertEqual([status for status, _ in document_callbacks], ["COMPLETED"])
-                self.assertEqual(document_callbacks[0][1][0]["parseElement"], "LOGICAL_ENTITY")
+                self.assertEqual(document_callbacks, [])
+                self.assertTrue(document_responses[-1][1]["callback"]["skipped"])
+                self.assertIn("点击“完成”", document_responses[-1][1]["completionHint"])
                 self.assertEqual(document_responses[-1][1]["uploaded"], 1)
             fingerprint_a = server._modeling_input_fingerprint({
                 "dataSource": {"id": 12, "password": "one"}, "parseElements": ["TERM"]},
@@ -455,6 +631,38 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 "dataSource": {"id": 12, "password": "two"}, "parseElements": ["TERM"]},
                 "RMTERM001")
             self.assertEqual(fingerprint_a, fingerprint_b)
+            nested_fingerprint_a = server._modeling_input_fingerprint({
+                "database": {"databaseSourceId": 12, "selectedTables": ["orders"]},
+                "parseElements": ["TERM"],
+            }, "RMTERM001")
+            nested_fingerprint_b = server._modeling_input_fingerprint({
+                "database": {"databaseSourceId": 12, "selectedTables": ["contracts"]},
+                "parseElements": ["TERM"],
+            }, "RMTERM001")
+            self.assertNotEqual(nested_fingerprint_a, nested_fingerprint_b)
+            with tempfile.TemporaryDirectory() as state_tmp:
+                first_context = {
+                    "taskCode": "RMTERM001", "parseElements": ["TERM"],
+                    "expectedFiles": ["business_terms.csv"],
+                    "document": {"objectKey": "ontology/1/input-a.docx"},
+                }
+                state_rel = server.ensure_mission_work_state(state_tmp, first_context)
+                state_path = Path(state_tmp) / state_rel
+                populated_state = json.loads(state_path.read_text(encoding="utf-8"))
+                populated_state["generatedByAgent"] = True
+                populated_state["artifacts"] = {"termArtifact": {"status": "READY"}}
+                state_path.write_text(json.dumps(populated_state), encoding="utf-8")
+                second_context = {
+                    **first_context,
+                    "document": {"objectKey": "ontology/1/input-b.docx"},
+                }
+                server.ensure_mission_work_state(state_tmp, second_context)
+                current_state = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertFalse(current_state["generatedByAgent"])
+                self.assertNotEqual(
+                    current_state["inputFingerprint"], populated_state["inputFingerprint"])
+                archives = list((Path(state_tmp) / "mission-work").glob("modeling_state.*.json"))
+                self.assertTrue(archives)
             alias_status_task = types.SimpleNamespace(
                 repository_id="1", task_code="RMTERM001", task_type="modeling",
                 mission_context={"taskType": "modeling", "parseElements": ["RULE"],
@@ -488,8 +696,8 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 "taskType": "modeling", "parseElements": ["BUSINESS_OBJECT"],
                 "expectedFiles": ["business_objects.csv"],
             }, "1", "RM123456789")
-            self.assertFalse(object_plan["valid"])
-            self.assertIn("BUSINESS_OBJECT 必须在逻辑实体", object_plan["dependencyErrors"][0])
+            self.assertTrue(object_plan["valid"])
+            self.assertEqual(object_plan["dependencyErrors"], [])
             # A platform context may omit ENTITY_RELATION while still asking
             # for the first-layer entity/attribute outputs and a downstream
             # business object.  The server should run relation recognition as
@@ -501,8 +709,8 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 "expectedFiles": ["logical_entities.csv", "business_attributes.csv", "business_objects.csv"],
             }, "1", "RM123456789")
             self.assertTrue(inferred_relation_plan["valid"])
-            self.assertIn("ENTITY_RELATION", inferred_relation_plan["requestedElements"])
-            self.assertEqual(inferred_relation_plan.get("implicitDependencies"), ["ENTITY_RELATION"])
+            self.assertNotIn("ENTITY_RELATION", inferred_relation_plan["requestedElements"])
+            self.assertEqual(inferred_relation_plan.get("implicitDependencies"), [])
             self.assertTrue(server.is_conversational_turn("你不用做了，问你点问题"))
             self.assertTrue(server.is_conversational_turn("为什么会失败？"))
             self.assertTrue(server.is_conversational_turn("别做了"))
@@ -519,7 +727,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                  "expectedFiles": ["logical_entities.csv", "business_attributes.csv", "entity_relations.csv", "business_objects.csv"]},
                 ["mission-output/business_objects.csv"],
             )
-            self.assertIn("business_attributes.csv", upload_gate_errors[0])
+            self.assertEqual(upload_gate_errors, [])
             partial_contract_task = types.SimpleNamespace(
                 repository_id="1", task_code="RM123456789",
                 platform_uploaded_files={
@@ -553,7 +761,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 "taskType": "modeling", "parseElements": ["RULE"],
                 "expectedFiles": ["business_rules.csv"],
             }, "1", "RM123456789")
-            self.assertFalse(rule_without_object["valid"])
+            self.assertTrue(rule_without_object["valid"])
             rule_with_reference = server.build_modeling_plan({
                 "taskType": "modeling", "parseElements": ["RULE"],
                 "expectedFiles": ["business_rules.csv"],
@@ -777,11 +985,15 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     platform_uploaded_files=completion_task.platform_uploaded_files,
                 )
                 _, partial_error = server.build_completed_callback_payload(partial_task)
-                self.assertIn("请先上传全部结果文件后再自动完成", partial_error)
+                self.assertIn("请先上传全部结果文件后再确认完成", partial_error)
                 completion, completion_error = server.build_completed_callback_payload(completion_task)
                 self.assertIsNone(completion_error)
-                self.assertEqual(completion["agentStatus"], "COMPLETED")
+                self.assertEqual(completion["agentStatus"], "SUCCEED")
                 self.assertEqual(completion["files"][0]["parseElement"], "LOGICAL_ENTITY")
+                completion_task.platform_uploaded_files["logical_entities.csv"]["previewUrl"] = ""
+                _, preview_error = server.build_completed_callback_payload(completion_task)
+                self.assertIn("记录不完整", preview_error)
+                completion_task.platform_uploaded_files["logical_entities.csv"]["previewUrl"] = "https://files.example/preview.csv"
                 result_file.write_text("逻辑实体编码,逻辑实体名称\nLE1,已修改采购订单\n", encoding="utf-8")
                 _, changed_error = server.build_completed_callback_payload(completion_task)
                 self.assertIn("上传后已变更", changed_error)
@@ -791,13 +1003,13 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 logical = output / "logical_entities.csv"
                 logical.write_text(
                     "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n"
-                    "BO1,采购,LE1,采购订单,purchaseOrder,采购订单,true,事务数据\n",
+                    "BO1,采购,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n",
                     encoding="utf-8",
                 )
                 business_attribute = output / "business_attributes.csv"
                 business_attribute.write_text(
-                    "逻辑实体编码,逻辑实体名称,业务属性编码,业务属性名称,业务属性英文名称,业务属性定义,数据类型,是否主键,是否非空,是否页面显示\n"
-                    "LE1,采购订单,BA1,订单号,orderNumber,订单标识,文本,true,true,N\n",
+                    "逻辑实体编码,逻辑实体名称,业务属性编码,业务属性名称,业务属性英文名称,业务属性定义,数据类型,数据长度,数据精度,是否物理主键,是否逻辑主键,是否唯一,是否非空,是否页面显示,是否层级编码,是否层级名称\n"
+                    "LE1,采购订单,BA1,订单号,orderNumber,订单标识,文本,50,,N,Y,Y,Y,N,N,N\n",
                     encoding="utf-8",
                 )
 
@@ -814,10 +1026,13 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     platform_last_error = ""
                     platform_output_prefix = ""
                     platform_uploaded_files = {}
+                    platform_lock = threading.Lock()
+                    status = "idle"
                     mission_context = {
                         "taskType": "modeling",
                         "parseElements": ["LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE"],
                         "expectedFiles": ["logical_entities.csv", "business_attributes.csv"],
+                        "outputPrefix": "ontology/1/modeling-tasks/RM123456789/agent-output",
                     }
 
                     def set_mission_context(self, context):
@@ -837,21 +1052,28 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 upload_task = UploadTask()
                 handler = object.__new__(server.Handler)
                 responses, callback_statuses = [], []
+                deleted_objects = []
                 originals = {
                     "bind": server.bind_mission_project,
                     "context": server.fetch_execution_context,
                     "cwd": server.mission_task_cwd,
                     "config": server.minio_config,
                     "put": server.fileserver_put_object,
+                    "delete": server.fileserver_delete_object,
                     "callback": server.task_status_callback,
                     "persist": server.persist_tasks,
                 }
                 try:
                     server.bind_mission_project = lambda *args: "project"
-                    server.fetch_execution_context = lambda *args: None
+                    server.fetch_execution_context = lambda *args: {
+                        **upload_task.mission_context, "_platformStatus": "RUNNING",
+                    }
                     server.mission_task_cwd = lambda *args: upload_tmp
                     server.minio_config = lambda: {"bucket": "bucket"}
-                    server.fileserver_put_object = lambda cfg, key, blob, name, ctype: {"objectKey": key}
+                    server.fileserver_put_object = lambda cfg, key, blob, name, ctype: {
+                        "objectKey": key, "previewUrl": "https://files.example/" + name,
+                    }
+                    server.fileserver_delete_object = lambda cfg, key: deleted_objects.append(key) or {}
                     server.task_status_callback = lambda task, status, **kwargs: (
                         callback_statuses.append((status, kwargs.get("files"))) or {"ok": True})
                     server.persist_tasks = lambda: None
@@ -869,15 +1091,48 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     self.assertEqual(callback_statuses, [])
                     handler._read_body = lambda: {**common, "paths": ["mission-output/business_attributes.csv"]}
                     handler._handle_minio_upload()
-                    self.assertEqual([status for status, _ in callback_statuses], ["COMPLETED"])
+                    self.assertEqual(callback_statuses, [])
+                    self.assertEqual(upload_task.platform_status, "RUNNING")
+                    self.assertIn("completionHint", responses[-1][1])
+                    handler._read_body = lambda: {"action": "complete"}
+                    handler._handle_platform_status(upload_task.id)
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED"])
                     self.assertEqual(upload_task.platform_status, "COMPLETED")
                     self.assertEqual(len(callback_statuses[0][1]), 2)
+                    handler._handle_platform_status(upload_task.id)
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED"])
+                    handler._read_body = lambda: {"action": "edit"}
+                    handler._handle_platform_status(upload_task.id)
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED", "RUNNING"])
+                    self.assertEqual(upload_task.platform_status, "RUNNING")
+                    self.assertEqual(upload_task.platform_uploaded_files, {})
+                    self.assertEqual(set(deleted_objects), {
+                        "ontology/1/modeling-tasks/RM123456789/agent-output/logical_entities.csv",
+                        "ontology/1/modeling-tasks/RM123456789/agent-output/business_attributes.csv",
+                    })
+                    upload_task.status = "working"
+                    handler._read_body = lambda: {"action": "complete"}
+                    handler._handle_platform_status(upload_task.id)
+                    self.assertEqual(responses[-1][0], 409)
+                    self.assertIn("仍在执行中", responses[-1][1]["error"])
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED", "RUNNING"])
+                    upload_task.status = "idle"
+                    upload_task.platform_lock.acquire()
+                    try:
+                        handler._read_body = lambda: {"action": "complete"}
+                        handler._handle_platform_status(upload_task.id)
+                    finally:
+                        upload_task.platform_lock.release()
+                    self.assertEqual(responses[-1][0], 409)
+                    self.assertIn("正在变更", responses[-1][1]["error"])
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED", "RUNNING"])
                 finally:
                     server.bind_mission_project = originals["bind"]
                     server.fetch_execution_context = originals["context"]
                     server.mission_task_cwd = originals["cwd"]
                     server.minio_config = originals["config"]
                     server.fileserver_put_object = originals["put"]
+                    server.fileserver_delete_object = originals["delete"]
                     server.task_status_callback = originals["callback"]
                     server.persist_tasks = originals["persist"]
             bo_header = "业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
@@ -897,22 +1152,37 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 "business_rules.csv", "规则编码,规则名称,规则描述\nR1,规则,描述\n".encode("utf-8")
             ))
             self.assertEqual(server.validate_integration_csv(
-                "business_rules.csv", "规则编码,规则名称,分类,规则描述,来源内容\nR1,规则,约束规则,描述,源模型\n".encode("utf-8")
+                "business_rules.csv", "规则编码,规则名称,规则描述,触发条件,判断或结果,处置动作\nR0000001,规则,描述,提交时,校验通过,允许提交\n".encode("utf-8")
             ), [])
-            page_header = "逻辑实体编码,逻辑实体名称,业务属性编码,业务属性名称,业务属性英文名称,业务属性定义,数据类型,是否主键,是否非空,是否页面显示\n"
+            self.assertTrue(server.validate_integration_csv(
+                "business_rules.csv", "规则编码,规则名称,规则描述,触发条件,判断或结果,处置动作\nR1,规则,描述,提交时,校验通过,允许提交\n".encode("utf-8")
+            ))
+            page_header = "逻辑实体编码,逻辑实体名称,业务属性编码,业务属性名称,业务属性英文名称,业务属性定义,数据类型,数据长度,数据精度,是否物理主键,是否逻辑主键,是否唯一,是否非空,是否页面显示,是否层级编码,是否层级名称\n"
             page_valid = page_header + (
-                "LE1,采购订单,BA1,订单编码,orderCode,订单唯一标识,文本,是,是,N\n"
-                "LE1,采购订单,BA2,订单名称,orderName,订单显示名称,文本,否,否,Y\n"
+                "LE1,采购订单,BA1,订单编码,orderCode,订单唯一标识,文本,50,,N,Y,Y,Y,N,N,N\n"
+                "LE1,采购订单,BA2,订单名称,orderName,订单显示名称,文本,100,,N,N,N,Y,Y,N,N\n"
             )
             self.assertEqual(server.validate_modeling_csv("business_attributes.csv", page_valid.encode("utf-8")), [])
             self.assertEqual(server.validate_integration_csv("business_attributes.csv", page_valid.encode("utf-8")), [])
-            page_invalid = page_valid.replace("订单名称,orderName,订单显示名称,文本,否,否,Y", "订单名称,orderName,订单显示名称,文本,否,否,N")
+            logical_header = "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n"
+            logical_valid = logical_header + "BO1,采购订单,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n"
+            self.assertEqual(server.validate_modeling_csv("logical_entities.csv", logical_valid.encode("utf-8")), [])
+            self.assertTrue(server.validate_modeling_csv(
+                "logical_entities.csv",
+                logical_valid.replace(",Y,事务数据", ",是,事务数据").encode("utf-8"),
+            ))
+            logical_two_primary = logical_header + (
+                "BO1,采购订单,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n"
+                "BO1,采购订单,LE2,采购明细,purchaseOrderLine,采购明细,Y,事务数据\n"
+            )
+            self.assertTrue(server.validate_modeling_csv("logical_entities.csv", logical_two_primary.encode("utf-8")))
+            page_invalid = page_valid.replace("订单名称,orderName,订单显示名称,文本,100,,N,N,N,Y,Y,N,N", "订单名称,orderName,订单显示名称,文本,100,,N,N,N,Y,N,N,N")
             self.assertTrue(server.validate_modeling_csv("business_attributes.csv", page_invalid.encode("utf-8")))
             self.assertTrue(server.validate_modeling_csv(
                 "business_attributes.csv", (page_header + "LE1,采购订单,BA1\n").encode("utf-8")
             ))
-            relation_header = "关系编码,源逻辑实体编码,源逻辑实体名称,目标逻辑实体编码,目标逻辑实体名称,关系分类编码,关系分类,关系中文名称,关系英文名称,关系基数,反向关系中文名称,反向关系英文名称,关系描述,源关联属性编码,源关联属性英文名,源关联属性中文名,目标关联属性编码,目标关联属性英文名,目标关联属性中文名\n"
-            bad_relation = relation_header + "R1,E1,订单,E2,客户,REL,错误分类,属于,belongs,一对多,,,,,,,,,\n"
+            relation_header = "关系编码,源逻辑实体编码,源逻辑实体名称,目标逻辑实体编码,目标逻辑实体名称,关系分类,关系中文名称,关系英文名称,关系基数,关系描述,源业务属性编码,源关联属性英文名,源关联属性中文名,目标业务属性编码,目标关联属性英文名,目标关联属性中文名\n"
+            bad_relation = relation_header + "R1,E1,订单,E2,客户,错误分类,属于,belongs,1:N,描述,BA1,orderCode,订单编码,BA2,customerCode,客户编码\n"
             self.assertTrue(server.validate_integration_csv("entity_relations.csv", bad_relation.encode("utf-8")))
             self.assertTrue(server.validate_modeling_csv(
                 "business_objects.csv", "id,name,description\nBO1,订单,描述\n".encode("utf-8")
@@ -953,6 +1223,22 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 saved = json.loads(Path(server.TASKS_STATE_PATH).read_text(encoding="utf-8"))
                 self.assertEqual(saved[0]["id"], "task-1")
                 self.assertFalse(Path(server.TASKS_STATE_PATH + ".tmp").exists())
+
+            with tempfile.TemporaryDirectory() as history_tmp:
+                original_history_dir = server.TASK_HISTORY_DIR
+                try:
+                    server.TASK_HISTORY_DIR = history_tmp
+                    task_id = "history-task"
+                    events = [{"type": "user", "text": f"第 {i} 条"}
+                              for i in range(10005)]
+                    self.assertTrue(server._seed_task_history(task_id, events))
+                    self.assertEqual(server._load_task_history(task_id), events)
+                    server._append_task_history(task_id, {"type": "done", "status": "idle"})
+                    self.assertEqual(len(server._load_task_history(task_id)), 10006)
+                    # A second seed must never overwrite the append-only archive.
+                    self.assertFalse(server._seed_task_history(task_id, [{"type": "user", "text": "旧"}]))
+                finally:
+                    server.TASK_HISTORY_DIR = original_history_dir
         finally:
             for name, original in originals.items():
                 if original is None:

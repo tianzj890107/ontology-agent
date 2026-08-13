@@ -59,4 +59,4 @@ PDF文档：业务规范、制度文件、行业标准文档、业务手册
 | `ACTIVITY` | `activities.csv` | 仅在 execution-context 声明时输出 |
 | `ACTIVITY_FLOW` | `activity_flows.csv`（兼容 `activity_flow.csv`） | 仅在 execution-context 声明时输出 |
 
-只生成并上传 execution-context 的 `expectedFiles` 中列出的文件。业务对象、规则和指标不能绕过前置 artifact；未选择的解析要素不得因文档内容丰富而额外生成文件。
+只生成并上传 execution-context 的 `expectedFiles` 中列出的文件。各结果文件可以独立导出；共享分析结果统一写入任务目录的 `mission-work/modeling_state.json`，不得把 `mission-output` 中的正式文件当作识别输入。未选择的解析要素不得因文档内容丰富而额外生成文件。
