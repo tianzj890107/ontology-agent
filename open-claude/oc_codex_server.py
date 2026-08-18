@@ -378,6 +378,25 @@ def user_model(user_id):
     return get_model()
 
 
+def _assign_task_model(task, model_id: str) -> None:
+    """Apply a model without forcing deferred historical tasks to load."""
+    setter = getattr(task, "set_model", None)
+    if callable(setter):
+        setter(model_id)
+        return
+    conversation = getattr(task, "conv", None)
+    if conversation is not None:
+        conversation.model = model_id
+
+
+def _task_session_id(task) -> str:
+    getter = getattr(task, "session_id", None)
+    if callable(getter):
+        return str(getter() or "")
+    conversation = getattr(task, "conv", None)
+    return str(getattr(getattr(conversation, "session", None), "session_id", "") or "")
+
+
 def set_user_model(user_id, model_id):
     model_id = str(model_id or "").strip()
     if not model_id or not any(str(item.get("id")) == model_id for item in configured_models()):
@@ -392,7 +411,7 @@ def set_user_model(user_id, model_id):
     with TASKS_LOCK:
         for task in TASKS.values():
             if task.user_id == uid:
-                task.conv.model = model_id
+                _assign_task_model(task, model_id)
     return model_id
 
 
@@ -1894,7 +1913,7 @@ def claim_legacy_mission_tasks(repository_id: str, task_code: str, user_id: str 
                     or not (owner.startswith("local:") or not owner)):
                 continue
             task.user_id = current
-            task.conv.model = user_model(current)
+            _assign_task_model(task, user_model(current))
             changed += 1
     if changed:
         persist_tasks()
@@ -3341,7 +3360,8 @@ class Task:
                  user_id: str = "", workspace: str = "",
                  task_workspace_relpath: str = "", platform_status: str = "",
                  platform_updated: float = 0, platform_uploaded_files: dict | None = None,
-                 platform_output_prefix: str = "", platform_last_error: str = ""):
+                 platform_output_prefix: str = "", platform_last_error: str = "",
+                 defer_runtime: bool = False):
         self.id = task_id or uuid.uuid4().hex[:12]
         self.project = project
         self.workspace = workspace or project
@@ -3372,6 +3392,10 @@ class Task:
         self.platform_last_error = str(platform_last_error or "")
         self.run_result: dict = {}
         self.modeling_plan: dict = {}
+        self.model_override = ""
+        self._deferred_resume_session_id = str(resume_session_id or "")
+        self._deferred_mission_context = (mission_context.copy()
+                                          if isinstance(mission_context, dict) else {})
 
         # 网页确认流:危险操作暂停执行,推送 approval_request 事件,等待用户点击
         self.pending_approval: dict | None = None
@@ -3384,21 +3408,46 @@ class Task:
         # which we redirect to the web approval flow below.
         # Pin the model via profile (highest precedence) so a Claude Code-only id
         # in ~/.claude/settings.json (e.g. "claude-fable-5[1m]") can't leak in.
+        self.conv = None
+        self.mission_context: dict = self._deferred_mission_context.copy()
+        self._mission_context_fingerprint = ""
+        if not defer_runtime:
+            self.ensure_conversation()
+
+    def ensure_conversation(self):
+        """Materialize the heavy Agent runtime only when a task needs it."""
+        if self.conv is not None:
+            return self.conv
         runtime = AGENT_RUNTIME.get()
-        self.conv = runtime.Conversation(cwd, permission_mode="default",
-                                          resume_session_id=resume_session_id,
-                                          profile=runtime.AgentProfile(
-                                     model=user_model(self.user_id),
-                                     style="始终使用简体中文回复用户;代码、命令、文件名等技术标识除外。"))
+        self.conv = runtime.Conversation(
+            self.cwd,
+            permission_mode="default",
+            resume_session_id=self._deferred_resume_session_id or None,
+            profile=runtime.AgentProfile(
+                model=self.model_override or user_model(self.user_id),
+                style="始终使用简体中文回复用户;代码、命令、文件名等技术标识除外。",
+            ),
+        )
         self.conv.permissions._prompt_user = self._web_prompt_user
         p = self.conv.profile
         p.temperature = PARAM_DEFAULTS["temperature"]
         p.max_tokens = PARAM_DEFAULTS["max_tokens"]
         p.thinking = PARAM_DEFAULTS["thinking"]
         p.thinking_budget = PARAM_DEFAULTS["thinking_budget"]
-        self.mission_context: dict = {}
-        self._mission_context_fingerprint = ""
-        self.set_mission_context(mission_context)
+        context = self._deferred_mission_context
+        self._deferred_mission_context = {}
+        self.set_mission_context(context)
+        return self.conv
+
+    def set_model(self, model_id: str):
+        self.model_override = str(model_id or "")
+        if self.conv is not None and self.model_override:
+            self.conv.model = self.model_override
+
+    def session_id(self) -> str:
+        if self.conv is not None:
+            return str(getattr(self.conv.session, "session_id", "") or "")
+        return self._deferred_resume_session_id
 
     def set_mission_context(self, context: dict | None):
         """将当前本体任务上下文放入 agent system prompt,避免每轮重复上传/描述。"""
@@ -3795,9 +3844,10 @@ class Task:
             emit_timed(event)                # 客户端断开时继续后台执行,不中断回合
 
         with self.lock:
-            original_system_prompt = self.conv.system_prompt
+            conv = self.ensure_conversation()
+            original_system_prompt = conv.system_prompt
             if conversational:
-                self.conv.system_prompt = original_system_prompt + (
+                conv.system_prompt = original_system_prompt + (
                     "\n\n[当前回合是普通咨询，不是建模启动指令]\n"
                     "只回答用户当前的问题或确认停止意图，不执行当前任务，不调用工具，"
                     "不创建、修改、上传或校验任何结果文件。即使 modelingPlan 中存在"
@@ -3805,7 +3855,6 @@ class Task:
                     "用简短自然语言告知当前任务状态即可。"
                 )
             self._rec = rec
-            conv = self.conv
             self.status = "working"
             self.updated = time.time()
             if self.title == "新任务" and display_text:
@@ -4136,7 +4185,7 @@ def persist_tasks():
                          "platformUploadedFiles": getattr(t, "platform_uploaded_files", {}),
                          "platformOutputPrefix": getattr(t, "platform_output_prefix", ""),
                          "platformLastError": getattr(t, "platform_last_error", ""),
-                         "sessionId": getattr(t.conv.session, "session_id", ""),
+                         "sessionId": _task_session_id(t),
                          "userId": getattr(t, "user_id", ""),
                          "workspace": getattr(t, "workspace", getattr(t, "project", "")),
                          "taskWorkspace": getattr(t, "task_workspace_relpath", "")})
@@ -4216,13 +4265,15 @@ def restore_tasks():
                      platform_uploaded_files=(row.get("platformUploadedFiles")
                                               if isinstance(row.get("platformUploadedFiles"), dict) else None),
                      platform_output_prefix=str(row.get("platformOutputPrefix") or ""),
-                     platform_last_error=str(row.get("platformLastError") or ""))
+                     platform_last_error=str(row.get("platformLastError") or ""),
+                     defer_runtime=True)
             if task_rel:
                 ensure_workspace_shared_files(workspace, cwd)
             t.title = str(row.get("title") or "新任务")
             t.created = float(row.get("created") or time.time())
             t.updated = float(row.get("updated") or t.created)
             t.run_result = row.get("runResult") if isinstance(row.get("runResult"), dict) else {}
+            t.modeling_plan = row.get("modelingPlan") if isinstance(row.get("modelingPlan"), dict) else {}
             t.status = "idle" if row.get("status") == "working" else str(row.get("status") or "idle")
             t.log = row.get("log") if isinstance(row.get("log"), list) else []
             if not t.log:
@@ -4398,6 +4449,8 @@ def set_params(data: dict) -> dict:
     PARAM_DEFAULTS.update(updated)
     with TASKS_LOCK:
         for task in TASKS.values():
+            if task.conv is None:
+                continue
             p = task.conv.profile
             p.temperature = PARAM_DEFAULTS["temperature"]
             p.max_tokens = PARAM_DEFAULTS["max_tokens"]
@@ -4410,7 +4463,7 @@ def set_model(model_id: str):
     os.environ["CLAUDE_MODEL"] = model_id
     with TASKS_LOCK:
         for task in TASKS.values():
-            task.conv.model = model_id
+            _assign_task_model(task, model_id)
 
 
 # ---------------------------------------------------------------------------
@@ -4472,7 +4525,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         if claim_legacy and not task.user_id:
             task.user_id = user
-            task.conv.model = user_model(user)
+            _assign_task_model(task, user_model(user))
             persist_tasks()
         return task
 
@@ -5657,10 +5710,11 @@ def main():
     finally:
         with TASKS_LOCK:
             for task in TASKS.values():
-                try:
-                    task.conv.mcp.shutdown()
-                except Exception:
-                    pass
+                if task.conv is not None:
+                    try:
+                        task.conv.mcp.shutdown()
+                    except Exception:
+                        pass
         server.server_close()
 
 
