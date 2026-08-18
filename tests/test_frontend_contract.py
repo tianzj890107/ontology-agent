@@ -65,7 +65,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('const selectRun = (runId) =>', source)
         self.assertIn('const cached = runs.find((item) => item.runId === runId);', source)
         self.assertIn('setRun({ ...cached, events:', source)
-        self.assertIn('const summaryRun = { ...summary, events: [] };', source)
+        self.assertIn('const summaryRun = { ...summary, files: [], events: [] };', source)
         self.assertIn('selectRun(item.runId)', source)
         self.assertIn('role="button" tabIndex={0}', source)
         self.assertIn('selecting a run is view-only', source)
