@@ -237,17 +237,15 @@ function StandaloneApp() {
       ? { ...item, ...summary, events: undefined }
       : item));
   };
-  const loadRunFiles = async (runId, generation = runRequestRef.current.generation) => {
-    if (!runId || !isCurrentRunRequest(runId, generation)) return;
+  const loadRunFiles = async (runId) => {
+    if (!runId || selectedRunIdRef.current !== runId) return;
     setRunFilesLoading(true);
     try {
-      const result = await standaloneApi(`/api/modeling-runs/${encodeURIComponent(runId)}/files`, "", {
-        signal: runRequestRef.current.controller?.signal,
-      });
-      if (result._aborted || !isCurrentRunRequest(runId, generation) || result.error) return;
+      const result = await standaloneApi(`/api/modeling-runs/${encodeURIComponent(runId)}/files`, "");
+      if (result._aborted || selectedRunIdRef.current !== runId || result.error) return;
       setRun((current) => current?.runId === runId ? { ...current, files: result.files || [] } : current);
     } finally {
-      if (isCurrentRunRequest(runId, generation)) setRunFilesLoading(false);
+      if (selectedRunIdRef.current === runId) setRunFilesLoading(false);
     }
   };
   const loadRun = async (runId, showError = true) => {
@@ -286,29 +284,34 @@ function StandaloneApp() {
     if (summary.model) setStandaloneModel(summary.model);
     if (isCurrentRunRequest(runId, request.generation)) setRun(result);
     scheduleIdle(async () => {
-      await loadOlderStandaloneEvents(runId, request.generation);
-      await loadRunFiles(runId, request.generation);
+      await loadOlderStandaloneEvents(runId);
+      await loadRunFiles(runId);
     });
     return result;
   };
-  const loadOlderStandaloneEvents = async (runId, generation = runRequestRef.current.generation) => {
-    if (!runId || !isCurrentRunRequest(runId, generation) || olderEventsLoadingRef.current.has(runId)) return;
-    const window = eventWindowRef.current.get(runId);
-    if (!window || window.start <= 0) return;
+  const loadOlderStandaloneEvents = async (runId) => {
+    if (!runId || selectedRunIdRef.current !== runId || olderEventsLoadingRef.current.has(runId)) return;
+    const initialWindow = eventWindowRef.current.get(runId);
+    if (!initialWindow || initialWindow.start <= 0) return;
     olderEventsLoadingRef.current.add(runId);
     try {
-      const encodedId = encodeURIComponent(runId);
-      const result = await standaloneApi(
-        `/api/modeling-runs/${encodedId}/events?before=${window.start}&limit=160`, "",
-        { signal: runRequestRef.current.controller?.signal },
-      );
-      if (result._aborted || !isCurrentRunRequest(runId, generation) || result.error) return;
-      const older = Array.isArray(result.events) ? result.events : [];
-      const nextStart = Number(result.eventStart ?? Math.max(0, window.start - older.length));
-      eventWindowRef.current.set(runId, { start: nextStart, total: window.total });
-      if (older.length) setRun((current) => current?.runId === runId
-        ? { ...current, events: [...older, ...(current.events || [])] }
-        : current);
+      while (selectedRunIdRef.current === runId) {
+        const window = eventWindowRef.current.get(runId);
+        if (!window || window.start <= 0) break;
+        const encodedId = encodeURIComponent(runId);
+        const result = await standaloneApi(
+          `/api/modeling-runs/${encodedId}/events?before=${window.start}&limit=160`, "",
+        );
+        if (result._aborted || selectedRunIdRef.current !== runId || result.error) break;
+        const older = Array.isArray(result.events) ? result.events : [];
+        const nextStart = Number(result.eventStart ?? Math.max(0, window.start - older.length));
+        eventWindowRef.current.set(runId, { start: nextStart, total: window.total });
+        if (older.length) setRun((current) => current?.runId === runId
+          ? { ...current, events: [...older, ...(current.events || [])] }
+          : current);
+        if (!older.length || nextStart >= window.start) break;
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+      }
     } finally {
       olderEventsLoadingRef.current.delete(runId);
     }
@@ -1317,21 +1320,27 @@ function App() {
 
   const loadOlderTaskEvents = async (task, generation = 0) => {
     if (!task?.id || olderLogLoadingRef.current.has(task.id)) return;
-    const window = logWindowRef.current.get(task.id);
-    if (!window || window.start <= 0) return;
+    const initialWindow = logWindowRef.current.get(task.id);
+    if (!initialWindow || initialWindow.start <= 0) return;
     olderLogLoadingRef.current.add(task.id);
     try {
-      const taskMission = missionIdentity(task);
-      const identity = taskMission
-        ? `&repositoryId=${encodeURIComponent(taskMission.repositoryId)}&taskCode=${encodeURIComponent(taskMission.taskCode)}`
-        : "";
-      const result = await api(`/api/tasks/${task.id}?before=${window.start}&limit=160${identity}`);
-      if (generation && generation !== logWindowRef.current.get(task.id)?.generation) return;
-      if (result.error) return;
-      const older = normalizeEvents(result);
-      const nextStart = Number(result.logStart ?? Math.max(0, window.start - older.length));
-      logWindowRef.current.set(task.id, { ...window, start: nextStart });
-      if (older.length) setEvents((current) => activeTaskIdRef.current === task.id ? [...older, ...current] : current);
+      while (!generation || generation === logWindowRef.current.get(task.id)?.generation) {
+        const window = logWindowRef.current.get(task.id);
+        if (!window || window.start <= 0) break;
+        const taskMission = missionIdentity(task);
+        const identity = taskMission
+          ? `&repositoryId=${encodeURIComponent(taskMission.repositoryId)}&taskCode=${encodeURIComponent(taskMission.taskCode)}`
+          : "";
+        const result = await api(`/api/tasks/${task.id}?before=${window.start}&limit=160${identity}`);
+        if (generation && generation !== logWindowRef.current.get(task.id)?.generation) break;
+        if (result.error) break;
+        const older = normalizeEvents(result);
+        const nextStart = Number(result.logStart ?? Math.max(0, window.start - older.length));
+        logWindowRef.current.set(task.id, { ...window, start: nextStart });
+        if (older.length) setEvents((current) => activeTaskIdRef.current === task.id ? [...older, ...current] : current);
+        if (!older.length || nextStart >= window.start) break;
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+      }
     } finally {
       olderLogLoadingRef.current.delete(task.id);
     }
