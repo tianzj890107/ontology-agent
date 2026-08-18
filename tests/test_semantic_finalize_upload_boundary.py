@@ -109,6 +109,30 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
             self.assertEqual(server.validate_modeling_upload_artifact(
                 "logical_entities.csv", blob, str(root)), [])
 
+    def test_formal_business_object_upload_does_not_read_r1_r5_decisions(self):
+        """Formal output upload must not parse or validate the decision ledger."""
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            # Deliberately malformed semantic state.  This belongs to the
+            # modeling-finalize path, not to the artifact upload path.
+            work = root / "mission-work"
+            work.mkdir()
+            (work / "modeling_state.json").write_text(json.dumps({
+                "businessObjectDecisions": [{
+                    "candidateCode": "CO001",
+                    "candidateName": "对象",
+                    "r1": {"status": "NOT_A_DECISION"},
+                }],
+            }, ensure_ascii=False), encoding="utf-8")
+            blob = (
+                "业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
+                "BO0001,采购订单,purchase_order,正式交付对象,事务数据\n"
+            ).encode("utf-8")
+            with patch.object(server, "validate_modeling_evidence",
+                              side_effect=AssertionError("upload must not parse R1-R5")):
+                self.assertEqual(server.validate_modeling_upload_artifact(
+                    "business_objects.csv", blob, str(root)), [])
+
     def test_completion_callback_consumes_marker_without_recomputing_semantics(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)

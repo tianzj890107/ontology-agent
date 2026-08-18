@@ -5071,7 +5071,12 @@ class Handler(BaseHTTPRequestHandler):
                     })
                     continue
             elif not integration_upload and name.lower() in _MODELING_HEADERS:
-                csv_errors = validate_modeling_csv(name, blob, semantic_checks=False)
+                # Upload is deliberately syntax-only.  Semantic decisions,
+                # R1-R5, evidence, and formal-output/decision consistency are
+                # finalized before this handler is reached.  Keep the call
+                # behind the dedicated upload validator so a legacy semantic
+                # validator cannot be reintroduced here by accident.
+                csv_errors = validate_modeling_upload_artifact(name, blob, base)
                 if csv_errors:
                     results.append({
                         "name": name, "ok": False,
