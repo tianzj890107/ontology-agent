@@ -492,7 +492,9 @@ function StandaloneApp() {
       });
       if (created.error) { setError(created.error); return; }
       selectedRunIdRef.current = created.runId;
-      eventCursorRef.current.set(created.runId, Number(created.eventsCount) || 0);
+      // The create response is metadata only; do not treat eventsCount as a
+      // client read cursor because it does not contain the event payload.
+      eventCursorRef.current.delete(created.runId);
       setRun(created);
       if (created.model) setStandaloneModel(created.model);
       setRuns((current) => [created, ...current.filter((item) => item.runId !== created.runId)]);
@@ -504,9 +506,13 @@ function StandaloneApp() {
         setError(started.error);
         return;
       }
-      eventCursorRef.current.set(started.runId, Number(started.eventsCount) || 0);
+      // /execute may finish or become BLOCKED before this response arrives.
+      // Reload the persisted event window so already-produced thinking is not
+      // skipped by initializing the cursor from a summary-only response.
+      eventCursorRef.current.delete(started.runId);
       setRun(started);
       setRuns((current) => current.map((item) => item.runId === started.runId ? { ...item, ...started } : item));
+      void loadRun(started.runId);
       messageApi.success("建模已开始，可在右侧查看运行状态和产物");
     } catch (requestError) {
       setError(requestError?.message || "请求失败");
@@ -515,7 +521,7 @@ function StandaloneApp() {
     }
   };
   const continueRun = async (nextPrompt = "", selectedModel = standaloneModel) => {
-    if (!run?.runId || !["CREATED", "INPUT_READY", "FAILED"].includes(run.status)) return;
+    if (!run?.runId || !["CREATED", "INPUT_READY", "FAILED", "BLOCKED"].includes(run.status)) return;
     setError("");
     setBusy(true);
     try {
@@ -532,10 +538,11 @@ function StandaloneApp() {
         return;
       }
       selectedRunIdRef.current = started.runId;
-      eventCursorRef.current.set(started.runId, Number(started.eventsCount) || 0);
+      eventCursorRef.current.delete(started.runId);
       setRun(started);
       setRuns((current) => current.map((item) => item.runId === started.runId
         ? { ...item, ...started } : item));
+      void loadRun(started.runId);
       messageApi.success("已继续运行建模任务");
     } catch (requestError) {
       setError(requestError?.message || "请求失败");
@@ -611,7 +618,7 @@ function StandaloneApp() {
       URL.revokeObjectURL(link.href);
     }
   };
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", READY_FOR_EXPORT: "success", FAILED: "error" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", READY_FOR_EXPORT: "success", FAILED: "error", BLOCKED: "error" }[run?.status] || "default";
   return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
     {contextHolder}
     <div className="standalone-shell">
@@ -632,7 +639,7 @@ function StandaloneApp() {
 }
 
 function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", READY_FOR_EXPORT: "success", FAILED: "error" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", READY_FOR_EXPORT: "success", FAILED: "error", BLOCKED: "error" }[run?.status] || "default";
   const files = run?.files || [];
   // The standalone API persists every streamed thinking token. Reuse the
   // shared workbench normalization so one continuous reasoning block renders
@@ -642,7 +649,7 @@ function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selected
     ...normalizeEvents({ events: run.events || [] }),
   ], [run.events, run.prompt]);
   return <section className="task-view standalone-agent-task-view">
-    <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{run.status}</Tag>{run.status === "FAILED" && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
+    <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{run.status}</Tag>{["FAILED", "BLOCKED"].includes(run.status) && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
     <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
   </section>;
 }

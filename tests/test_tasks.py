@@ -29,6 +29,14 @@ class _FakeConversation:
 
 
 class TaskStateMachineTests(unittest.TestCase):
+    def test_modeling_guard_default_token_budget_is_one_hundred_million(self):
+        with patch.dict(os.environ, {
+            "ONTOLOGY_MODELING_MAX_TOKENS": "",
+        }, clear=False):
+            os.environ.pop("ONTOLOGY_MODELING_MAX_TOKENS", None)
+            guard = oc_codex_server.ModelingExecutionGuard()
+        self.assertEqual(guard.max_tokens, 100_000_000)
+
     @staticmethod
     def _modeling_task(directory, project, expected_files=None):
         task = oc_codex_server.Task(

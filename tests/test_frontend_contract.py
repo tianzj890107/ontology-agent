@@ -76,9 +76,11 @@ class FrontendContractTests(unittest.TestCase):
         # the session they are currently viewing.
         self.assertNotIn('if (started.activeRunId) await loadRun(started.activeRunId);', source)
         self.assertIn('const continueRun = async (nextPrompt = "", selectedModel = standaloneModel) => {', source)
-        self.assertIn('["CREATED", "INPUT_READY", "FAILED"].includes(run.status)', source)
+        self.assertIn('["CREATED", "INPUT_READY", "FAILED", "BLOCKED"].includes(run.status)', source)
+        self.assertIn('eventCursorRef.current.delete(started.runId);', source)
+        self.assertIn('void loadRun(started.runId);', source)
         self.assertIn('onContinue={continueRun}', source)
-        self.assertIn('run.status === "FAILED" && <Button type="primary"', source)
+        self.assertIn('["FAILED", "BLOCKED"].includes(run.status) && <Button type="primary"', source)
         self.assertIn('>继续运行</Button>', source)
         self.assertIn('const [standaloneComposerText, setStandaloneComposerText] = useState("");', source)
         self.assertIn('const sendStandaloneMessage = async () =>', source)
