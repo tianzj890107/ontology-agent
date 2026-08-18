@@ -13,9 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-claude"))
 
 import oc_codex_server as server  # noqa: E402
+import open_claude.modeling_reliability as reliability  # noqa: E402
 from open_claude.modeling_reliability import (  # noqa: E402
     finalize_semantic_model,
     load_validation_report,
+    modeling_validation_stage_plan,
+    validate_modeling_stages,
     write_decision_audits,
 )
 
@@ -32,6 +35,62 @@ def confirmed_bo(code="CO001"):
 
 
 class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
+    def test_partial_output_plan_only_activates_required_dependencies(self):
+        plan = modeling_validation_stage_plan(["business_objects.csv"])
+        by_stage = {item["stage"]: item["status"] for item in plan}
+        self.assertEqual(by_stage["TERMS"], "SKIPPED")
+        self.assertEqual(by_stage["LOGICAL_ENTITIES"], "PENDING")
+        self.assertEqual(by_stage["BUSINESS_ATTRIBUTES"], "PENDING")
+        self.assertEqual(by_stage["ENTITY_RELATIONS"], "PENDING")
+        self.assertEqual(by_stage["BUSINESS_OBJECTS"], "PENDING")
+        self.assertEqual(by_stage["GOVERNANCE_AND_FINAL"], "PENDING")
+
+    def test_passed_stage_is_cached_until_its_file_changes(self):
+        state = {
+            "allAttributes": [{"来源字段": "id"}],
+            "logicalEntities": [{"code": "LE001"}],
+        }
+        with tempfile.TemporaryDirectory() as root, \
+                patch.object(reliability, "_stage_specific_issues", return_value=[]) as validate:
+            root = Path(root)
+            work = root / "mission-work"
+            output = root / "mission-output"
+            work.mkdir()
+            output.mkdir()
+            first = validate_modeling_stages(work, output, state, ["logical_entities.csv"])
+            second = validate_modeling_stages(work, output, first["state"], ["logical_entities.csv"])
+            self.assertEqual(validate.call_count, 5)
+            self.assertEqual(second["events"], [])
+            (output / "logical_entities.csv").write_text("changed\n", encoding="utf-8")
+            third = validate_modeling_stages(work, output, second["state"], ["logical_entities.csv"])
+            self.assertEqual(validate.call_count, 6)
+            self.assertTrue(any(event["stage"] == "LOGICAL_ENTITIES" for event in third["events"]))
+
+    def test_failed_stage_is_cached_until_its_inputs_change(self):
+        state = {
+            "allAttributes": [{"来源字段": "id"}],
+            "logicalEntities": [{"code": "LE001"}],
+        }
+        failure = reliability._issue("TEST_STAGE_FAILURE", "ERROR", "文件仍不完整")
+        def validate_stage(stage, *_args):
+            return [failure] if stage == "LOGICAL_ENTITIES" else []
+        with tempfile.TemporaryDirectory() as root, \
+                patch.object(reliability, "_stage_specific_issues", side_effect=validate_stage) as validate:
+            root = Path(root)
+            work = root / "mission-work"
+            output = root / "mission-output"
+            work.mkdir()
+            output.mkdir()
+            first = validate_modeling_stages(work, output, state, ["logical_entities.csv"])
+            self.assertEqual(first["issues"][0].code, "TEST_STAGE_FAILURE")
+            first_calls = validate.call_count
+            second = validate_modeling_stages(work, output, first["state"], ["logical_entities.csv"])
+            self.assertEqual(validate.call_count, first_calls)
+            self.assertEqual(second["issues"][0].code, "TEST_STAGE_FAILURE")
+            (output / "logical_entities.csv").write_text("changed\n", encoding="utf-8")
+            validate_modeling_stages(work, output, second["state"], ["logical_entities.csv"])
+            self.assertEqual(validate.call_count, first_calls + 1)
+
     def test_finalize_writes_audits_and_marker_before_upload(self):
         state = {"businessObjectDecisions": [confirmed_bo()]}
         with tempfile.TemporaryDirectory() as root:

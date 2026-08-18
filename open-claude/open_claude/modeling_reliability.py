@@ -2506,7 +2506,8 @@ def validate_formal_attribute_inventory(blob: bytes,
 
 
 def write_decision_audits(work_dir: str | os.PathLike[str],
-                          state: Mapping[str, Any] | None) -> dict[str, str]:
+                          state: Mapping[str, Any] | None,
+                          *, write_report: bool = True) -> dict[str, str]:
     """Materialize every semantic decision before any formal export."""
     target_dir = Path(work_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -2545,15 +2546,16 @@ def write_decision_audits(work_dir: str | os.PathLike[str],
         _atomic_text_write(target_dir / "modeling_state.json",
                            json.dumps(persisted_state, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     paths["modeling_state.json"] = str(target_dir / "modeling_state.json")
-    report = {
-        "schemaVersion": "1",
-        "decisionAuditTemplateVersion": DECISION_AUDIT_TEMPLATE_VERSION,
-        "issues": [issue.as_dict() for issue in semantic_validation_issues(state)],
-        "decisionAuditCoverage": decision_audit_coverage(target_dir, state),
-    }
-    _atomic_text_write(target_dir / "validation_report.json",
-                       json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-    paths["validation_report.json"] = str(target_dir / "validation_report.json")
+    if write_report:
+        report = {
+            "schemaVersion": "1",
+            "decisionAuditTemplateVersion": DECISION_AUDIT_TEMPLATE_VERSION,
+            "issues": [issue.as_dict() for issue in semantic_validation_issues(state)],
+            "decisionAuditCoverage": decision_audit_coverage(target_dir, state),
+        }
+        _atomic_text_write(target_dir / "validation_report.json",
+                           json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        paths["validation_report.json"] = str(target_dir / "validation_report.json")
     return paths
 
 
@@ -2880,6 +2882,241 @@ _FORMAL_ARTIFACT_REQUIRED_HEADERS = {
     "metrics.csv": {"指标编码", "指标名称", "指标定义", "计算公式", "聚合类型"},
 }
 
+# Modeling is validated as a ten-stage pipeline.  A stage is marked complete
+# against a content signature, so later turns do not re-run validators for an
+# unchanged file.  The final stage still performs cross-file checks once all
+# requested outputs are ready.
+MODEL_VALIDATION_STAGES = (
+    ("INPUT_CONTEXT", "输入契约"),
+    ("ASSET_INVENTORY", "数据资产盘点"),
+    ("ALL_ATTRIBUTES", "全量属性"),
+    ("KEYS_AND_FOREIGN_KEYS", "主键与外键"),
+    ("TERMS", "术语"),
+    ("LOGICAL_ENTITIES", "逻辑实体"),
+    ("BUSINESS_ATTRIBUTES", "业务属性"),
+    ("ENTITY_RELATIONS", "实体关系"),
+    ("BUSINESS_OBJECTS", "业务对象"),
+    ("GOVERNANCE_AND_FINAL", "规则指标与最终输出"),
+)
+
+_STAGE_OUTPUTS = {
+    "TERMS": {"terms.csv", "business_terms.csv"},
+    "LOGICAL_ENTITIES": {"logical_entities.csv"},
+    "BUSINESS_ATTRIBUTES": {"business_attributes.csv"},
+    "ENTITY_RELATIONS": {"entity_relations.csv", "entity_relationships.csv"},
+    "BUSINESS_OBJECTS": {"business_objects.csv"},
+    "GOVERNANCE_AND_FINAL": {
+        "business_rules.csv", "rules.csv", "metrics.csv", "indicator.csv",
+        "indicators.csv", "atomic_indicators.csv", "composite_indicators.csv",
+    },
+}
+
+_STAGE_STATE_KEYS = {
+    "ASSET_INVENTORY": ("assetInventory", "sourceInventory", "tables"),
+    "ALL_ATTRIBUTES": ("allAttributes", "candidateAttributes", "businessAttributes"),
+    "KEYS_AND_FOREIGN_KEYS": (
+        "allAttributes", "declaredForeignKeys", "declared_foreign_keys",
+        "foreignKeys", "foreign_keys", "fkDeclarations",
+    ),
+    "TERMS": ("termDecisions", "terms"),
+    "LOGICAL_ENTITIES": ("logicalEntities", "logicalEntityDecisions"),
+    "BUSINESS_ATTRIBUTES": ("businessAttributes", "candidateAttributes"),
+    "ENTITY_RELATIONS": ("relationDecisions",),
+    "BUSINESS_OBJECTS": ("businessObjectDecisions",),
+    # Final validation includes cross-file integrity and audit coverage, so
+    # any semantic collection that can affect that result belongs in the
+    # content signature.  This prevents an upstream change from reusing an
+    # obsolete final checkpoint.
+    "GOVERNANCE_AND_FINAL": (
+        "validationCore", "assetInventory", "sourceInventory", "tables",
+        "allAttributes", "candidateAttributes", "declaredForeignKeys",
+        "declared_foreign_keys", "foreignKeys", "foreign_keys", "fkDeclarations",
+        "logicalEntities", "logicalEntityDecisions", "businessAttributes",
+        "relationDecisions", "businessObjectDecisions", "termDecisions",
+        "ruleDecisions", "indicatorDecisions", "pendingConfirmations",
+    ),
+}
+
+
+def _stage_hash(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                     default=str).encode("utf-8")).hexdigest()
+
+
+def _stage_file_hash(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _requested_stage_set(required_outputs: Iterable[str] | None) -> set[str]:
+    requested = {os.path.basename(str(item)).lower() for item in (required_outputs or ())}
+    # Keep the library's legacy direct-call behavior for callers that do not
+    # provide an execution context.  Production modeling requests always have
+    # expectedFiles and therefore use the staged path below.
+    if not requested:
+        return set()
+    active = {"INPUT_CONTEXT", "ASSET_INVENTORY", "ALL_ATTRIBUTES", "KEYS_AND_FOREIGN_KEYS",
+              "GOVERNANCE_AND_FINAL"}
+    if requested & _STAGE_OUTPUTS["TERMS"]:
+        active.add("TERMS")
+    if requested & {"logical_entities.csv", "business_attributes.csv", "entity_relations.csv",
+                    "entity_relationships.csv", "business_objects.csv"}:
+        active.add("LOGICAL_ENTITIES")
+    if requested & {"business_attributes.csv", "entity_relations.csv", "entity_relationships.csv",
+                    "business_objects.csv"}:
+        active.add("BUSINESS_ATTRIBUTES")
+    if requested & {"entity_relations.csv", "entity_relationships.csv", "business_objects.csv"}:
+        active.add("ENTITY_RELATIONS")
+    if "business_objects.csv" in requested:
+        active.add("BUSINESS_OBJECTS")
+    return active
+
+
+def modeling_validation_stage_plan(required_outputs: Iterable[str] | None) -> list[dict[str, Any]]:
+    """Return all ten stages with requested-scope stages marked active/skipped."""
+    active = _requested_stage_set(required_outputs)
+    requested = sorted({os.path.basename(str(item)).lower() for item in (required_outputs or ())})
+    return [{"stage": stage, "name": name, "status": "PENDING" if stage in active else "SKIPPED",
+             "requestedOutputs": requested} for stage, name in MODEL_VALIDATION_STAGES]
+
+
+def _stage_signature(stage: str, work_dir: Path, output_dir: Path,
+                     state: Mapping[str, Any], required_outputs: Iterable[str]) -> str:
+    requested = {os.path.basename(str(item)).lower() for item in (required_outputs or ())}
+    output_hashes = {
+        name: _stage_file_hash(output_dir / name)
+        for name in sorted(requested & _STAGE_OUTPUTS.get(stage, set()))
+    }
+    state_values = {key: state.get(key) for key in _STAGE_STATE_KEYS.get(stage, ())
+                    if key in state}
+    # The stage cache itself and the generated report are intentionally absent
+    # from this signature; writing a checkpoint must not invalidate a passed
+    # stage.
+    return _stage_hash({"stage": stage, "outputs": output_hashes, "state": state_values})
+
+
+def _stage_state_ready(stage: str, state: Mapping[str, Any]) -> bool:
+    if stage == "INPUT_CONTEXT":
+        return True
+    if stage in {"ASSET_INVENTORY", "ALL_ATTRIBUTES", "KEYS_AND_FOREIGN_KEYS"}:
+        return isinstance(state.get("allAttributes"), list) or bool(state.get("assetInventory"))
+    keys = _STAGE_STATE_KEYS.get(stage, ())
+    return any(isinstance(state.get(key), (list, dict)) and bool(state.get(key)) for key in keys)
+
+
+def _stage_output_issues(stage: str, work_dir: Path, output_dir: Path,
+                         state: Mapping[str, Any], required_outputs: Iterable[str]) -> list[ValidationIssue]:
+    requested = {os.path.basename(str(item)).lower() for item in (required_outputs or ())}
+    issues: list[ValidationIssue] = []
+    for name in sorted(requested & _STAGE_OUTPUTS.get(stage, set())):
+        issues.extend(_formal_output_issues(output_dir, work_dir, state, {name},
+                                            validate_artifact_schema=True))
+    return issues
+
+
+def _issue_from_dict(value: Mapping[str, Any]) -> ValidationIssue:
+    return ValidationIssue(
+        code=str(value.get("code") or "VALIDATION_ERROR"),
+        severity=str(value.get("severity") or "ERROR"),
+        message=str(value.get("message") or value.get("code") or "校验失败"),
+        artifact_type=str(value.get("artifactType") or ""),
+        artifact_id=str(value.get("artifactId") or ""),
+        evidence_required=tuple(value.get("evidenceRequired") or ()),
+        fix_class=str(value.get("fixClass") or SEMANTIC_FIX),
+        auto_fixable=bool(value.get("autoFixable")),
+        details=value.get("details") if isinstance(value.get("details"), Mapping) else {},
+    )
+
+
+def _stage_specific_issues(stage: str, work_dir: Path, output_dir: Path,
+                           state: Mapping[str, Any], required_outputs: Iterable[str]) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    # A lightweight/legacy caller may provide only the output directory and
+    # no structured intermediate state.  That is not itself a file error:
+    # let the current output validator report the concrete missing/invalid
+    # artifact, while richer modeling runs still execute the semantic checks
+    # below as soon as their state collections exist.
+    if stage == "KEYS_AND_FOREIGN_KEYS":
+        issues.extend(validate_fk_coverage(state))
+    if stage == "ENTITY_RELATIONS":
+        issues.extend(validate_relation_decision_integrity(state))
+        issues.extend(validate_overloaded_reference_identifiers(state))
+    if stage == "BUSINESS_OBJECTS":
+        issues.extend(validate_business_object_decisions(state))
+        issues.extend(validate_business_object_evidence_isolation(state))
+    if stage == "GOVERNANCE_AND_FINAL":
+        issues.extend(business_rule_validation_issues(state))
+        issues.extend(validate_rule_decisions(state))
+        issues.extend(validate_indicator_decisions(state))
+    issues.extend(_stage_output_issues(stage, work_dir, output_dir, state, required_outputs))
+    return issues
+
+
+def validate_modeling_stages(work_dir: str | os.PathLike[str],
+                             output_dir: str | os.PathLike[str],
+                             state: Mapping[str, Any] | None,
+                             required_outputs: Iterable[str] | None) -> dict[str, Any]:
+    """Validate only the first unfinished/changed stage in the ten-stage plan.
+
+    A passed stage is skipped when its content signature is unchanged.  This
+    is the important distinction from the old final gate: producing a new
+    downstream file does not revalidate earlier logical entities or attributes.
+    """
+    target_work = Path(work_dir)
+    target_output = Path(output_dir)
+    current = dict(state) if isinstance(state, Mapping) else {}
+    cache = current.get("validationStages") if isinstance(current.get("validationStages"), dict) else {}
+    active = _requested_stage_set(required_outputs)
+    events: list[dict[str, Any]] = []
+    stage_rows: list[dict[str, Any]] = []
+    first_error: list[ValidationIssue] = []
+    for stage, name in MODEL_VALIDATION_STAGES:
+        if stage not in active:
+            stage_rows.append({"stage": stage, "name": name, "status": "SKIPPED"})
+            continue
+        # The tenth stage is the authoritative cross-file finalization point.
+        # Its file and semantic checks run once below, after the dependency
+        # stages have passed, instead of being run as a second partial check.
+        if stage == "GOVERNANCE_AND_FINAL":
+            stage_rows.append({"stage": stage, "name": name, "status": "PENDING"})
+            continue
+        signature = _stage_signature(stage, target_work, target_output, current, required_outputs)
+        prior = cache.get(stage) if isinstance(cache.get(stage), dict) else {}
+        if (prior.get("status") in {"PASSED", "FAILED"}
+                and prior.get("signature") == signature):
+            cached_status = str(prior.get("status"))
+            cached_issues = [_issue_from_dict(item) for item in (prior.get("issues") or [])
+                             if isinstance(item, Mapping)]
+            stage_rows.append({**prior, "stage": stage, "name": name,
+                               "status": cached_status, "cached": True})
+            if cached_status == "FAILED":
+                first_error = cached_issues or [_issue(
+                    "STAGE_VALIDATION_FAILED", "ERROR", f"阶段 {stage} 校验失败",
+                    artifact_type="VALIDATION_STAGE", artifact_id=stage)]
+                break
+            continue
+        issues = _stage_specific_issues(stage, target_work, target_output, current, required_outputs)
+        status = "FAILED" if any(item.severity == "ERROR" for item in issues) else "PASSED"
+        row = {"stage": stage, "name": name, "status": status, "signature": signature,
+               "validatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+               "issueCodes": [item.code for item in issues],
+               "issues": [item.as_dict() for item in issues]}
+        cache[stage] = row
+        stage_rows.append(row)
+        events.append({"stage": stage, "name": name, "status": status,
+                       "issueCodes": row["issueCodes"]})
+        if status == "FAILED":
+            first_error = issues
+            break
+    for stage, name in MODEL_VALIDATION_STAGES[len(stage_rows):]:
+        stage_rows.append({"stage": stage, "name": name,
+                           "status": "PENDING" if stage in active else "SKIPPED"})
+    current["validationStages"] = cache
+    return {"state": current, "stages": stage_rows, "events": events,
+            "issues": first_error, "activeStages": sorted(active)}
+
 
 def _formal_artifact_schema_issues(name: str, blob: bytes) -> list[ValidationIssue]:
     required = _FORMAL_ARTIFACT_REQUIRED_HEADERS.get(name)
@@ -2958,7 +3195,8 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
                             state: Mapping[str, Any] | None = None,
                             *, output_dir: str | os.PathLike[str] | None = None,
                             required_outputs: Iterable[str] | None = None,
-                            validate_artifact_schema: bool = False) -> dict[str, Any]:
+                            validate_artifact_schema: bool = False,
+                            context: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Materialize and validate decisions exactly once at modeling finalize.
 
     A prior validation marker makes missing audit files a hard failure instead
@@ -2968,8 +3206,59 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
     """
     target_dir = Path(work_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    state = state if isinstance(state, Mapping) else (load_modeling_state(target_dir) or {})
+    state = dict(state) if isinstance(state, Mapping) else (load_modeling_state(target_dir) or {})
+    output_path = Path(output_dir) if output_dir is not None else target_dir.parent / "mission-output"
+
+    # Validate the current stage only.  Passed stages are content-addressed;
+    # generating a downstream file must not send logical entities or
+    # attributes back through their validators.
+    staged = isinstance(context, Mapping)
+    stage_result = (validate_modeling_stages(target_dir, output_path, state, required_outputs)
+                    if staged else {"state": state, "stages": [], "events": [], "issues": []})
+    state = stage_result["state"]
+    stage_issues = list(stage_result.get("issues") or [])
     marker_exists = (target_dir / "validation_report.json").is_file()
+
+    # A fully passed final stage is reusable while its requested files and
+    # semantic state keep the same signature.  This is the fast path that
+    # prevents repeated end_turns from re-running the whole model validator.
+    final_cache = state.get("validationStages", {}).get("GOVERNANCE_AND_FINAL", {}) \
+        if staged else {}
+    final_signature = _stage_signature("GOVERNANCE_AND_FINAL", target_dir, output_path,
+                                       state, required_outputs or ())
+    if (staged and marker_exists and isinstance(final_cache, Mapping)
+            and final_cache.get("status") == "PASSED"
+            and final_cache.get("signature") == final_signature):
+        cached_report = load_validation_report(target_dir) or {}
+        cached_status = _key(cached_report.get("semantic_validation_status")
+                             or cached_report.get("status") or "FAILED")
+        cached_stages = list(stage_result.get("stages") or [])
+        cached_final = {**final_cache, "stage": "GOVERNANCE_AND_FINAL",
+                        "name": "规则指标与最终输出", "cached": True}
+        for index, row in enumerate(cached_stages):
+            if row.get("stage") == "GOVERNANCE_AND_FINAL":
+                cached_stages[index] = cached_final
+                break
+        return {"status": cached_status, "report": str(target_dir / "validation_report.json"),
+                "issues": [], "stages": cached_stages,
+                "stageEvents": stage_result.get("events") or [], "cached": True,
+                "coverage": cached_report.get("decisionAuditCoverage", {})}
+
+    if stage_issues:
+        # Keep the audit projections and the stage checkpoint durable even
+        # while the Agent is repairing the current stage.  No full semantic
+        # validation is performed on this path.
+        write_decision_audits(target_dir, state, write_report=False)
+        audit_issues = [issue for issue in validate_decision_audits(target_dir, state)
+                        if issue.artifact_id != "validation_report.json"]
+        coverage = decision_audit_coverage(target_dir, state)
+        all_issues = stage_issues + audit_issues
+        report_path = write_validation_report(
+            target_dir, status="FAILED", issues=all_issues, coverage=coverage)
+        return {"status": "FAILED", "report": report_path, "issues": all_issues,
+                "stages": stage_result.get("stages") or [],
+                "stageEvents": stage_result.get("events") or [], "coverage": coverage}
+
     missing_before = [name for name in (*DECISION_AUDIT_FILES, *WORK_REQUIRED_FILES)
                       if not (target_dir / name).is_file()]
     if marker_exists and missing_before:
@@ -2981,16 +3270,40 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
         path = write_validation_report(target_dir, status="FAILED",
                                        audit_issues=audit_issues, coverage=coverage)
         return {"status": "FAILED", "report": path, "issues": audit_issues,
-                "auditIssues": audit_issues, "coverage": coverage}
+                "auditIssues": audit_issues, "coverage": coverage,
+                "stages": stage_result.get("stages") or [],
+                "stageEvents": stage_result.get("events") or []}
 
     # First finalize is the only allowed materialization point.  The writer
     # emits the complete decision ledger, not just formal/confirmed results.
-    write_decision_audits(target_dir, state)
-    audit_issues = validate_decision_audits(target_dir, state)
+    write_decision_audits(target_dir, state, write_report=False)
+    # validation_report.json is the marker being written below, so it cannot
+    # be treated as a missing audit during this first pass.
+    audit_issues = [issue for issue in validate_decision_audits(target_dir, state)
+                    if issue.artifact_id != "validation_report.json"]
     semantic_issues = semantic_validation_issues(state)
     if output_dir is not None:
-        semantic_issues.extend(_formal_output_issues(Path(output_dir), target_dir, state,
-                                                      required_outputs, validate_artifact_schema))
+        # Each requested formal file was already checked at its own stage.
+        # Only files without a successful, unchanged stage checkpoint are
+        # checked here; the final pass is for cross-file/state semantics, not
+        # a second full scan of every earlier artifact.
+        formal_outputs = required_outputs
+        if staged:
+            requested_names = {os.path.basename(str(item)).lower()
+                               for item in (required_outputs or ())}
+            checked_names: set[str] = set()
+            stage_cache = state.get("validationStages", {})
+            for stage, stage_outputs in _STAGE_OUTPUTS.items():
+                cached_stage = stage_cache.get(stage) if isinstance(stage_cache, Mapping) else None
+                if not isinstance(cached_stage, Mapping) or cached_stage.get("status") != "PASSED":
+                    continue
+                if cached_stage.get("signature") == _stage_signature(
+                        stage, target_dir, output_path, state, required_outputs or ()):
+                    checked_names.update(requested_names & stage_outputs)
+            formal_outputs = requested_names - checked_names
+        if formal_outputs:
+            semantic_issues.extend(_formal_output_issues(output_path, target_dir, state,
+                                                          formal_outputs, validate_artifact_schema))
     coverage = decision_audit_coverage(target_dir, state)
     if not coverage.get("complete"):
         audit_issues.append(_issue("DECISION_AUDIT_COVERAGE", "ERROR",
@@ -3002,7 +3315,45 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
                                           issues=semantic_issues,
                                           audit_issues=audit_issues,
                                           coverage=coverage)
+    final_cache = state.setdefault("validationStages", {}) if staged else {}
+    if staged:
+        final_cache["GOVERNANCE_AND_FINAL"] = {
+            "stage": "GOVERNANCE_AND_FINAL",
+            "name": "规则指标与最终输出",
+            "status": "PASSED" if status == "PASSED" else "FAILED",
+            "signature": _stage_signature("GOVERNANCE_AND_FINAL", target_dir, output_path,
+                                           state, required_outputs or ()),
+            "validatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "issueCodes": [item.code for item in [*semantic_issues, *audit_issues]],
+        }
+        final_row = {
+            "stage": "GOVERNANCE_AND_FINAL",
+            "name": "规则指标与最终输出",
+            "status": final_cache["GOVERNANCE_AND_FINAL"]["status"],
+            "signature": final_cache["GOVERNANCE_AND_FINAL"]["signature"],
+            "validatedAt": final_cache["GOVERNANCE_AND_FINAL"]["validatedAt"],
+            "issueCodes": final_cache["GOVERNANCE_AND_FINAL"]["issueCodes"],
+            "issues": [item.as_dict() for item in [*semantic_issues, *audit_issues]],
+        }
+        stage_rows = list(stage_result.get("stages") or [])
+        for index, row in enumerate(stage_rows):
+            if row.get("stage") == "GOVERNANCE_AND_FINAL":
+                stage_rows[index] = final_row
+                break
+        else:
+            stage_rows.append(final_row)
+        stage_events = list(stage_result.get("events") or [])
+        stage_events.append({"stage": "GOVERNANCE_AND_FINAL",
+                             "name": "规则指标与最终输出",
+                             "status": final_row["status"],
+                             "issueCodes": final_row["issueCodes"]})
+    else:
+        stage_rows = stage_result.get("stages") or []
+        stage_events = stage_result.get("events") or []
+    # Persist the final-stage marker without re-running the semantic validators.
+    write_decision_audits(target_dir, state, write_report=False)
     all_issues = semantic_issues + audit_issues
     return {"status": status, "report": report_path, "issues": all_issues,
             "semanticIssues": semantic_issues, "auditIssues": audit_issues,
-            "coverage": coverage}
+            "coverage": coverage, "stages": stage_rows,
+            "stageEvents": stage_events}

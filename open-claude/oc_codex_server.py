@@ -2581,6 +2581,7 @@ def finalize_modeling_task(task) -> dict:
         state,
         output_dir=mission_output_dir(getattr(task, "cwd", "")),
         required_outputs=expected,
+        context=context,
     )
     if result.get("status") != "PASSED":
         errors = [item.code for item in result.get("issues", [])
@@ -4075,6 +4076,12 @@ class Task:
                     conv.add_user_message(gate_message)
                     return False
 
+                def finalize_checkpoint() -> dict:
+                    checkpoint = finalize_modeling_task(self)
+                    for event in checkpoint.get("stageEvents", []) if isinstance(checkpoint, dict) else []:
+                        rec({"type": "validation_stage", **event})
+                    return checkpoint
+
                 max_iterations = max(1, conv.profile.max_iterations)
                 iteration = 0
                 stop_reason = "end_turn"
@@ -4087,7 +4094,7 @@ class Task:
                     if iteration >= max_iterations:
                         if modeling_turn:
                             ensure_mission_output_files(self.cwd, self.mission_context)
-                            checkpoint = finalize_modeling_task(self)
+                            checkpoint = finalize_checkpoint()
                             if checkpoint.get("status") == "PASSED":
                                 break
                             if handle_gate_failure(checkpoint):
@@ -4133,7 +4140,7 @@ class Task:
                     if (stop_reason != "error" and not conversational
                             and task_callback_kind(self) == "modeling"):
                         ensure_mission_output_files(self.cwd, self.mission_context)
-                        checkpoint = finalize_modeling_task(self)
+                        checkpoint = finalize_checkpoint()
                         if checkpoint.get("status") != "PASSED":
                             if handle_gate_failure(checkpoint):
                                 break

@@ -1616,7 +1616,9 @@ class ModelingRunManager:
             result = finalize_semantic_model(Path(run.root) / "work",
                                              output_dir=Path(run.root) / "output",
                                              required_outputs=run.requested_artifacts,
-                                             validate_artifact_schema=True)
+                                             validate_artifact_schema=True,
+                                             context={"expectedFiles": run.requested_artifacts,
+                                                      "taskType": "modeling"})
             report = load_validation_report(Path(run.root) / "work") or {}
             status = str(report.get("semantic_validation_status") or report.get("status") or "")
             if result.get("status") == "FAILED" or status == "FAILED":
