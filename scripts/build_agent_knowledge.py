@@ -497,6 +497,43 @@ CODE_STANDARD_RULES = """## 本体平台模型编码规范（强制）
 - 元模型、模板和样例的业务规则列名统一为“规则编码”，并统一使用 `R` + 7 位流水码。
 """
 
+NUMBER_DISPLAY_RULES = """## 数字展示规范 v0.0.1（强制）
+
+- 普通大数和金额使用千位分隔符；金额默认保留两位小数，例如 `¥12,345.00`。
+- 数值单元格、数值表头和数值详情统一右对齐，并使用等宽数字。
+- 仅在卡片、图表或空间受限的金额场景使用“万”单位，例如 `¥12.34万`；普通表格优先使用千位分隔格式。
+- 禁止显示 `¥0万`、`0万`、`¥0.00万`；金额为零时显示 `¥0.00`，小于一万的金额不得使用“万”。
+- 业务编码、ID、日期、时间、年份、布尔值和枚举值不得按普通数值格式化，展示格式不能改变原始值。
+"""
+
+EVIDENCE_GATE_OVERRIDE = """## Evidence Gate 最终优先级（覆盖参考表述）
+
+公共规则、模板或历史参考中关于“避免孤岛”“补充缺失关系”“每个角色必须存在某关系”的描述，只能驱动证据检索、候选记录和待确认问题，不能直接创建正式事实。孤岛、缺失血缘、缺少 Owner、多主或无主都可以作为 WARNING/NEEDS_CONFIRMATION 保留。校验器是只读检查器，校验结果、完整性要求和重试次数都不构成证据；只有新的、可追溯的独立证据经过 Evidence Gate 后，才能把 CANDIDATE/UNRESOLVED 升级为 CONFIRMED 并进入正式 CSV。
+"""
+
+BUSINESS_OBJECT_DECISION_OVERRIDE = """## Business Object 决策审计最终优先级
+
+每一个实际评估的 Business Object candidate 都必须保留 R1、R2、R3、R4、R5 的 PASS/FAIL/UNKNOWN、逐项证据与 provenance，并写入 `mission-work/business_object_decisions.csv`。任一 FAIL → REJECTED；无 FAIL 且有 UNKNOWN → CANDIDATE；全部 PASS → CONFIRMED。confidence 不能改变这个 deterministic decision，且必须在建模时直接输出 0–100 的数值，不得使用 HIGH/MODERATE/LOW 标签或由导出器猜测数值。没有反证不能判 FAIL，没有真实证据不能伪造 PASS；CANDIDATE、REJECTED 不得丢弃，只有 CONFIRMED 才能进入正式 `business_objects.csv`，被 REJECTED 的候选对应逻辑实体仍须保留。
+"""
+
+BUSINESS_RULE_VALIDATION_OVERRIDE = """## Business Rule 类型化验证最终优先级
+
+业务规则必须先按语义类型选择验证策略：完整性约束使用 violation 统计；告警/检测规则使用 hit/match 统计，条件命中不是 violation，命中率不能自动驳回；计算规则比较 expected 与 actual；状态流转需要历史；资格/决策规则需要 outcome/action。无法可靠分类时保留 UNKNOWN/NEEDS_CLASSIFICATION，不能默认按完整性约束验证。规则类型与 enforcement 分离，样本中 0 violation 不能证明 ENFORCED。
+"""
+
+DECISION_AUDIT_OVERRIDE = """## Decision Audit 与不确定性最终优先级
+
+Schema 必填字段、CSV 模板完整性、Validator ERROR/WARNING、孤岛检查和结果完整性都不是业务事实证据；不能为了填空、补齐关系或满足模板创造 Owner、生命周期、member-of、lineage、处置动作或业务对象归属。逻辑实体允许 `ASSIGNED`、`UNASSIGNED`、`UNRESOLVED`；后两者必须保存原因和缺失证据，不得硬填正式 Business Object。
+
+所有语义判定必须先进入结构化 Decision Layer，再由确定性 Validator 和 Generator 消费。每个候选、关系、规则、指标和逻辑实体的 CONFIRMED、CANDIDATE、UNRESOLVED、REJECTED/UNKNOWN 都必须落盘到当前任务 `mission-work/` 的五个固定决策审计 CSV：`business_object_decisions.csv`、`relation_decisions.csv`、`rule_decisions.csv`、`indicator_decisions.csv`、`logical_entity_decisions.csv`，以及 `validation_report.json` 与 `modeling_state.json`。五个 CSV 强制使用决策审计模板 `v0.0.1` 的中文表头；不再生成 `pending_confirmations.csv`，待确认信息保留在各决策记录和 `modeling_state.json` 中。审计覆盖率必须为 100%，审计文件缺失或表头不匹配时任务失败。
+
+VIEW JOIN 只证明查询关联，不证明派生血缘；使用 `VIEW_JOIN_EVIDENCE`、`VIEW_DERIVATION_LINEAGE`、`VIEW_CALCULATION_LOGIC`、`VIEW_FILTER_LOGIC` 区分语义。显式 FK 通常只能确认 REFERENCE，不能单独确认 COMPOSITION 或 TRANSFORMATION；声明 FK 与运行时 enforced 必须分开记录。关系用稳定的 `relation_decision_id` 唯一标识，同一端点可存在多种关系。
+
+规则必须分离 Discovery/Existence、Validation、Enforcement、Effectiveness；0 violation 只能是 OBSERVED_ONLY，不能证明规则存在或已强制执行。ALERT 的 hit 不等于 violation，也不等于 effectiveness；没有 action 证据时 action 保持 UNKNOWN。物理字段不是业务指标，指标必须保留 grain、scope、unit、formula_status 和 aggregation_semantics；没有聚合证据时比例不得自动 AVG。
+
+任何 UNKNOWN/UNRESOLVED → CONFIRMED 都必须记录新的独立 evidence IDs；没有新证据的状态升级必须报错。正式输出只消费已通过门禁的 Decision Layer，Generator 不得自行修改语义状态。
+"""
+
 
 def build() -> None:
     write(OUTPUT_DIR / "README.md", f"""# Agent 静态知识库 {KNOWLEDGE_VERSION}
@@ -534,8 +571,12 @@ def build() -> None:
             "不得改变或覆盖 V6 的结论、枚举和判定流程。\n\n"
             + LAYERED_MODELING_ARTIFACTS.rstrip() + "\n\n" + PAGE_DISPLAY_RULES.rstrip() + "\n\n"
             + V001_ELEMENT_RULES.rstrip() + "\n\n"
-            + CODE_STANDARD_RULES.rstrip() + "\n\n" + v6
-            + "\n\n## 本体元模型与结果模板参考\n\n" + references)
+            + CODE_STANDARD_RULES.rstrip() + "\n\n" + NUMBER_DISPLAY_RULES.rstrip() + "\n\n" + v6
+            + "\n\n## 本体元模型与结果模板参考\n\n" + references
+            + "\n\n" + EVIDENCE_GATE_OVERRIDE.rstrip()
+            + "\n\n" + BUSINESS_OBJECT_DECISION_OVERRIDE.rstrip()
+            + "\n\n" + BUSINESS_RULE_VALIDATION_OVERRIDE.rstrip()
+            + "\n\n" + DECISION_AUDIT_OVERRIDE.rstrip())
     write(OUTPUT_DIR / "modeling" / "basev0.0.1.md", base)
     write(OUTPUT_DIR / "modeling" / "本体元模型v0.0.1.md",
           "# 本体元模型 v0.0.1：静态 Markdown\n\n" + block("本体元模型v0.0.1.xlsx"))
@@ -557,7 +598,12 @@ def build() -> None:
     all_parts = [base] + [document_rules if name == SOURCE_DOCS["business_document"] else block(name)
                            for name in SOURCE_DOCS.values()]
     write(OUTPUT_DIR / "modeling" / "all_sourcesv0.0.1.md",
-          "# 智能建模任务：全部输入源静态私有知识\n\n" + "\n\n".join(all_parts))
+          "# 智能建模任务：全部输入源静态私有知识\n\n" + "\n\n".join(all_parts)
+          + "\n\n" + EVIDENCE_GATE_OVERRIDE.rstrip()
+          + "\n\n" + BUSINESS_OBJECT_DECISION_OVERRIDE.rstrip()
+          + "\n\n" + BUSINESS_RULE_VALIDATION_OVERRIDE.rstrip()
+          + "\n\n" + DECISION_AUDIT_OVERRIDE.rstrip()
+          + "\n\n" + NUMBER_DISPLAY_RULES.rstrip())
     for key, name in SOURCE_DOCS.items():
         write(OUTPUT_DIR / "modeling" / f"{key}v0.0.1.md",
               f"# 智能建模任务：{name}专项静态私有知识\n\n"

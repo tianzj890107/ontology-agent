@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Alert,
   App as AntApp,
   Button,
+  Checkbox,
   ConfigProvider,
   Divider,
   Empty,
@@ -20,16 +22,23 @@ import {
   message,
 } from "antd";
 import "./styles.css";
+import { formatDisplayValue, isNumericDisplayValue } from "./numberFormat.js";
 
 const MISSION = window.__MISSION__?.taskCode ? window.__MISSION__ : null;
+const STANDALONE = Boolean(window.__STANDALONE_MODELING__);
 const $json = (value) => JSON.stringify(value, null, 2);
 const esc = (value) => String(value ?? "");
+
+function hasMissionOutputFiles(files = []) {
+  return files.some((file) => String(file?.path || "").replaceAll("\\", "/").startsWith("mission-output/"));
+}
 
 async function api(path, options = {}) {
   let response;
   try {
     response = await fetch(path, { credentials: "same-origin", ...options });
   } catch (error) {
+    if (error?.name === "AbortError") return { _aborted: true };
     return { error: `网络连接失败: ${error?.message || "无法连接服务"}` };
   }
   let body;
@@ -73,6 +82,434 @@ function relativeTime(timestamp) {
 function truncateTitle(value, max = 15) {
   const text = String(value || "");
   return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+const STANDALONE_ARTIFACTS = [
+  "business_objects.csv",
+  "logical_entities.csv",
+  "business_attributes.csv",
+  "entity_relations.csv",
+  "business_rules.csv",
+  "terms.csv",
+  "indicators.csv",
+];
+const STANDALONE_ARTIFACT_LABELS = {
+  "business_objects.csv": "业务对象",
+  "logical_entities.csv": "逻辑实体",
+  "business_attributes.csv": "业务属性",
+  "entity_relations.csv": "实体关系",
+  "business_rules.csv": "业务规则",
+  "terms.csv": "术语",
+  "indicators.csv": "指标",
+};
+
+function standaloneRunTitle(run) {
+  const explicit = [run?.title, run?.name]
+    .map((value) => String(value || "").trim())
+    .find((value) => value && value.length <= 48);
+  if (explicit) return explicit;
+  const prompt = String(run?.prompt || "").trim();
+  // Empty-prompt runs receive the built-in instruction, which is execution
+  // input rather than a human-facing title. Keep the same short title from
+  // creation through every later status instead of falling back to the prompt.
+  if (!prompt || prompt.length > 48 || prompt.startsWith("请直接读取当前任务 mission-input")) return "本体建模";
+  return prompt;
+}
+
+function formatRunCreatedAt(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "—";
+  const date = new Date(numeric < 1e12 ? numeric * 1000 : numeric);
+  if (Number.isNaN(date.getTime())) return "—";
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+async function standaloneApi(path, apiKey, options = {}) {
+  let response;
+  try {
+    response = await fetch(path, {
+      credentials: "same-origin",
+      ...options,
+      headers: { ...(options.headers || {}), ...(apiKey ? { "X-Modeling-API-Key": apiKey } : {}) },
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") return { _aborted: true };
+    return { error: `网络连接失败: ${error?.message || "无法连接服务"}` };
+  }
+  let body;
+  try { body = await response.json(); } catch { body = {}; }
+  if (!response.ok) body.error = body.error || `请求失败(${response.status})`;
+  return { ...body, _status: response.status };
+}
+
+function StandaloneApp() {
+  const [prompt, setPrompt] = useState("");
+  const [sourceMode, setSourceMode] = useState("DATABASE");
+  const [selectedArtifacts, setSelectedArtifacts] = useState(STANDALONE_ARTIFACTS);
+  const [inputFiles, setInputFiles] = useState([]);
+  const [databaseSources, setDatabaseSources] = useState([]);
+  const [databaseSourceId, setDatabaseSourceId] = useState("");
+  const [databaseSchema, setDatabaseSchema] = useState("");
+  const [databaseTables, setDatabaseTables] = useState([]);
+  const [selectedTables, setSelectedTables] = useState([]);
+  const [tablesLoading, setTablesLoading] = useState(false);
+  const [runs, setRuns] = useState([]);
+  const [run, setRun] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [runFilesOpen, setRunFilesOpen] = useState(true);
+  const [selectedRunFiles, setSelectedRunFiles] = useState([]);
+  const [standaloneComposerText, setStandaloneComposerText] = useState("");
+  const [standalonePendingFiles, setStandalonePendingFiles] = useState([]);
+  const [standaloneModels, setStandaloneModels] = useState([]);
+  const [standaloneModel, setStandaloneModel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [messageApi, contextHolder] = message.useMessage();
+  const selectedRunIdRef = useRef("");
+  const runRequestRef = useRef({ generation: 0, controller: null });
+  const eventCursorRef = useRef(new Map());
+  const pollInFlightRef = useRef(false);
+  const standaloneFileInputRef = useRef(null);
+
+  const loadRuns = async () => {
+    const result = await standaloneApi("/api/modeling-runs", "");
+    if (!result.error) setRuns(result.runs || []);
+    else if (result._status !== 401) setError(result.error);
+  };
+  const loadDatabaseSources = async () => {
+    const result = await standaloneApi("/api/modeling-data-sources", "");
+    if (!result.error) {
+      const sources = result.sources || [];
+      setDatabaseSources(sources);
+      setDatabaseSourceId((current) => current || sources[0]?.id || "");
+    } else if (result._status !== 401) setError(result.error);
+  };
+  const loadStandaloneModels = async () => {
+    const result = await standaloneApi("/api/modeling-models", "");
+    if (!result.error) {
+      setStandaloneModels(result.models || []);
+      setStandaloneModel((current) => current || result.model || result.models?.[0]?.id || "");
+    } else if (result._status !== 401) setError(result.error);
+  };
+  const loadDatabaseTables = async (sourceId) => {
+    if (!sourceId) return;
+    setTablesLoading(true);
+    const result = await standaloneApi(`/api/modeling-data-sources/${encodeURIComponent(sourceId)}/tables`, "");
+    if (!result.error) {
+      const tables = (result.tables || []).map((item) => item.name).filter(Boolean);
+      setDatabaseSchema(result.schema || "");
+      setDatabaseTables(tables);
+      setSelectedTables((current) => current.filter((item) => tables.includes(item)));
+    } else if (result._status !== 401) setError(result.error);
+    setTablesLoading(false);
+  };
+  const beginRunRequest = () => {
+    runRequestRef.current.controller?.abort();
+    const request = {
+      generation: runRequestRef.current.generation + 1,
+      controller: new AbortController(),
+    };
+    runRequestRef.current = request;
+    return request;
+  };
+  const isCurrentRunRequest = (runId, generation) => (
+    selectedRunIdRef.current === runId && runRequestRef.current.generation === generation
+  );
+  const updateRunSummary = (summary) => {
+    setRuns((current) => current.map((item) => item.runId === summary.runId
+      ? { ...item, ...summary, events: undefined }
+      : item));
+  };
+  const loadRun = async (runId, showError = true) => {
+    if (!runId) return null;
+    selectedRunIdRef.current = runId;
+    const request = beginRunRequest();
+    const encodedId = encodeURIComponent(runId);
+    const summary = await standaloneApi(
+      `/api/modeling-runs/${encodedId}?includeEvents=false`, "",
+      { signal: request.controller.signal },
+    );
+    if (summary._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
+    if (summary.error) { if (showError) setError(summary.error); return null; }
+    // Switch the visible session as soon as its lightweight summary arrives.
+    // Loading a large historical event journal must never block selecting a
+    // different run, and selecting a run is view-only: it does not stop or
+    // mutate any server-side execution.
+    const summaryRun = { ...summary, events: [] };
+    if (summary.model) setStandaloneModel(summary.model);
+    setRun(summaryRun);
+    updateRunSummary(summary);
+    const events = await standaloneApi(
+      `/api/modeling-runs/${encodedId}/events?since=0`, "",
+      { signal: request.controller.signal },
+    );
+    if (events._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
+    if (events.error) { if (showError) setError(events.error); return null; }
+    const allEvents = Array.isArray(events.events) ? events.events : [];
+    eventCursorRef.current.set(runId, Number(summary.eventsCount) || allEvents.length);
+    const result = { ...summary, events: allEvents };
+    if (summary.model) setStandaloneModel(summary.model);
+    if (isCurrentRunRequest(runId, request.generation)) setRun(result);
+    return result;
+  };
+  const selectRun = (runId) => {
+    setError("");
+    setStandaloneComposerText("");
+    setStandalonePendingFiles([]);
+    const cached = runs.find((item) => item.runId === runId);
+    if (cached) {
+      // The list already has enough metadata to enter view mode. Switch
+      // immediately instead of leaving the user on the new-task form while
+      // a historical event payload is fetched.
+      selectedRunIdRef.current = runId;
+      if (cached.model) setStandaloneModel(cached.model);
+      setRun({ ...cached, events: Array.isArray(cached.events) ? cached.events : [] });
+    }
+    void loadRun(runId);
+  };
+  const refreshRun = async (runId) => {
+    if (!runId || selectedRunIdRef.current !== runId || pollInFlightRef.current) return null;
+    pollInFlightRef.current = true;
+    const request = beginRunRequest();
+    const encodedId = encodeURIComponent(runId);
+    try {
+      const summary = await standaloneApi(
+        `/api/modeling-runs/${encodedId}?includeEvents=false`, "",
+        { signal: request.controller.signal },
+      );
+      if (summary._aborted || !isCurrentRunRequest(runId, request.generation) || summary.error) return null;
+      const cursor = eventCursorRef.current.get(runId) || 0;
+      const events = await standaloneApi(
+        `/api/modeling-runs/${encodedId}/events?since=${cursor}`, "",
+        { signal: request.controller.signal },
+      );
+      if (events._aborted || !isCurrentRunRequest(runId, request.generation) || events.error) return null;
+      const delta = Array.isArray(events.events) ? events.events : [];
+      // Advance by the number actually received. New events produced after
+      // the summary request remain for the next poll instead of being skipped
+      // or appended twice.
+      eventCursorRef.current.set(runId, cursor + delta.length);
+      setRun((current) => current?.runId === runId
+        ? { ...summary, events: [...(current.events || []), ...delta] }
+        : current);
+      updateRunSummary(summary);
+      return summary;
+    } finally {
+      pollInFlightRef.current = false;
+    }
+  };
+  const startNewTask = () => {
+    selectedRunIdRef.current = "";
+    runRequestRef.current.controller?.abort();
+    setRun(null);
+    setPreview(null);
+    setError("");
+    setPrompt("");
+    setInputFiles([]);
+    setSelectedTables([]);
+    setSelectedArtifacts(STANDALONE_ARTIFACTS);
+    setSelectedRunFiles([]);
+    setStandaloneComposerText("");
+    setStandalonePendingFiles([]);
+    setRunFilesOpen(true);
+  };
+  useEffect(() => { void loadRuns(); void loadDatabaseSources(); void loadStandaloneModels(); }, []);
+  useEffect(() => {
+    // Keep queued/background runs' status visible in the history list while
+    // detailed events continue to poll only for the selected run.
+    const timer = window.setInterval(() => { void loadRuns(); }, 3000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => { void loadDatabaseTables(databaseSourceId); }, [databaseSourceId]);
+  useEffect(() => {
+    if (!run?.runId) return undefined;
+    const activeStatuses = new Set(["QUEUED", "ANALYZING", "VALIDATING"]);
+    if (!activeStatuses.has(run.status)) return undefined;
+    const timer = window.setInterval(() => { void refreshRun(run.runId); }, 1800);
+    return () => window.clearInterval(timer);
+  }, [run?.runId, run?.status]);
+
+  const readFiles = async (files) => Promise.all(files.map((file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({ name: file.name, contentBase64: String(reader.result).split(",")[1] || "" });
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  })));
+  const startModeling = async () => {
+    setError("");
+    if (!selectedArtifacts.length) { setError("至少选择一个正式产物"); return; }
+    if (sourceMode === "DATABASE" && !databaseSourceId) { setError("请选择数据库"); return; }
+    if (sourceMode === "DATABASE" && !selectedTables.length) { setError("至少选择一张数据表"); return; }
+    setBusy(true);
+    try {
+      const payload = {
+        sourceMode,
+      prompt: prompt.trim(),
+        requestedArtifacts: selectedArtifacts,
+        files: await readFiles(inputFiles),
+      };
+      if (sourceMode === "DATABASE") {
+        payload.databaseSourceId = databaseSourceId;
+        payload.selectedTables = selectedTables;
+      }
+      const created = await standaloneApi("/api/modeling-runs", "", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+      if (created.error) { setError(created.error); return; }
+      selectedRunIdRef.current = created.runId;
+      eventCursorRef.current.set(created.runId, Number(created.eventsCount) || 0);
+      setRun(created);
+      if (created.model) setStandaloneModel(created.model);
+      setRuns((current) => [created, ...current.filter((item) => item.runId !== created.runId)]);
+      const started = await standaloneApi(`/api/modeling-runs/${created.runId}/execute`, "", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...(standaloneModel ? { model: standaloneModel } : {}), intent: "execute" }),
+      });
+      if (started.error) {
+        setError(started.error);
+        return;
+      }
+      eventCursorRef.current.set(started.runId, Number(started.eventsCount) || 0);
+      setRun(started);
+      setRuns((current) => current.map((item) => item.runId === started.runId ? { ...item, ...started } : item));
+      messageApi.success("建模已开始，可在右侧查看运行状态和产物");
+    } catch (requestError) {
+      setError(requestError?.message || "请求失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const continueRun = async (nextPrompt = "", selectedModel = standaloneModel) => {
+    if (!run?.runId || !["CREATED", "INPUT_READY", "FAILED"].includes(run.status)) return;
+    setError("");
+    setBusy(true);
+    try {
+      const started = await standaloneApi(`/api/modeling-runs/${encodeURIComponent(run.runId)}/execute`, "", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(nextPrompt.trim() ? { prompt: nextPrompt.trim() } : {}),
+          ...(selectedModel ? { model: selectedModel } : {}),
+          intent: "auto",
+        }),
+      });
+      if (started.error) {
+        setError(started.error);
+        return;
+      }
+      selectedRunIdRef.current = started.runId;
+      eventCursorRef.current.set(started.runId, Number(started.eventsCount) || 0);
+      setRun(started);
+      setRuns((current) => current.map((item) => item.runId === started.runId
+        ? { ...item, ...started } : item));
+      messageApi.success("已继续运行建模任务");
+    } catch (requestError) {
+      setError(requestError?.message || "请求失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const onStandaloneAttach = () => standaloneFileInputRef.current?.click();
+  const onStandaloneFilesSelected = (event) => {
+    setStandalonePendingFiles(Array.from(event.target.files || []));
+    event.target.value = "";
+  };
+  const sendStandaloneMessage = async () => {
+    if (!run || busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)) return;
+    const nextPrompt = standaloneComposerText.trim();
+    if (run.status === "READY_FOR_EXPORT") {
+      setError("该会话已经完成，如需重新建模请点击“新任务”");
+      return;
+    }
+    if (!nextPrompt && !standalonePendingFiles.length) return;
+    setError("");
+    if (standalonePendingFiles.length) {
+      setBusy(true);
+      try {
+        const result = await standaloneApi(`/api/modeling-runs/${encodeURIComponent(run.runId)}/inputs`, "", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files: await readFiles(standalonePendingFiles) }),
+        });
+        if (result.error) { setError(result.error); return; }
+        setStandalonePendingFiles([]);
+      } catch (requestError) {
+        setError(requestError?.message || "上传文件失败");
+        return;
+      } finally {
+        setBusy(false);
+      }
+    }
+    setStandaloneComposerText("");
+    await continueRun(nextPrompt, standaloneModel);
+  };
+  const openFile = async (path) => {
+    // Keep standalone file access on its own API, but reuse the shared
+    // workbook reader instead of decoding XLSX bytes as text.
+    const response = await fetch(`/api/modeling-runs/${encodeURIComponent(run.runId)}/files/content?path=${encodeURIComponent(path)}`);
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try { const body = await response.json(); detail = body.error || detail; } catch (_) { /* keep HTTP status */ }
+      setError(detail);
+      return;
+    }
+    if (/\.(xlsx?|xlsm)$/i.test(path)) {
+      const [buffer, XLSX] = await Promise.all([response.arrayBuffer(), import("xlsx")]);
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+      const sheets = workbook.SheetNames.map((name) => ({
+        name,
+        rows: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: "", raw: false }),
+      }));
+      setPreview({ path, xlsx: true, sheets });
+      return;
+    }
+    const text = await response.text();
+    setPreview({ path, text, csv: /\.csv$/i.test(path) });
+  };
+  const downloadRunFiles = async (paths) => {
+    for (const path of paths) {
+      const response = await fetch(`/api/modeling-runs/${encodeURIComponent(run.runId)}/files/content?path=${encodeURIComponent(path)}`);
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = path.split("/").pop() || "download";
+      link.click();
+      URL.revokeObjectURL(link.href);
+    }
+  };
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", READY_FOR_EXPORT: "success", FAILED: "error" }[run?.status] || "default";
+  return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
+    {contextHolder}
+    <div className="standalone-shell">
+      <header className="standalone-header"><div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能建模</strong><Tag color="blue">47314 独立服务</Tag></div><Tag color="green">服务已连接</Tag></header>
+      <div className={`standalone-layout ${run ? "standalone-layout-running" : ""}`}>
+        <aside className="standalone-history"><Button type="primary" block className="standalone-new-task" onClick={startNewTask}>＋ 新任务</Button><div className="standalone-section-title">历史运行</div>{runs.length ? <List size="small" dataSource={runs} renderItem={(item) => <List.Item role="button" tabIndex={0} className={run?.runId === item.runId ? "standalone-run-active" : "standalone-run"} onClick={() => selectRun(item.runId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRun(item.runId); } }}><div><strong>{standaloneRunTitle(item)}</strong><small>{formatRunCreatedAt(item.createdAt)} · {item.status}</small></div></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行记录" />}</aside>
+        <main className="standalone-main">
+          {!run && <div className="standalone-title"><div><h1>独立智能建模</h1><p>上传输入资料或连接已有数据库，完成建模并查看可追溯产物。</p></div></div>}
+          {error && <Alert type="error" showIcon closable onClose={() => setError("")} message={error} />}
+          {!run ? <div className="standalone-card"><h2>建模输入</h2><div className="standalone-form-row"><Select size="large" value={sourceMode} onChange={setSourceMode} options={[{ value: "DATABASE", label: "数据库建模" }, { value: "DOCUMENT", label: "文档建模" }, { value: "NATURAL_LANGUAGE", label: "自然语言建模" }]} /><Input size="large" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="建模要求可选；不填写时直接使用四份 v0.0.1 规范/模板建模" /></div><div className="standalone-upload"><input type="file" multiple onChange={(event) => setInputFiles(Array.from(event.target.files || []))} /><span>{inputFiles.length ? inputFiles.map((file) => file.name).join("、") : "可上传 schema、文档或其他输入文件"}</span></div>{sourceMode === "DATABASE" && <><Divider orientation="left">选择数据源</Divider><Select className="standalone-database-select" value={databaseSourceId || undefined} onChange={(value) => { setDatabaseSourceId(value); setSelectedTables([]); }} placeholder="请选择数据库" loading={!databaseSources.length} options={databaseSources.map((item) => ({ value: item.id, label: item.name }))} notFoundContent="暂无可用数据库" /><Divider orientation="left">选择数据表</Divider><div className="standalone-table-toolbar"><span>Schema：{databaseSchema || "-"}</span><Checkbox checked={databaseTables.length > 0 && selectedTables.length === databaseTables.length} indeterminate={selectedTables.length > 0 && selectedTables.length < databaseTables.length} disabled={tablesLoading || !databaseTables.length} onChange={(event) => setSelectedTables(event.target.checked ? databaseTables : [])}>全选</Checkbox></div>{tablesLoading ? <div className="standalone-table-loading">正在读取数据表…</div> : <Checkbox.Group className="standalone-table-list" value={selectedTables} onChange={setSelectedTables} options={databaseTables.map((item) => ({ value: item, label: item }))} />}<div className="standalone-selected-count">已选 {selectedTables.length} 张表</div></>}<Divider orientation="left">解析要素</Divider><Checkbox.Group value={selectedArtifacts} onChange={setSelectedArtifacts} options={STANDALONE_ARTIFACTS.map((item) => ({ value: item, label: STANDALONE_ARTIFACT_LABELS[item] }))} /><Button type="primary" size="large" loading={busy} disabled={busy} onClick={startModeling} className="standalone-start">开始建模</Button></div> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || run.model || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}
+        </main>
+      </div>
+      <input ref={standaloneFileInputRef} type="file" multiple hidden onChange={onStandaloneFilesSelected} />
+      {preview && <Modal open title={preview.path} footer={null} width="82vw" onCancel={() => setPreview(null)}>{preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+    </div>
+  </ConfigProvider>;
+}
+
+function StandaloneAgentWorkspace({ run, busy, filesOpen, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", READY_FOR_EXPORT: "success", FAILED: "error" }[run?.status] || "default";
+  const files = run?.files || [];
+  // The standalone API persists every streamed thinking token. Reuse the
+  // shared workbench normalization so one continuous reasoning block renders
+  // as one node instead of dozens of token-sized "思考中" nodes.
+  const events = useMemo(() => [
+    { type: "user", text: run.prompt || "开始智能建模" },
+    ...normalizeEvents({ events: run.events || [] }),
+  ], [run.events, run.prompt]);
+  return <section className="task-view standalone-agent-task-view">
+    <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{run.status}</Tag>{run.status === "FAILED" && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
+    <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={false} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
+  </section>;
 }
 
 function SendArrowIcon() {
@@ -519,7 +956,7 @@ function CsvPreview({ text }) {
   const rows = parseCsv(text);
   const headers = rows[0] || [];
   const body = rows.slice(1);
-  return <div className="csv-preview"><div className="csv-preview-meta">CSV 表格预览 · {body.length} 行 · {headers.length} 列</div><div className="csv-preview-scroll"><table className="csv-preview-table"><thead><tr>{headers.map((header, index) => <th key={index}>{header || `列 ${index + 1}`}</th>)}</tr></thead><tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((_, columnIndex) => <td key={columnIndex}>{row[columnIndex] || ""}</td>)}</tr>)}</tbody></table></div></div>;
+  return <div className="csv-preview"><div className="csv-preview-meta">CSV 表格预览 · {body.length} 行 · {headers.length} 列</div><div className="csv-preview-scroll"><table className="csv-preview-table"><thead><tr>{headers.map((header, index) => <th className={body.some((row) => isNumericDisplayValue(row[index], header)) ? "numeric-header" : ""} key={index}>{header || `列 ${index + 1}`}</th>)}</tr></thead><tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((header, columnIndex) => { const value = row[columnIndex] || ""; const numeric = isNumericDisplayValue(value, header); return <td className={numeric ? "numeric-cell" : ""} key={columnIndex}>{numeric ? formatDisplayValue(value, header) : value}</td>; })}</tr>)}</tbody></table></div></div>;
 }
 
 function SpreadsheetPreview({ sheets }) {
@@ -527,7 +964,7 @@ function SpreadsheetPreview({ sheets }) {
   const current = sheets[active] || { name: "Sheet1", rows: [] };
   const headers = current.rows[0] || [];
   const body = current.rows.slice(1);
-  return <div className="csv-preview"><div className="sheet-tabs">{sheets.map((sheet, index) => <button type="button" className={index === active ? "sheet-tab active" : "sheet-tab"} key={sheet.name} onClick={() => setActive(index)}>{sheet.name}</button>)}</div><div className="csv-preview-meta">Excel 表格预览 · {body.length} 行 · {headers.length} 列</div><div className="csv-preview-scroll"><table className="csv-preview-table"><thead><tr>{headers.map((header, index) => <th key={index}>{String(header || `列 ${index + 1}`)}</th>)}</tr></thead><tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((_, columnIndex) => <td key={columnIndex}>{String(row[columnIndex] ?? "")}</td>)}</tr>)}</tbody></table></div></div>;
+  return <div className="csv-preview"><div className="sheet-tabs">{sheets.map((sheet, index) => <button type="button" className={index === active ? "sheet-tab active" : "sheet-tab"} key={sheet.name} onClick={() => setActive(index)}>{sheet.name}</button>)}</div><div className="csv-preview-meta">Excel 表格预览 · {body.length} 行 · {headers.length} 列</div><div className="csv-preview-scroll"><table className="csv-preview-table"><thead><tr>{headers.map((header, index) => <th className={body.some((row) => isNumericDisplayValue(row[index], header)) ? "numeric-header" : ""} key={index}>{String(header || `列 ${index + 1}`)}</th>)}</tr></thead><tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{headers.map((header, columnIndex) => { const value = String(row[columnIndex] ?? ""); const numeric = isNumericDisplayValue(value, header); return <td className={numeric ? "numeric-cell" : ""} key={columnIndex}>{numeric ? formatDisplayValue(value, header) : value}</td>; })}</tr>)}</tbody></table></div></div>;
 }
 
 function formatFileSize(value) {
@@ -565,7 +1002,9 @@ function RecursiveInfo({ value, level = 0, field = "" }) {
   if (value === null || value === undefined || value === "") return null;
   if (Array.isArray(value)) return <div className="info-tags">{value.map((item, index) => <Tag key={index}>{typeof item === "object" ? $json(item) : String(item)}</Tag>)}</div>;
   if (typeof value === "object") return <div className="info-nested">{Object.entries(value).map(([key, item]) => <div className="info-row" key={`${level}-${key}`}><span className="info-key">{missionLabel(key)}</span><div className="info-value"><RecursiveInfo value={item} level={level + 1} field={key} /></div></div>)}</div>;
-  return <span>{field === "password" ? "••••••••" : String(value)}</span>;
+  if (field === "password") return <span>••••••••</span>;
+  const numeric = isNumericDisplayValue(value, field);
+  return <span className={numeric ? "numeric-value" : ""}>{numeric ? formatDisplayValue(value, field) : String(value)}</span>;
 }
 
 function MissionInfo({ open, context, loading, onClose }) {
@@ -625,40 +1064,61 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
   );
 }
 
-function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onUploadToMinio, uploadingToMinio, uploadBlocked = false, onClose, onRefresh, mission, focusPath, platformStatus, resetKey }) {
-  const defaultCollapsedDirs = () => new Set(["", "mission-input", "mission-work"]);
+function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onUploadToMinio, uploadingToMinio, uploadBlocked = false, onClose, onRefresh, mission, workspaceFolders = false, focusPath, platformStatus, resetKey }) {
+  const defaultCollapsedDirs = () => new Set(["root", "input"]);
   const [collapsedDirs, setCollapsedDirs] = useState(defaultCollapsedDirs);
-  // The panel has exactly four top-level scopes.  Nested files under
-  // mission-input/output/work must never become additional directory groups.
-  const displayDir = (path) => {
-    const first = String(path || "").replaceAll("\\", "/").split("/")[0];
-    return ["mission-input", "mission-output", "mission-work"].includes(first) ? first : "";
+  const displayPath = (file) => String(file?.displayPath || file?.path || "").replaceAll("\\", "/");
+  const displayDir = (file) => displayPath(file).split("/")[0] || "";
+  const displaySubdir = (file) => {
+    const parts = displayPath(file).split("/");
+    return parts.length > 2 ? parts.slice(1, -1).join("/") : "";
   };
   const groups = useMemo(() => {
     const map = new Map();
-    if (mission) {
-      ["mission-input", "mission-output", "mission-work"].forEach((dir) => map.set(dir, []));
+    if (mission || workspaceFolders) {
+      ["root", "input", "work", "output"].forEach((dir) => map.set(dir, new Map()));
     }
-    files.forEach((file) => { const dir = displayDir(file.path); if (!map.has(dir)) map.set(dir, []); map.get(dir).push(file); });
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+    files.forEach((file) => {
+      const dir = displayDir(file);
+      if (!map.has(dir)) map.set(dir, new Map());
+      const subdir = displaySubdir(file);
+      if (!map.get(dir).has(subdir)) map.get(dir).set(subdir, []);
+      map.get(dir).get(subdir).push(file);
+    });
+    const order = ["root", "input", "work", "output"];
+    return [...map.entries()].sort(([a], [b]) => (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b)));
   }, [files, mission]);
   const toggleDir = (dir) => setCollapsedDirs((current) => {
     const next = new Set(current);
     if (next.has(dir)) next.delete(dir); else next.add(dir);
     return next;
   });
-  const groupLabel = (dir) => <><FolderPanelIcon /> {dir ? `${dir}/` : "项目根目录"}</>;
+  const groupLabel = (dir) => <><FolderPanelIcon /> {dir ? `${dir}/` : "root/"}</>;
+  const renderFiles = (items) => items.map((file) => <div className={`file-row ${focusPath === file.path ? "file-row-focused" : ""}`} key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{displayPath(file).split("/").pop()}</button><small>{formatFileSize(file.size)}</small></div>);
+  const renderSubgroup = (dir, subdir, items) => {
+    const key = `${dir}/${subdir}`;
+    const collapsed = collapsedDirs.has(key);
+    const paths = items.map((file) => file.path);
+    const allSelected = paths.length > 0 && paths.every((path) => selected.includes(path));
+    const partiallySelected = !allSelected && paths.some((path) => selected.includes(path));
+    const label = subdir.split("/").pop() || dir;
+    return <div className="file-subgroup" key={key}>
+      <div className="file-subgroup-title"><input className="folder-select" type="checkbox" checked={allSelected} ref={(node) => { if (node) node.indeterminate = partiallySelected; }} onChange={() => onSelectGroup(paths)} aria-label={`选择 ${label} 下全部文件`} /><button type="button" className="file-group-toggle" onClick={() => toggleDir(key)} aria-expanded={!collapsed}><FileGroupChevronIcon collapsed={collapsed} /><FolderPanelIcon /> {label}/</button><span>({items.length})</span></div>
+      {!collapsed && renderFiles(items)}
+    </div>;
+  };
   useEffect(() => {
     if (!open) return;
-    // Every open/session switch starts with only mission-output expanded.
+    // root/input are grouped reference areas; work/output remain visible.
     setCollapsedDirs(defaultCollapsedDirs());
   }, [open, resetKey]);
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" aria-label="刷新文件" title="刷新文件" onClick={onRefresh}><RefreshFilePanelIcon /></Button><Button size="small" aria-label="折叠文件面板" title="折叠文件面板" onClick={onClose}><CollapseFilePanelIcon /></Button></div>
     <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={onDownload}>下载所选</Button>{mission && <Tooltip title={uploadBlocked ? "任务执行或状态变更期间不能上传" : platformStatus === "COMPLETED" ? "上传新结果将恢复任务为执行中" : "上传选中的任务结果"}><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || uploadBlocked} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">{platformStatus === "COMPLETED" ? "上传新结果将恢复执行" : "当前任务范围"}</span>}</div>
-    {loading ? <Spin /> : !files.length && !mission ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, items]) => {
+    {loading ? <Spin /> : !files.length && !mission && !workspaceFolders ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, subgroups]) => {
       const collapsed = collapsedDirs.has(dir);
+      const items = [...subgroups.values()].flat();
       const paths = items.map((file) => file.path);
       const allSelected = paths.length > 0 && paths.every((path) => selected.includes(path));
       const partiallySelected = !allSelected && paths.some((path) => selected.includes(path));
@@ -668,7 +1128,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
           <button type="button" className="file-group-toggle" onClick={() => toggleDir(dir)} aria-expanded={!collapsed}><FileGroupChevronIcon collapsed={collapsed} /> {groupLabel(dir)}</button>
           <span>({items.length})</span>
         </div>
-        {!collapsed && (items.length ? items.map((file) => <div className={`file-row ${focusPath === file.path ? "file-row-focused" : ""}`} key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{file.path.split("/").pop()}</button><small>{formatFileSize(file.size)}</small></div>) : <div className="file-group-empty">暂无文件</div>)}
+        {!collapsed && (items.length ? [...subgroups.entries()].map(([subdir, subitems]) => subdir ? renderSubgroup(dir, subdir, subitems) : renderFiles(subitems)) : <div className="file-group-empty">暂无文件</div>)}
       </div>;
     })}</div>}
   </aside>;
@@ -798,7 +1258,10 @@ function App() {
       const pending = normalizeEvents(current).find((event) => event.type === "approval_request");
       if (pending) void approve(pending.id, true, current);
     }
-    await loadFiles(current);
+    const loadedFiles = await loadFiles(current);
+    // Reopening a session with generated results should expose the result
+    // workspace immediately; sessions without output keep the panel closed.
+    setFilesOpen(hasMissionOutputFiles(loadedFiles));
   };
 
   const loadFiles = async (task = active) => {
@@ -806,8 +1269,14 @@ function App() {
     const project = task?.project || "";
     const query = `/api/files?project=${encodeURIComponent(project)}${missionQuery({ taskId: task?.id || "" }, task)}`;
     const result = await api(query);
-    if (!result.error) setFiles((result.files || []).filter((file) => !String(file.path).includes("-sheets/") && !String(file.path).endsWith("manifest.json")));
+    if (!result.error) {
+      const loadedFiles = (result.files || []).filter((file) => !String(file.path).includes("-sheets/") && !String(file.path).endsWith("manifest.json"));
+      setFiles(loadedFiles);
+      setFilesLoading(false);
+      return loadedFiles;
+    }
     setFilesLoading(false);
+    return [];
   };
 
   const createTask = async () => {
@@ -1072,4 +1541,4 @@ function App() {
   </ConfigProvider>;
 }
 
-createRoot(document.getElementById("root")).render(<AntApp><App /></AntApp>);
+createRoot(document.getElementById("root")).render(<AntApp>{STANDALONE ? <StandaloneApp /> : <App />}</AntApp>);

@@ -657,7 +657,7 @@ GET /system/manager/ontology-repository/1
 
 #### 基本信息
 
-**接口说明**： 按 `taskCode` 获取智能建模任务的执行上下文，包括解析要素、期望输出文件、数据源或文档来源信息。首次在 `PENDING`/`FAILED` 状态获取后任务进入 `RUNNING`；`RUNNING` 下重复获取幂等返回；`SUCCEED` 拒绝再次获取。历史 `SUCCESS`、`COMPLETED` 状态按已完成兼容读取，新回调统一使用 `SUCCEED`。
+**接口说明**： 按 `taskCode` 获取智能建模任务的执行上下文，包括解析要素、期望输出文件、数据源或文档来源信息。首次在 `PENDING`/`FAILED` 状态获取后任务进入 `RUNNING`；`RUNNING` 下重复获取幂等返回；`SUCCESS` 拒绝再次获取。历史 `SUCCEED`、`COMPLETED` 状态按已完成兼容读取，新回调统一使用 `SUCCESS`。
 
 **请求方法**：`GET`
 
@@ -696,7 +696,7 @@ GET /intelligent/modeling/tasks/RM123456789/execution-context
 | database.port | Integer | 端口 |
 | database.database | String | 数据库名 |
 | database.username | String | 用户名 |
-| database.password | String | 数据库密码；可为历史明文，也可为 `ConnectionConfigCrypto` 生成的 `Base64(12 字节 IV || AES-GCM 密文+16 字节 Tag)`。Agent 仅在配置 32 字节 AES-256 密钥 `ontology.crypto.secret` 时解密。 |
+| database.password | String | 数据库密码；可为历史明文，也可为 `ConnectionConfigCrypto` 生成的 `Base64(12 字节 IV || AES-GCM 密文+16 字节 Tag)`。加密凭据必须配置 32 字节 AES-256 密钥 `ontology.crypto.secret`；缺 key、错误 key 或 Tag 校验失败均直接拒绝连接，不得把密文当明文密码传递。 |
 | database.sourceSchema | String | 源 Schema |
 | database.selectedTables | Array<String> | 选中的表 |
 | document | Object/null | 文档建模上下文；数据源建模时为 null |
@@ -769,7 +769,7 @@ GET /intelligent/modeling/tasks/RM123456789/execution-context
 
 #### 基本信息
 
-**接口说明**： 回传建模任务执行状态。用户确认完成时发送 `SUCCEED`，并携带结果文件清单；`FAILED` 时应填写错误码与错误信息。结果上传本身不会自动发送成功回调，上传后任务继续保持 `RUNNING`。
+**接口说明**： 回传建模任务执行状态。用户确认完成时发送 `SUCCESS`，并携带结果文件清单；`FAILED` 时应填写错误码与错误信息。结果上传本身不会自动发送成功回调，上传后任务继续保持 `RUNNING`。
 
 **请求方法**：`POST`
 
@@ -783,11 +783,11 @@ GET /intelligent/modeling/tasks/RM123456789/execution-context
 | --- | --- | --- | --- |
 | taskCode | String | 是 | 路径参数。智能建模任务编码。 |
 | X-Ontology-Repository-Id | Long | 是 | 请求头。任务所属本体库 ID。 |
-| agentStatus | String | 是 | Agent 状态。新回调可选值：RUNNING、SUCCEED、FAILED。历史 SUCCESS、COMPLETED 仅用于兼容读取。 |
+| agentStatus | String | 是 | Agent 状态。新回调可选值：RUNNING、SUCCESS、FAILED。历史 SUCCEED、COMPLETED 仅用于兼容读取。 |
 | occurredAt | String | 是 | 事件发生时间，ISO-8601 带时区 |
 | errorCode | String | FAILED 时建议填 | 失败错误码，如 SOURCE\_READ\_FAILED |
 | errorMessage | String | FAILED 时建议填 | 失败信息 |
-| files | Array | SUCCEED 时必填 | 结果文件清单；RUNNING/FAILED 时可为空或 null |
+| files | Array | SUCCESS 时必填 | 结果文件清单；RUNNING/FAILED 时可为空或 null |
 | files\[\].parseElement | String | 是 | 解析要素，如 business\_object |
 | files\[\].filename | String | 是 | 文件名，如 business\_objects.csv |
 | files\[\].objectKey | String | 是 | 对象存储 objectKey |
@@ -807,7 +807,7 @@ GET /intelligent/modeling/tasks/RM123456789/execution-context
 ```
 ```json
 {
-  "agentStatus": "SUCCEED",
+  "agentStatus": "SUCCESS",
   "occurredAt": "2026-07-20T10:35:00+08:00",
   "errorCode": null,
   "errorMessage": null,
@@ -835,7 +835,7 @@ GET /intelligent/modeling/tasks/RM123456789/execution-context
 
 ```
 
-工作台上传全部 `expectedFiles` 后仍保持 `RUNNING`。用户检查结果并点击“完成”时，Agent 再次校验上传完整性、本地文件哈希及非空 `previewUrl`，校验通过后发送 `SUCCEED`。已完成任务点击“修改”时，Agent 删除当前任务已上传的旧结果并发送 `RUNNING`，随后允许重新生成和上传。对象存储前缀始终取本接口返回的可信 `outputPrefix`，不信任浏览器自行拼接的前缀；执行、结果上传和完成/修改状态切换互斥。新增或替换任务输入会使旧中间态及上传记录失效，必须重新执行并上传全部结果。
+工作台上传全部 `expectedFiles` 后仍保持 `RUNNING`。用户检查结果并点击“完成”时，Agent 再次校验上传完整性、本地文件哈希及非空 `previewUrl`，校验通过后发送 `SUCCESS`。已完成任务点击“修改”时，Agent 删除当前任务已上传的旧结果并发送 `RUNNING`，随后允许重新生成和上传。对象存储前缀始终取本接口返回的可信 `outputPrefix`，不信任浏览器自行拼接的前缀；执行、结果上传和完成/修改状态切换互斥。新增或替换任务输入会使旧中间态及上传记录失效，必须重新执行并上传全部结果。
 
 `parseElements` 与 `expectedFiles` 必须双向一致：不得返回未选择解析要素对应的文件，也不得为可输出的已选择要素漏配文件。Agent 在执行或上传前发现契约不一致时会直接拒绝本轮操作，且不会清理已完成任务的旧结果。已完成任务的普通提问、致谢和评价不触发重新执行；变更输入或重新生成前必须先点击“修改”。
 
@@ -942,7 +942,7 @@ GET /intelligent/integration/tasks/RM123456789/execution-context
 
 #### 基本信息
 
-**接口说明**： 回传消歧整合任务执行状态。用户确认完成时发送 `SUCCEED`；`FAILED` 时应填写错误码与错误信息。整合回调不携带 `files`，Ontology 后端按 `outputPrefix`、`expectedFiles` 和完成标记 `ok.csv` 读取结果。
+**接口说明**： 回传消歧整合任务执行状态。用户确认完成时发送 `SUCCESS`；`FAILED` 时应填写错误码与错误信息。整合回调不携带 `files`，Ontology 后端按 `outputPrefix`、`expectedFiles` 和完成标记 `ok.csv` 读取结果。
 
 **请求方法**：`POST`
 
@@ -956,7 +956,7 @@ GET /intelligent/integration/tasks/RM123456789/execution-context
 | --- | --- | --- | --- |
 | taskCode | String | 是 | 路径参数。消歧整合任务编码。 |
 | X-Ontology-Repository-Id | Long | 是 | 请求头。任务所属本体库 ID。 |
-| agentStatus | String | 是 | Agent 状态。新回调可选值：RUNNING、SUCCEED、FAILED。历史 SUCCESS、COMPLETED 仅用于兼容读取。 |
+| agentStatus | String | 是 | Agent 状态。新回调可选值：RUNNING、SUCCESS、FAILED。历史 SUCCEED、COMPLETED 仅用于兼容读取。 |
 | occurredAt | String | 是 | 事件发生时间，ISO-8601 带时区 |
 | errorCode | String | FAILED 时建议填 | 失败错误码 |
 | errorMessage | String | FAILED 时建议填 | 失败信息 |
@@ -965,14 +965,14 @@ GET /intelligent/integration/tasks/RM123456789/execution-context
 
 ```json
 {
-  "agentStatus": "SUCCEED",
+  "agentStatus": "SUCCESS",
   "occurredAt": "2026-07-20T11:00:00+08:00",
   "errorCode": null,
   "errorMessage": null
 }
 ```
 
-整合任务必须先上传全部 `expectedFiles` 和额外完成标记 `ok.csv`，上传后仍保持 `RUNNING`；用户点击“完成”后才发送 `SUCCEED`。用户点击“修改”时，Agent 删除旧结果（至少包括 `ok.csv`）并发送 `RUNNING`。上传对象前缀只采用 execution-context 的可信 `outputPrefix`；执行、上传和状态切换互斥，输入发生变化后旧上传记录失效并要求全量重传。
+整合任务必须先上传全部 `expectedFiles` 和额外完成标记 `ok.csv`，上传后仍保持 `RUNNING`；用户点击“完成”后才发送 `SUCCESS`。用户点击“修改”时，Agent 删除旧结果（至少包括 `ok.csv`）并发送 `RUNNING`。上传对象前缀只采用 execution-context 的可信 `outputPrefix`；执行、上传和状态切换互斥，输入发生变化后旧上传记录失效并要求全量重传。
 
 #### 返回参数（`data` 字段）
 

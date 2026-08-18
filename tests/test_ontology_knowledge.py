@@ -334,6 +334,50 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertIn("候选业务属性", server.build_modeling_instructions({}))
             self.assertIn("属性归属", server.build_modeling_instructions({}))
             self.assertIn("是否页面显示", server.build_modeling_instructions({}))
+            self.assertIn("Validator 是只读语义检查器", server.build_modeling_instructions({}))
+            self.assertIn("Validator 的约束、错误、WARNING、重试次数", server.build_modeling_instructions({}))
+            self.assertIn("只有 CONFIRMED 且有正式证据才能写入", server.build_modeling_instructions({}))
+            self.assertIn("business_object_decisions.csv", server.build_modeling_instructions({}))
+            self.assertIn("每一个实际评估的 Business Object candidate", server.build_modeling_instructions({}))
+            self.assertIn("ALERT_DETECTION_RULE", server.build_modeling_instructions({}))
+            self.assertIn("条件命中不是 violation", server.build_modeling_instructions({}))
+            self.assertIn("TaskCreate 返回的本地 task id", server.build_modeling_instructions({}))
+            orchestration_task = types.SimpleNamespace(
+                id="run-1", task_code="RM1", task_type="modeling", status="idle",
+                platform_status="RUNNING",
+                mission_context={"taskType": "modeling", "expectedFiles": ["result.csv"]},
+                platform_uploaded_files={}, modeling_plan={}, run_result={},
+            )
+            gate_issues = server.task_completion_gate(orchestration_task)
+            self.assertIn("ARTIFACT_MISSING", {item["code"] for item in gate_issues})
+            orchestration_task.platform_uploaded_files = {"result.csv": {"objectKey": "k", "sha256": "s"}}
+            self.assertEqual(server.task_completion_gate(orchestration_task), [])
+            server.set_task_run_result(orchestration_task, "ORCHESTRATION_FAILED",
+                                        errors=["FINALIZATION_FAILED"])
+            self.assertEqual(orchestration_task.run_result["status"], "ORCHESTRATION_FAILED")
+            self.assertIn("source=component/dependent/child", server.build_modeling_instructions({}))
+            self.assertIn("实体出现在 COMPOSITION 任意一端不等于合法", server.build_modeling_instructions({}))
+            with tempfile.TemporaryDirectory() as modeling_tmp:
+                work = Path(modeling_tmp) / "mission-work"
+                work.mkdir()
+                (work / "modeling_state.json").write_text(json.dumps({
+                    "entities": [
+                        {"entityId": "LE_MAIN", "role": "MAIN"},
+                        {"entityId": "LE_CHILD", "role": "DEPENDENT"},
+                    ],
+                    "relationDecisions": [{
+                        "relationId": "REL_REVERSED",
+                        "sourceEntity": "LE_MAIN", "targetEntity": "LE_CHILD",
+                        "relationType": "COMPOSITION", "status": "CONFIRMED",
+                        "evidenceTypes": ["EXPLICIT_CONFIG"],
+                        "evidenceLevel": "STRONG",
+                        "provenance": ["mission-input/ownership.yaml"],
+                    }],
+                }), encoding="utf-8")
+                evidence_issues = server.validate_modeling_evidence(
+                    "business_objects.csv", b"", modeling_tmp)
+                self.assertIn("INVALID_COMPOSITION_DIRECTION",
+                              {item["code"] for item in evidence_issues})
             layered_instructions = server.build_modeling_instructions({
                 "taskType": "modeling", "repositoryId": "1", "taskCode": "RM123456789",
                 "parseElements": ["LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "ENTITY_RELATION", "BUSINESS_OBJECT", "RULE", "METRIC"],
@@ -412,6 +456,9 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 {"TERM", "RULE", "METRIC"},
             )
             self.assertEqual(server.parse_element_for_file("business_terms.csv"), "TERM")
+            self.assertEqual(server.parse_element_for_file("indicators.csv"), "METRIC")
+            self.assertEqual(server.normalize_parse_elements(["indicator"]), {"METRIC"})
+            self.assertIn("indicators.csv", server.allowed_output_files(["METRIC"], ["indicators.csv"]))
             self.assertTrue(server.upstream_reports_completed("任务已成功，不能再次执行"))
             self.assertTrue(server.upstream_reports_completed("task already success"))
             self.assertFalse(server.upstream_reports_completed("integration task does not exist"))
@@ -421,7 +468,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             server_source = (ROOT / "open-claude" / "oc_codex_server.py").read_text(encoding="utf-8")
             self.assertIn('"本体元模型模板v0.0.1（含样例数据）.xlsx"', server_source)
             self.assertIn("context_config_err or last_err", server_source)
-            self.assertIn('"agentStatus": "SUCCEED"', server_source)
+            self.assertIn('"agentStatus": "SUCCESS"', server_source)
             self.assertIn('"MODELING_CONTEXT_INVALID"', server_source)
             self.assertIn('"MISSION_CONTEXT_UNAVAILABLE"', server_source)
             self.assertNotIn('client_context = data.get("missionContext")', server_source)
@@ -611,6 +658,14 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                         "taskCode": "RMDOC001", "repositoryId": "1", "taskId": document_task.id,
                         "taskType": "modeling", "paths": ["mission-output/logical_entities.csv"],
                     }
+                    # Modeling semantic validation is completed before upload;
+                    # this fixture represents that persisted finalize marker.
+                    server.write_decision_audits(Path(document_tmp) / "mission-work", {})
+                    server.finalize_semantic_model(
+                        Path(document_tmp) / "mission-work", {},
+                        output_dir=Path(document_tmp) / "mission-output",
+                        required_outputs=[],
+                    )
                     document_handler._handle_minio_upload()
                 finally:
                     server.bind_mission_project = originals["bind"]
@@ -974,6 +1029,10 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                         "previewUrl": "https://files.example/preview.csv", "sha256": digest,
                     }},
                 )
+                server.finalize_semantic_model(
+                    Path(task_tmp) / "mission-work", {},
+                    output_dir=output, required_outputs=["logical_entities.csv"],
+                )
                 partial_task = types.SimpleNamespace(
                     cwd=task_tmp,
                     task_code="RM123456789",
@@ -988,7 +1047,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 self.assertIn("请先上传全部结果文件后再确认完成", partial_error)
                 completion, completion_error = server.build_completed_callback_payload(completion_task)
                 self.assertIsNone(completion_error)
-                self.assertEqual(completion["agentStatus"], "SUCCEED")
+                self.assertEqual(completion["agentStatus"], "SUCCESS")
                 self.assertEqual(completion["files"][0]["parseElement"], "LOGICAL_ENTITY")
                 completion_task.platform_uploaded_files["logical_entities.csv"]["previewUrl"] = ""
                 _, preview_error = server.build_completed_callback_payload(completion_task)
@@ -1050,6 +1109,11 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                                 "uploadedResultCount": len(self.platform_uploaded_files)}
 
                 upload_task = UploadTask()
+                server.finalize_semantic_model(
+                    Path(upload_tmp) / "mission-work", {},
+                    output_dir=output,
+                    required_outputs=upload_task.mission_context["expectedFiles"],
+                )
                 handler = object.__new__(server.Handler)
                 responses, callback_statuses = [], []
                 deleted_objects = []
@@ -1096,14 +1160,14 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     self.assertIn("completionHint", responses[-1][1])
                     handler._read_body = lambda: {"action": "complete"}
                     handler._handle_platform_status(upload_task.id)
-                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED"])
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCESS"])
                     self.assertEqual(upload_task.platform_status, "COMPLETED")
                     self.assertEqual(len(callback_statuses[0][1]), 2)
                     handler._handle_platform_status(upload_task.id)
-                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED"])
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCESS"])
                     handler._read_body = lambda: {"action": "edit"}
                     handler._handle_platform_status(upload_task.id)
-                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED", "RUNNING"])
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCESS", "RUNNING"])
                     self.assertEqual(upload_task.platform_status, "RUNNING")
                     self.assertEqual(upload_task.platform_uploaded_files, {})
                     self.assertEqual(set(deleted_objects), {
@@ -1115,7 +1179,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     handler._handle_platform_status(upload_task.id)
                     self.assertEqual(responses[-1][0], 409)
                     self.assertIn("仍在执行中", responses[-1][1]["error"])
-                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED", "RUNNING"])
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCESS", "RUNNING"])
                     upload_task.status = "idle"
                     upload_task.platform_lock.acquire()
                     try:
@@ -1125,7 +1189,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                         upload_task.platform_lock.release()
                     self.assertEqual(responses[-1][0], 409)
                     self.assertIn("正在变更", responses[-1][1]["error"])
-                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCEED", "RUNNING"])
+                    self.assertEqual([status for status, _ in callback_statuses], ["SUCCESS", "RUNNING"])
                 finally:
                     server.bind_mission_project = originals["bind"]
                     server.fetch_execution_context = originals["context"]

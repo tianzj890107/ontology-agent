@@ -138,9 +138,9 @@ X-Ontology-Repository-Id: 1
 
 - `PENDING` 或 `FAILED`：首次获取 context 后进入 `RUNNING`。
 - `RUNNING`：重复获取 context 幂等返回。
-- `SUCCEED`：拒绝再次获取 context。为兼容历史平台数据，Agent 读取状态时仍将 `SUCCESS`、`COMPLETED` 等旧成功状态按已完成处理，但新回调统一发送 `SUCCEED`。
+- `SUCCESS`：拒绝再次获取 context。为兼容历史平台数据，Agent 读取状态时仍将 `SUCCEED`、`COMPLETED` 等旧成功状态按已完成处理；新回调统一发送 `SUCCESS`。
 
-数据库连接密码兼容平台的 `ConnectionConfigCrypto` 加密格式：`Base64(12 字节 IV || AES-GCM 密文+16 字节 Tag)`，密钥为部署配置 `ontology.crypto.secret` 解码后的 32 字节 AES-256 密钥。Agent 只在服务器配置了该密钥时解密，解密后的密码仅写入当前任务的受保护 `mission-input/.db_connection.json`，不会进入对话上下文。
+数据库连接密码兼容平台的 `ConnectionConfigCrypto` 加密格式：`Base64(12 字节 IV || AES-GCM 密文+16 字节 Tag)`，密钥为部署配置 `ontology.crypto.secret` 解码后的 32 字节 AES-256 密钥。服务启动时检查该配置；加密凭据缺少密钥、解密失败或 Tag 校验失败时直接返回 `DATABASE_CREDENTIAL_DECRYPTION_FAILED`，禁止把密文透传给数据库。任务的 `mission-input/.db_connection.json` 保留密文，数据库 helper 只在内存中解密，不把明文写入任务文件或对话上下文。
 
 `taskType=DOCUMENT_MODELING` 时，`database` 为 `null`，`document` 返回：
 
@@ -205,11 +205,11 @@ FAILED：
 }
 ```
 
-SUCCEED：
+SUCCESS：
 
 ```json
 {
-  "agentStatus": "SUCCEED",
+  "agentStatus": "SUCCESS",
   "occurredAt": "2026-07-20T10:35:00+08:00",
   "errorCode": null,
   "errorMessage": null,
@@ -224,7 +224,7 @@ SUCCEED：
 }
 ```
 
-`SUCCEED` 时 `files` 必须非空，每项必须包含：
+`SUCCESS` 时 `files` 必须非空，每项必须包含：
 
 - `parseElement`
 - `filename`
@@ -235,8 +235,8 @@ Agent 工作台状态约定：
 
 - 用户真正发起 Agent 执行前回调一次 `RUNNING`；仅打开页面、恢复历史会话或读取任务信息不代表执行开始。
 - 执行以不可恢复错误结束时回调 `FAILED`，并使用 `AGENT_EXECUTION_FAILED` 作为通用错误码。
-- 结果上传至对象存储后仍保持 `RUNNING`。用户在工作台检查、修改并重新上传后，主动点击“完成”才发送 `SUCCEED`；点击“修改”会回调 `RUNNING` 以恢复编辑。
-- 用户确认 `SUCCEED` 前，Agent 会校验全部 `expectedFiles` 都已上传，且本地文件内容仍与已上传版本一致。
+- 结果上传至对象存储后仍保持 `RUNNING`。用户在工作台检查、修改并重新上传后，主动点击“完成”才发送 `SUCCESS`；点击“修改”会回调 `RUNNING` 以恢复编辑。
+- 用户确认 `SUCCESS` 前，Agent 会校验全部 `expectedFiles` 都已上传，且本地文件内容仍与已上传版本一致。
 - 点击“修改”时，工作台会先删除当前任务已上传的旧结果对象（整合任务至少包括 `ok.csv`），再回调 `RUNNING`，避免旧完成标记继续生效。
 - 对象存储 `outputPrefix` 只采用服务端最新 execution-context 中的值；浏览器不负责提供可信前缀。即使兼容客户端仍传 `prefix`，也必须与服务端值完全一致，否则拒绝上传。
 - 结果上传、任务执行和“完成/修改”共用同一任务状态锁。Agent 正在执行或状态正在切换时拒绝上传，避免上传快照和本地文件继续变化。
@@ -329,14 +329,14 @@ Content-Type: application/json
 
 ```json
 {
-  "agentStatus": "SUCCEED",
+  "agentStatus": "SUCCESS",
   "occurredAt": "2026-07-20T11:00:00+08:00",
   "errorCode": null,
   "errorMessage": null
 }
 ```
 
-整合回调不传 `files`。用户确认完成并发送 `SUCCEED` 后，Ontology 后端按 `outputPrefix` 和当前 `expectedFiles` 读取并导入结果；如果上下文包含 `business_rules.csv`，它也属于本次结果文件，必须使用当前六列表头，不能只生成前三列的旧模板格式。
+整合回调不传 `files`。用户确认完成并发送 `SUCCESS` 后，Ontology 后端按 `outputPrefix` 和当前 `expectedFiles` 读取并导入结果；如果上下文包含 `business_rules.csv`，它也属于本次结果文件，必须使用当前六列表头，不能只生成前三列的旧模板格式。
 
 Agent 成功时还需上传：
 
@@ -344,7 +344,7 @@ Agent 成功时还需上传：
 ontology/{repositoryId}/integration-tasks/{taskCode}/agent-output/ok.csv
 ```
 
-`ok.csv` 是整合完成标记，不放入 `expectedFiles` 列表。Agent 必须先生成并验证全部 `expectedFiles`，最后再上传 `ok.csv`；上传完成后任务仍保持 `RUNNING`，未上传 `ok.csv` 或任一结果文件校验失败时，用户无法在工作台确认并发送 `SUCCEED`。用户点击“修改”时，Agent 会删除已上传的旧结果（至少包括 `ok.csv`）并回调 `RUNNING`。
+`ok.csv` 是整合完成标记，不放入 `expectedFiles` 列表。Agent 必须先生成并验证全部 `expectedFiles`，最后再上传 `ok.csv`；上传完成后任务仍保持 `RUNNING`，未上传 `ok.csv` 或任一结果文件校验失败时，用户无法在工作台确认并发送 `SUCCESS`。用户点击“修改”时，Agent 会删除已上传的旧结果（至少包括 `ok.csv`）并回调 `RUNNING`。
 
 ## 6. 本体库信息接口
 

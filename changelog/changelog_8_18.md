@@ -1,0 +1,9 @@
+# 2026-08-18 变更记录
+
+- 创建今日独立变更记录；从本文件创建后，今天后续完成的代码、配置、测试和部署变更统一按最终结果追加记录。
+- 修复 47313 任务文件树被运行时依赖文件占满的问题：文件 API 现在只返回 `mission-input`、`mission-work`、`mission-output`、`project-shared` 四个标准任务目录，隐藏 `pylibs`、`.py_deps` 等运行时依赖，避免 2000 条文件上限导致正式输出和审计文件不可见。新增大规模依赖目录回归测试；完整 unittest `130` 项通过、`3` 项因 macOS 缺少 bubblewrap 跳过，py_compile 和 git diff --check 通过。
+- 已将该修复部署并重启 47313；47314 未重启。远端文件 API 实测返回 113 个公开任务文件，其中七个 `mission-output` 正式输出和 32 个 `mission-work` 文件均可见，`pylibs/.py_deps` 均未返回；47313 与 47314 健康检查均为 200。
+- 对齐 47314 standalone 文件树与 47313 目录契约：服务端保留 `input/work/output` canonical 路径用于读取，但新增 `displayPath` 映射为 `root/input/work/output` 四个顶层文件夹；仅五类 decision 审计文件直接显示在 `work/`，`modeling_state.json`、`validation_report.json`、数据库元数据和输入表格派生文件归入 `root/work/` 或 `root/input/`；连接凭据、helper、隐藏文件及 `pylibs/.py_deps` 等运行时依赖不再出现在前端。47314 文件面板固定显示四个目录并复用 47313 的折叠/分组逻辑；定向 standalone/前端契约测试 `29` 项和完整 unittest `131` 项通过，前端构建、Python 编译和 `git diff --check` 通过，尚未部署。
+- 将 `mission-work` 决策审计从六个 CSV 收敛为五个固定 CSV：移除 `pending_confirmations.csv` 的生成、必需校验和文件树映射；待确认详情继续保留在各决策记录及 `modeling_state.json`。五个 CSV 统一采用 v0.0.1 中文强制表头，去除所有审计 CSV 的 `evidence_ids`、`missing_evidence`，并去除指标审计的 `grain`；增加表头一致性校验和旧文件清理。新增/修正回归测试后，`.venv/bin/python -m unittest discover -s tests -p 'test*.py'` 通过 `132` 项、`3` 项跳过；py_compile 和 git diff --check 通过。
+- 本次审计模板变更已同步部署 47313 与 47314；两个服务均重启并完成健康检查，未执行真实 LLM 建模链路。
+- 47314 思考链并发优化：移除前端“已有任务即拒绝”的单任务门禁，服务端新增 `QUEUED` 状态和可配置 worker semaphore，默认最多同时执行 2 个 run（`MODELING_SERVER_MAX_ACTIVE_RUNS`，范围 1–32），超出任务自动排队；每个 run 仍保持独立线程、会话、工作区和事件日志，失败/重启状态可继续执行。事件 journal 改为按 run 锁写入，仅低频 metadata checkpoint 竞争全局索引锁，降低多任务思考事件竞态；前端将排队任务纳入状态轮询和忙碌态，并每 3 秒刷新后台运行摘要。相关文件：`open-claude/standalone_modeling_server.py`、`frontend/src/main.jsx`、`scripts/run_standalone_modeling.sh`、`API/standalone-modeling-api.md`、并发回归测试。全量 unittest `133` 项通过、`3` 项跳过，前端 `npm run build`、远端 py_compile、`git diff --check` 通过；已备份远端 47314 工作区并部署/重启 47314，日志确认 `max_active_runs=2`，前端新 bundle 已生效，47313 未重启且健康检查通过。

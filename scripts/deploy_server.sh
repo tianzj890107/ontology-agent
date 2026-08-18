@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-deploy_root="${ONTOLOGY_AGENT_ROOT:-/home/zhangzhen/ontology/ontology-agent}"
+deploy_root="${ONTOLOGY_AGENT_ROOT:-/home/data/zhangzhen_home/zhangzhen/ontology/ontology-agent}"
 deploy_branch="${ONTOLOGY_AGENT_BRANCH:-20260727}"
 deploy_port="${ONTOLOGY_AGENT_PORT:-47313}"
 

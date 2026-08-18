@@ -6,6 +6,7 @@ import subprocess
 from typing import Optional
 from .claudemd import build_memory_prompt
 from .config import get_environment_info
+from .sandbox import boundary_for, run_isolated
 
 
 def _get_git_info(cwd: str) -> str:
@@ -14,19 +15,19 @@ def _get_git_info(cwd: str) -> str:
         return ""
     parts = []
     try:
-        branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            cwd=cwd, timeout=5,
+        runner = (
+            lambda argv: run_isolated(argv, cwd, timeout=5)
+            if boundary_for(cwd) is not None
+            else subprocess.run(
+                argv, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", cwd=cwd, timeout=5,
+            )
         )
+        branch = runner(["git", "rev-parse", "--abbrev-ref", "HEAD"])
         if branch.returncode == 0:
             parts.append(f"  Git branch: {branch.stdout.strip()}")
 
-        status = subprocess.run(
-            ["git", "status", "--short"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            cwd=cwd, timeout=5,
-        )
+        status = runner(["git", "status", "--short"])
         if status.returncode == 0 and status.stdout.strip():
             lines = status.stdout.strip().split("\n")
             parts.append(f"  Modified files: {len(lines)}")

@@ -10,6 +10,14 @@ import platform
 from pathlib import Path
 from typing import Any, Optional
 
+from .sandbox import (
+    PUBLIC_VIOLATION,
+    SandboxRuntimeUnavailable,
+    SandboxViolation,
+    boundary_for,
+    run_isolated,
+)
+
 # ---------------------------------------------------------------------------
 # Base helpers
 # ---------------------------------------------------------------------------
@@ -88,6 +96,26 @@ def _run_command(args, *, shell=False, executable=None, timeout=120, cwd="."):
 def execute_bash(params: dict[str, Any], cwd: str) -> str:
     command = params["command"]
     timeout = params.get("timeout", 120)
+
+    boundary = boundary_for(cwd)
+    if boundary is not None:
+        try:
+            result = run_isolated(["/bin/bash", "-c", command], cwd, timeout=timeout)
+        except (SandboxViolation, SandboxRuntimeUnavailable) as exc:
+            return f"Error: {exc}"
+        except subprocess.TimeoutExpired:
+            return f"Command timed out after {timeout}s"
+        except Exception as exc:
+            return f"Error executing command: {exc}"
+        stdout, stderr, rc = result.stdout, result.stderr, result.returncode
+        parts = []
+        if stdout:
+            parts.append(stdout)
+        if stderr:
+            parts.append(f"STDERR:\n{stderr}")
+        if rc != 0:
+            parts.append(f"Exit code: {rc}")
+        return _truncate("\n".join(parts) if parts else "(no output)")
 
     is_windows = platform.system() == "Windows"
 
@@ -169,9 +197,14 @@ READ_SCHEMA = {
 
 def execute_read(params: dict[str, Any], cwd: str) -> str:
     file_path = params["file_path"]
-    # Allow relative paths resolved from cwd
-    if not os.path.isabs(file_path):
-        file_path = os.path.join(cwd, file_path)
+    try:
+        boundary = boundary_for(cwd)
+        file_path = (boundary.resolve(file_path, operation="read")
+                     if boundary else (
+                         file_path if os.path.isabs(file_path)
+                         else os.path.join(cwd, file_path)))
+    except SandboxViolation:
+        return f"Error: {PUBLIC_VIOLATION}"
 
     offset = params.get("offset", 0)
     limit = params.get("limit", 2000)
@@ -194,7 +227,8 @@ def execute_read(params: dict[str, Any], cwd: str) -> str:
                 "如果清单不存在，请使用 Python 表格解析库或 zip/XML 解析并统计全部行。")
 
     try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        with (boundary.open_text(file_path, "r", operation="read")
+              if boundary else open(file_path, "r", encoding="utf-8", errors="replace")) as f:
             all_lines = f.readlines()
 
         total = len(all_lines)
@@ -243,13 +277,21 @@ def execute_write(params: dict[str, Any], cwd: str) -> str:
     file_path = params["file_path"]
     content = params["content"]
 
-    if not os.path.isabs(file_path):
-        file_path = os.path.join(cwd, file_path)
+    try:
+        boundary = boundary_for(cwd)
+        file_path = (boundary.resolve_parent(file_path, operation="write")
+                     if boundary else (
+                         file_path if os.path.isabs(file_path)
+                         else os.path.join(cwd, file_path)))
+    except SandboxViolation:
+        return f"Error: {PUBLIC_VIOLATION}"
 
     try:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         existed = os.path.exists(file_path)
-        with open(file_path, "w", encoding="utf-8", newline="\n") as f:
+        if not boundary:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with (boundary.open_text(file_path, "w", operation="write")
+              if boundary else open(file_path, "w", encoding="utf-8", newline="\n")) as f:
             f.write(content)
         action = "Updated" if existed else "Created"
         lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
@@ -300,14 +342,21 @@ def execute_edit(params: dict[str, Any], cwd: str) -> str:
     new_string = params["new_string"]
     replace_all = params.get("replace_all", False)
 
-    if not os.path.isabs(file_path):
-        file_path = os.path.join(cwd, file_path)
+    try:
+        boundary = boundary_for(cwd)
+        file_path = (boundary.resolve(file_path, operation="edit")
+                     if boundary else (
+                         file_path if os.path.isabs(file_path)
+                         else os.path.join(cwd, file_path)))
+    except SandboxViolation:
+        return f"Error: {PUBLIC_VIOLATION}"
 
     if not os.path.exists(file_path):
         return f"Error: File not found: {file_path}"
 
     try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        with (boundary.open_text(file_path, "r", operation="edit")
+              if boundary else open(file_path, "r", encoding="utf-8", errors="replace")) as f:
             content = f.read()
     except Exception as e:
         return f"Error reading file: {e}"
@@ -340,7 +389,8 @@ def execute_edit(params: dict[str, Any], cwd: str) -> str:
         new_content = content.replace(old_string, new_string, 1)
 
     try:
-        with open(file_path, "w", encoding="utf-8", newline="\n") as f:
+        with (boundary.open_text(file_path, "w", operation="edit")
+              if boundary else open(file_path, "w", encoding="utf-8", newline="\n")) as f:
             f.write(new_content)
 
         replacements = count if replace_all else 1
@@ -379,12 +429,21 @@ GLOB_SCHEMA = {
 def execute_glob(params: dict[str, Any], cwd: str) -> str:
     pattern = params["pattern"]
     search_path = params.get("path", cwd)
-    if not os.path.isabs(search_path):
-        search_path = os.path.join(cwd, search_path)
-
+    boundary = boundary_for(cwd)
     try:
+        if boundary:
+            boundary.validate_pattern_scope(search_path, operation="glob")
+            search_path = boundary.resolve(search_path, operation="glob")
+            pattern_scope = pattern if os.path.isabs(pattern) else os.path.join(search_path, pattern)
+            boundary.validate_pattern_scope(pattern_scope, operation="glob")
+        elif not os.path.isabs(search_path):
+            search_path = os.path.join(cwd, search_path)
+
         full_pattern = os.path.join(search_path, pattern)
         matches = glob_module.glob(full_pattern, recursive=True)
+
+        if boundary:
+            matches = boundary.filter_existing(matches, operation="glob")
 
         # Sort by mtime (newest first)
         file_matches = [m for m in matches if os.path.isfile(m)]
@@ -406,6 +465,8 @@ def execute_glob(params: dict[str, Any], cwd: str) -> str:
         if truncated:
             result += f"\n\n(truncated, showing {max_results} of {len(matches)} matches)"
         return result
+    except SandboxViolation:
+        return f"Error: {PUBLIC_VIOLATION}"
     except Exception as e:
         return f"Error in glob search: {e}"
 
@@ -451,8 +512,14 @@ def execute_grep(params: dict[str, Any], cwd: str) -> str:
     file_glob = params.get("glob")
     case_insensitive = params.get("case_insensitive", False)
 
-    if not os.path.isabs(search_path):
-        search_path = os.path.join(cwd, search_path)
+    boundary = boundary_for(cwd)
+    try:
+        search_path = (boundary.resolve(search_path, operation="grep")
+                       if boundary else (
+                           search_path if os.path.isabs(search_path)
+                           else os.path.join(cwd, search_path)))
+    except SandboxViolation:
+        return f"Error: {PUBLIC_VIOLATION}"
 
     flags = re.IGNORECASE if case_insensitive else 0
 
@@ -484,7 +551,10 @@ def execute_grep(params: dict[str, Any], cwd: str) -> str:
         if len(results) >= max_results:
             break
         try:
-            with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+            if boundary:
+                fpath = boundary.resolve(fpath, operation="grep")
+            with (boundary.open_text(fpath, "r", operation="grep")
+                  if boundary else open(fpath, "r", encoding="utf-8", errors="ignore")) as f:
                 for line_num, line in enumerate(f, 1):
                     if regex.search(line):
                         rel = _relative(fpath, cwd)
@@ -548,7 +618,7 @@ def execute_skill(params: dict[str, Any], cwd: str) -> str:
         )
 
     try:
-        prompt = skill.get_prompt_for_command(args)
+        prompt = skill.get_prompt_for_command(args, cwd=cwd)
         return prompt
     except Exception as e:
         return f"Error executing skill '{skill_name}': {e}"
@@ -598,84 +668,6 @@ def get_base_tool_schemas() -> list[dict[str, Any]]:
 _READONLY_BLOCKED_TOOLS = {"Write", "Edit", "Bash"}
 
 
-# ---------------------------------------------------------------------------
-# Sandbox confinement (OC_SANDBOX_ROOT)
-#
-# When OC_SANDBOX_ROOT is set (e.g. by the codex-style web server), every tool
-# dispatched through execute_tool is confined to that directory tree. File
-# tools get their path arguments resolved and checked; Bash commands are
-# screened for the common escape vectors (absolute paths outside the sandbox,
-# `..` traversal, `~` home expansion). The Bash screen is best-effort — the
-# hard guarantee applies to the file tools; shell commands always execute with
-# their cwd inside the sandbox. The CLI never sets this variable.
-# ---------------------------------------------------------------------------
-
-_SANDBOX_PATH_KEYS = {
-    "Read": ("file_path",),
-    "Write": ("file_path",),
-    "Edit": ("file_path",),
-    "Glob": ("path",),
-    "Grep": ("path",),
-}
-
-# Windows drive-letter absolute paths appearing anywhere in a shell command.
-_WIN_ABS_RE = re.compile(r"(?<![\w])([A-Za-z]:[\\/][^\s\"'`;|&<>]*)")
-# Git-bash style /c/... drive paths.
-_POSIX_DRIVE_RE = re.compile(r"(?:^|[\s\"'`=(;|&])(/([A-Za-z])/[^\s\"'`;|&<>]*)")
-# A standalone `..` path component (bounded so `main..HEAD` etc. still pass).
-_DOTDOT_RE = re.compile(r"(?:^|[\s\"'`=(;|&:])\.\.(?:$|[\s\"'`\\/);|&])")
-# A `~` used as a path (home-dir escape).
-_HOME_RE = re.compile(r"(?:^|[\s\"'`=(;|&:])~(?:$|[/\\\s\"'`;)|&])")
-
-
-def _sandbox_root() -> Optional[str]:
-    root = os.environ.get("OC_SANDBOX_ROOT")
-    if not root:
-        return None
-    return os.path.normcase(os.path.realpath(root))
-
-
-def _in_sandbox(path: str, root: str) -> bool:
-    real = os.path.normcase(os.path.realpath(path))
-    return real == root or real.startswith(root + os.sep)
-
-
-def _sandbox_violation(name: str, params: dict[str, Any], cwd: str, root: str) -> Optional[str]:
-    """Return an error message if this tool call would leave the sandbox."""
-    if name in _SANDBOX_PATH_KEYS:
-        candidates = [params.get(k) for k in _SANDBOX_PATH_KEYS[name]]
-        # An absolute Glob pattern bypasses the `path` arg — check it as a path.
-        if name == "Glob" and os.path.isabs(params.get("pattern", "")):
-            candidates.append(params.get("pattern"))
-        for raw in candidates:
-            if not raw:
-                continue
-            p = raw if os.path.isabs(raw) else os.path.join(cwd, raw)
-            if not _in_sandbox(p, root):
-                return (
-                    f"Error: path '{raw}' is outside the sandbox. "
-                    f"This session can only access files under: {root}"
-                )
-    elif name == "Bash":
-        cmd = params.get("command", "")
-        if _DOTDOT_RE.search(cmd):
-            return ("Error: '..' path traversal is not allowed in this sandboxed session. "
-                    f"Work with paths under: {root}")
-        if _HOME_RE.search(cmd):
-            return ("Error: '~' (home directory) paths are not allowed in this sandboxed session. "
-                    f"Work with paths under: {root}")
-        for m in _WIN_ABS_RE.finditer(cmd):
-            if not _in_sandbox(m.group(1), root):
-                return (f"Error: absolute path '{m.group(1)}' is outside the sandbox. "
-                        f"This session can only access files under: {root}")
-        for m in _POSIX_DRIVE_RE.finditer(cmd):
-            translated = m.group(2) + ":" + m.group(1)[2:]
-            if not _in_sandbox(translated, root):
-                return (f"Error: absolute path '{m.group(1)}' is outside the sandbox. "
-                        f"This session can only access files under: {root}")
-    return None
-
-
 def execute_tool(name: str, params: dict[str, Any], cwd: str) -> str:
     """Execute a tool by name with given params."""
     if os.environ.get("OC_READONLY_FS") and name in _READONLY_BLOCKED_TOOLS:
@@ -683,17 +675,10 @@ def execute_tool(name: str, params: dict[str, Any], cwd: str) -> str:
             f"Error: '{name}' is disabled in this read-only session. "
             "The filesystem cannot be modified and shell commands cannot be run here."
         )
-    root = _sandbox_root()
-    if root:
-        # The web server sets OC_SANDBOX_ROOT to the global sandbox directory,
-        # but each Conversation has its own project cwd. Narrow the effective
-        # root to that cwd so one task cannot browse a sibling project.
-        session_root = os.path.normcase(os.path.realpath(cwd))
-        if _in_sandbox(session_root, root):
-            root = session_root
-        violation = _sandbox_violation(name, params, cwd, root)
-        if violation:
-            return violation
+    try:
+        boundary_for(cwd)
+    except SandboxViolation:
+        return f"Error: {PUBLIC_VIOLATION}"
     executor = TOOL_EXECUTORS.get(name)
     if not executor:
         return f"Unknown tool: {name}"

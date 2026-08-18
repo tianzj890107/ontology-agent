@@ -29,6 +29,7 @@ tmp/
 .env.*
 !.env.example
 credentials.json
+.standalone-modeling-api-key
 CLAUDE.local.md
 
 # ---- IDE / 编辑器 ----

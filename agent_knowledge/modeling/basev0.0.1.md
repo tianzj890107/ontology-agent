@@ -102,10 +102,18 @@ TERM ─────────────────────────
 - 对象关系复用关系编码格式 `REL` + 6 位流水码。新版编码规范尚未声明状态编码和事件编码格式：有稳定来源编码时原样沿用；没有时必须标记待确认，禁止自行规定 `S`/`E` 前缀或随机生成。
 - 元模型、模板和样例的业务规则列名统一为“规则编码”，并统一使用 `R` + 7 位流水码。
 
+## 数字展示规范 v0.0.1（强制）
+
+- 普通大数和金额使用千位分隔符；金额默认保留两位小数，例如 `¥12,345.00`。
+- 数值单元格、数值表头和数值详情统一右对齐，并使用等宽数字。
+- 仅在卡片、图表或空间受限的金额场景使用“万”单位，例如 `¥12.34万`；普通表格优先使用千位分隔格式。
+- 禁止显示 `¥0万`、`0万`、`¥0.00万`；金额为零时显示 `¥0.00`，小于一万的金额不得使用“万”。
+- 业务编码、ID、日期、时间、年份、布尔值和枚举值不得按普通数值格式化，展示格式不能改变原始值。
+
 ## 通用业务对象与逻辑实体识别规范v0.0.1.md
 
 > 规则标识：`通用业务对象与逻辑实体识别规范v0.0.1.md`（服务端已静态注入，禁止在任务 sandbox 中查找源文件）
-> SHA-256（前12位）：`6c4502c93565`
+> SHA-256（前12位）：`0f287e24e024`
 
 # 通用业务对象与逻辑实体识别规范 V6
 
@@ -149,6 +157,14 @@ TERM ─────────────────────────
 ### 2.6 配置与核心规范分离原则
 
 以下内容不得写死在通用核心规范中：特定行业术语、特定表名和字段名、特定系统前缀、固定英文命名后缀、固定业务对象词典、固定分值和固定权重。这些内容必须通过外部配置加载。
+
+### 2.7 事实证据门禁原则
+
+一致性校验只能发现缺口，不能成为创造事实的证据。校验器是只读语义检查器，返回的缺失关系、结构完整性要求、ERROR/WARNING、重试次数和“校验未通过”均不得直接或间接新增实体、属性、关系、业务对象或规则。
+
+关系必须先进入结构化关系决策，状态只能为 `CONFIRMED`、`CANDIDATE`、`UNRESOLVED` 或 `REJECTED`。正式实体关系结果只允许输出 `CONFIRMED` 且有可追溯证据的关系；`CANDIDATE`、`UNRESOLVED` 和 `REJECTED` 只能保留在候选/审计/待确认中。`LLM_SEMANTIC_INFERENCE`、业务常识、名称相似或单一弱证据不能单独确认关系；关系缺少真实来源时必须保留 `UNKNOWN/UNRESOLVED`，记录缺失证据和待确认问题。
+
+派生实体没有明确来源时，血缘缺口是 `WARNING/NEEDS_CONFIRMATION`，不是要求 Agent 猜测来源。只有新取得独立的外键、声明约束、视图/ETL SQL lineage、代码引用、显式配置或已有本体证据，才允许把候选或未知关系升级为正式事实。结构性修复与语义修复必须分离：CSV 表头、编码和格式可以结构性修复；新增或改变业务语义必须有新证据。
 
 ## 3. 输入要求
 
@@ -513,6 +529,8 @@ LineageEvidence
 - SPECIALIZATION：泛化/特化关系，默认不作为组成关系处理。
 - UNKNOWN：证据不足，不参与聚合。
 
+COMPOSITION 的全局方向契约固定为：`source = component/dependent/child`，`target = owner/parent`。不能因为实体出现在 COMPOSITION 任意一端就判定合法；必须同时验证方向、source/target role capability、owner 唯一性、循环和证据状态。REFERENCE、ASSOCIATION、TRANSFORMATION、OBSERVATION_OF、SPECIALIZATION 不得参与业务对象聚合。
+
 ### 8.2 关系输出要求
 
 每条关系必须记录：源实体、目标实体、关系类型、基数、关联属性、结构证据、语义证据、行为证据、是否参与聚合、置信度和冲突证据。
@@ -556,10 +574,10 @@ LineageEvidence
 
 1. 以逻辑实体为节点；
 2. 只保留 COMPOSITION 和 EXTENSION；
-3. 对保留后的图求连通分量；
+3. 只对已确认且通过 COMPOSITION/EXTENSION 语义校验的边求连通分量；
 4. 每个连通分量形成候选实体族；
 5. 每个实体族必须有且只能有一个候选主实体；
-6. 无主实体或多主实体的实体族进入待确认。
+6. 无主实体、多主实体、Owner 冲突、方向错误或 COMPOSITION 循环的实体族不得进入正式业务对象。
 
 完整 ER 连通图不得直接作为业务对象实体族。
 
@@ -618,6 +636,12 @@ LineageEvidence
 置信度不得改变结论，只描述证据可靠性。
 
 正式业务对象目录只收录 CONFIRMED；候选业务对象单独管理 CANDIDATE；驳回候选单独记录 REJECTED。
+
+### 12.1 业务对象决策证据链
+
+每一个实际参与判定的业务对象候选都必须保留结构化决策记录，写入任务内部 `modeling_state.json` 的 `businessObjectDecisions`，并稳定导出到 `mission-work/business_object_decisions.csv`。记录必须分别保存 R1、R2、R3、R4、R5 的 `PASS`、`FAIL` 或 `UNKNOWN`、对应证据和来源引用、冲突、未知原因、确认问题、建议确认角色与置信度。没有证据不能为了填充字段而生成解释；没有反证不能把证据缺失判为 FAIL。
+
+最终决策必须由代码按 R1–R5 重算：任一 FAIL 为 REJECTED；无 FAIL 且至少一个 UNKNOWN 为 CANDIDATE；全部 PASS 才为 CONFIRMED。置信度不改变决策。CONFIRMED 才能进入正式 `business_objects.csv`；CANDIDATE 和 REJECTED 只进入决策审计，不得丢弃，也不能因此删除对应逻辑实体。正式输出与决策审计必须通过编码一致性校验。
 
 ## 13. 命名规范
 
@@ -681,6 +705,10 @@ LineageEvidence
 ### 15.6 数据仓库适配器
 
 区分业务源实体、维度、事实、快照、聚合、派生指标和数据集市。事实表与维度表的物理建模角色不得直接等同于业务对象角色。
+
+### 15.1 业务规则类型化验证
+
+业务规则必须先分类再验证。完整性约束使用 violation 语义；告警/检测规则使用 hit 或 match 语义，条件命中不是 violation，命中率不能自动否定规则；计算规则比较 expected 与 actual；状态流转需要历史；资格/决策规则需要 outcome 或 action。无法可靠分类时保留 UNKNOWN/NEEDS_CLASSIFICATION，不能默认按完整性约束验证。规则类型与 enforcement 独立，样本中 0 violation 只能说明观察到一致性，不能证明 ENFORCED。
 
 ## 16. 领域与项目配置接口
 
@@ -752,7 +780,7 @@ ConfidencePolicy
 12. 证据完整性校验：每个实体角色、属性角色、关系类型和规则判定必须有具体证据来源。
 13. 命名校验：标准名称必须符合项目 NamingPolicy。
 14. 冲突校验：存在 CONTRADICTORY 证据时，必须记录处理结果。
-15. 血缘校验：派生分析实体必须至少有一个来源关系。
+15. 血缘校验：派生分析实体必须至少有一个已确认来源关系；没有足够证据时输出 `MISSING_DERIVATION_LINEAGE` WARNING 和待确认问题，不得自动补造来源。
 16. 审计校验：每个最终结论必须可追溯到输入、证据、规则、冲突处理和输出结论。
 
 ## 19. 标准执行流程
@@ -777,7 +805,7 @@ Agent 必须依次执行：
 16. 生成非业务对象分类；
 17. 生成待确认问题；
 18. 执行自动一致性校验；
-19. 校验失败时不得输出正式结果；
+19. 结构性错误不得输出正式结果；语义证据不足可以输出诚实的不完整结果和 WARNING，但不得输出无证据的正式关系；
 20. 输出审计记录。
 
 ## 20. 禁止事项
@@ -806,6 +834,10 @@ Agent 必须依次执行：
 项目 Profile 负责：数据源结构映射、领域术语、同义词、命名规则、Owner 映射、已知生命周期、已知身份规则和已知排除项。
 
 通用协议必须独立于任何具体 Profile 正常运行。Profile 缺失时，Agent 应输出更多 UNKNOWN，而不是自行补充领域知识。
+
+### 21.1 校验缺口与正式事实的边界
+
+本规范或数据模型参考中出现“补充缺失关系”“消除孤岛”“满足每个角色必须存在某关系”等表述时，其含义是：继续查找独立证据，或把缺口记录为 CANDIDATE、UNRESOLVED 和待确认问题；不能据此直接创建正式关系。Evidence Gate 的优先级高于结构完整性要求。校验器是只读检查器，不是事实来源；校验发现缺失关系只能生成 WARNING/NEEDS_CONFIRMATION，不能生成关系、选择 Owner、选择主逻辑实体或改变关系类型。只有新的、可追溯的独立证据才允许把候选或未知结论升级为 CONFIRMED 并进入正式 CSV。
 
 
 ## 本体元模型与结果模板参考
@@ -1292,3 +1324,27 @@ Agent 必须依次执行：
 | 47 | 逻辑模型图 | 定义规则 | 关系基数 | 解决逻辑模型中实体关系基数未定义导致的设计不精确问题，确保逻辑实体之间的关系有明确的基数约束。 | 逻辑模型图中，逻辑之间的连线定义时，需要定义关系基数 | 1.逻辑模型图中逻辑实体之间的连线必须定义关系基数；<br>2.关系基数应准确反映业务规则；<br>3.关系基数应从两个方向分别定义（父对子、子对父）；<br>4.基数定义应与业务实际和主键外键关系一致。 | 1.为逻辑模型中每条关系线定义两端的关系基数；<br>2.基于业务规则和主键外键约束确定基数；<br>3.两个方向都要明确定义（如1:0..N、1:1等）；<br>4.验证基数定义与外键约束的一致性；<br>5.与业务专家确认关系基数的业务准确性。 | 1.逻辑模型中所有关系都有明确的基数定义为合格；<br>2.存在未定义基数的关系即为不合规；<br>3.关系基数与外键约束或业务规则不一致即为不合规。 |  |  |  |
 | 48 | 逻辑模型图 | 定义规则 | 主外键依赖关系 | 解决主外键关系定义不规范、一个外键同时依赖多个主键导致的关系混乱问题，确保主外键依赖关系清晰明确。 | 两个逻辑实体之间建立主外键关系，父实体必须有主键，子实体的外键依赖于父实体的主键，且子实体的一个外键仅依赖于一个父实体的主键 | 1.两个逻辑实体之间建立主外键关系时，父实体必须有主键；<br>2.子实体的外键依赖于父实体的主键；<br>3.子实体的一个外键仅依赖于一个父实体的主键；<br>4.一个外键不得同时与多个父实体的主键建立依赖关系；<br>5.主外键关系应明确、无歧义。 | 1.建立主外键关系前，确认父实体有明确定义的主键；<br>2.子实体的外键属性应与父实体主键类型一致；<br>3.每个外键只能引用一个父实体的主键；<br>4.如果需要关联多个父实体，应使用多个外键字段分别关联；<br>5.绘制主外键关系图，确保依赖关系清晰。 | 1.所有主外键关系符合规范（父有主键、外键仅依赖一个主键）为合格；<br>2.一个外键同时依赖多个父实体主键即为不合规；<br>3.父实体无主键但建立了主外键关系即为不合规。 |  | 采购订单中的客户编号作为外键同时与客户、员工的主键建立外键关系 |  |
 | 49 | 逻辑模型图 | 定义规则 | 禁止M:N关系 | 解决逻辑模型中保留多对多关系导致的物理实现困难、数据冗余问题，确保逻辑模型中所有关系都可直接物理实现。 | 禁止逻辑模型保留 M:N 关系，必须拆分为两个1:N + 中间关联实体(关系实体) | 1.禁止逻辑模型保留M:N（多对多）关系；<br>2.M:N关系必须拆分为两个1:N关系 + 中间关联实体（关系实体）；<br>3.中间关系实体承载两个实体的关联信息；<br>4.拆分后的关系实体应有自己的属性和主键。 | 1.识别逻辑模型中的多对多关系；<br>2.为每个M:N关系创建中间关系实体；<br>3.将M:N关系拆分为两个1:N关系，分别连接原实体与关系实体；<br>4.为关系实体定义主键和必要的属性（如关联时间、状态等）；<br>5.验证拆分后的关系是否准确反映原业务语义。 | 1.逻辑模型中无M:N关系，均已拆分为关系实体为合格；<br>2.存在未拆分的M:N关系即为不合规；<br>3.拆分后的关系实体不能准确反映原业务语义即为不合规。 | 采购需求和采购订单分摊关系 | 采购订单头和采购需求头直接建立M:N关系 |  |
+
+## Evidence Gate 最终优先级（覆盖参考表述）
+
+公共规则、模板或历史参考中关于“避免孤岛”“补充缺失关系”“每个角色必须存在某关系”的描述，只能驱动证据检索、候选记录和待确认问题，不能直接创建正式事实。孤岛、缺失血缘、缺少 Owner、多主或无主都可以作为 WARNING/NEEDS_CONFIRMATION 保留。校验器是只读检查器，校验结果、完整性要求和重试次数都不构成证据；只有新的、可追溯的独立证据经过 Evidence Gate 后，才能把 CANDIDATE/UNRESOLVED 升级为 CONFIRMED 并进入正式 CSV。
+
+## Business Object 决策审计最终优先级
+
+每一个实际评估的 Business Object candidate 都必须保留 R1、R2、R3、R4、R5 的 PASS/FAIL/UNKNOWN、逐项证据与 provenance，并写入 `mission-work/business_object_decisions.csv`。任一 FAIL → REJECTED；无 FAIL 且有 UNKNOWN → CANDIDATE；全部 PASS → CONFIRMED。confidence 不能改变这个 deterministic decision，且必须在建模时直接输出 0–100 的数值，不得使用 HIGH/MODERATE/LOW 标签或由导出器猜测数值。没有反证不能判 FAIL，没有真实证据不能伪造 PASS；CANDIDATE、REJECTED 不得丢弃，只有 CONFIRMED 才能进入正式 `business_objects.csv`，被 REJECTED 的候选对应逻辑实体仍须保留。
+
+## Business Rule 类型化验证最终优先级
+
+业务规则必须先按语义类型选择验证策略：完整性约束使用 violation 统计；告警/检测规则使用 hit/match 统计，条件命中不是 violation，命中率不能自动驳回；计算规则比较 expected 与 actual；状态流转需要历史；资格/决策规则需要 outcome/action。无法可靠分类时保留 UNKNOWN/NEEDS_CLASSIFICATION，不能默认按完整性约束验证。规则类型与 enforcement 分离，样本中 0 violation 不能证明 ENFORCED。
+
+## Decision Audit 与不确定性最终优先级
+
+Schema 必填字段、CSV 模板完整性、Validator ERROR/WARNING、孤岛检查和结果完整性都不是业务事实证据；不能为了填空、补齐关系或满足模板创造 Owner、生命周期、member-of、lineage、处置动作或业务对象归属。逻辑实体允许 `ASSIGNED`、`UNASSIGNED`、`UNRESOLVED`；后两者必须保存原因和缺失证据，不得硬填正式 Business Object。
+
+所有语义判定必须先进入结构化 Decision Layer，再由确定性 Validator 和 Generator 消费。每个候选、关系、规则、指标和逻辑实体的 CONFIRMED、CANDIDATE、UNRESOLVED、REJECTED/UNKNOWN 都必须落盘到当前任务 `mission-work/` 的五个固定决策审计 CSV：`business_object_decisions.csv`、`relation_decisions.csv`、`rule_decisions.csv`、`indicator_decisions.csv`、`logical_entity_decisions.csv`，以及 `validation_report.json` 与 `modeling_state.json`。五个 CSV 强制使用决策审计模板 `v0.0.1` 的中文表头；不再生成 `pending_confirmations.csv`，待确认信息保留在各决策记录和 `modeling_state.json` 中。审计覆盖率必须为 100%，审计文件缺失或表头不匹配时任务失败。
+
+VIEW JOIN 只证明查询关联，不证明派生血缘；使用 `VIEW_JOIN_EVIDENCE`、`VIEW_DERIVATION_LINEAGE`、`VIEW_CALCULATION_LOGIC`、`VIEW_FILTER_LOGIC` 区分语义。显式 FK 通常只能确认 REFERENCE，不能单独确认 COMPOSITION 或 TRANSFORMATION；声明 FK 与运行时 enforced 必须分开记录。关系用稳定的 `relation_decision_id` 唯一标识，同一端点可存在多种关系。
+
+规则必须分离 Discovery/Existence、Validation、Enforcement、Effectiveness；0 violation 只能是 OBSERVED_ONLY，不能证明规则存在或已强制执行。ALERT 的 hit 不等于 violation，也不等于 effectiveness；没有 action 证据时 action 保持 UNKNOWN。物理字段不是业务指标，指标必须保留 grain、scope、unit、formula_status 和 aggregation_semantics；没有聚合证据时比例不得自动 AVG。
+
+任何 UNKNOWN/UNRESOLVED → CONFIRMED 都必须记录新的独立 evidence IDs；没有新证据的状态升级必须报错。正式输出只消费已通过门禁的 Decision Layer，Generator 不得自行修改语义状态。

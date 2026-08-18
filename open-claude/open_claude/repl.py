@@ -861,7 +861,7 @@ def _handle_command(text: str, conv: Conversation) -> bool:
         return True
 
     if lower == "/tasks":
-        store = get_task_store()
+        store = get_task_store(conv.cwd)
         tasks = store.list_all()
         if not tasks:
             console.print("[dim]No tasks.[/dim]")
@@ -1616,7 +1616,9 @@ def run_repl(cwd: Optional[str] = None, permission_mode: str = "default",
                     skill = registry.get(skill_name)
                     if skill:
                         # Inject the skill prompt as a user message
-                        prompt_content = skill.get_prompt_for_command(skill_args)
+                        prompt_content = skill.get_prompt_for_command(
+                            skill_args, cwd=conv.cwd
+                        )
                         conv.add_user_message(prompt_content)
                         conv.run_turn()
                         continue

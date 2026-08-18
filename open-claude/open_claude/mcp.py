@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import __version__
+from .sandbox import SandboxRuntimeUnavailable, SandboxViolation, boundary_for, isolated_argv
 
 PROTOCOL_VERSION = "2024-11-05"
 INIT_TIMEOUT = 15      # seconds for initialize + tools/list
@@ -76,6 +77,9 @@ class MCPServer:
         try:
             argv = self._resolve_argv()
             env = {**os.environ, **self.env}
+            if boundary_for(self.cwd) is not None:
+                argv, isolated_env = isolated_argv(argv, self.cwd)
+                env = {**self.env, **isolated_env}
             self.proc = subprocess.Popen(
                 argv,
                 stdin=subprocess.PIPE,
@@ -87,6 +91,10 @@ class MCPServer:
                 cwd=self.cwd,
                 env=env,
             )
+        except (SandboxRuntimeUnavailable, SandboxViolation) as e:
+            self.status = "failed"
+            self.error = f"sandbox refused to start: {e}"
+            return False
         except Exception as e:
             self.status = "failed"
             self.error = f"failed to spawn: {e}"

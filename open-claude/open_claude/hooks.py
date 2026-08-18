@@ -26,6 +26,8 @@ import re
 import subprocess
 from typing import Any, Optional
 
+from .sandbox import SandboxRuntimeUnavailable, SandboxViolation, boundary_for, run_isolated
+
 HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]
 
 DEFAULT_HOOK_TIMEOUT = 60  # seconds
@@ -128,19 +130,28 @@ class HookRunner:
 
     def _run_one(self, command: str, payload_json: str, timeout: int, result: HookResult):
         try:
-            proc = subprocess.run(
-                command,
-                shell=True,
-                input=payload_json,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                cwd=self.cwd,
-            )
+            if boundary_for(self.cwd) is not None:
+                proc = run_isolated(
+                    ["/bin/bash", "-c", command], self.cwd,
+                    timeout=timeout, input_text=payload_json,
+                )
+            else:
+                proc = subprocess.run(
+                    command,
+                    shell=True,
+                    input=payload_json,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=timeout,
+                    cwd=self.cwd,
+                )
         except subprocess.TimeoutExpired:
             result.errors.append(f"Hook timed out after {timeout}s: {command}")
+            return
+        except (SandboxRuntimeUnavailable, SandboxViolation) as e:
+            result.errors.append(f"Hook sandbox unavailable: {e}")
             return
         except Exception as e:
             result.errors.append(f"Hook failed to run ({command}): {e}")

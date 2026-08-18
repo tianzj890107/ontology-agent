@@ -1,5 +1,7 @@
 """Skill registry: discovery, loading, and management."""
 
+from __future__ import annotations
+
 import fnmatch
 import os
 import re
@@ -8,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .frontmatter import normalize_metadata, parse_frontmatter
+from ..sandbox import boundary_for, run_isolated
 
 
 class Skill:
@@ -45,7 +48,7 @@ class Skill:
         self._prompt_text = prompt_text
         self.skill_dir = skill_dir
 
-    def get_prompt_for_command(self, args: str = "") -> str:
+    def get_prompt_for_command(self, args: str = "", cwd: str | None = None) -> str:
         """Get the full prompt content for this skill."""
         if self._get_prompt:
             return self._get_prompt(args)
@@ -57,7 +60,7 @@ class Skill:
             prompt = prompt.replace("${CLAUDE_SKILL_DIR}", self.skill_dir)
 
         # Execute inline shell commands: !`command`
-        prompt = _execute_inline_commands(prompt)
+        prompt = _execute_inline_commands(prompt, cwd=cwd)
 
         # Append args
         if args:
@@ -76,15 +79,18 @@ class Skill:
         return False
 
 
-def _execute_inline_commands(text: str) -> str:
+def _execute_inline_commands(text: str, *, cwd: str | None = None) -> str:
     """Execute !`command` inline shell expressions and substitute output."""
     def _run_cmd(match):
         cmd = match.group(1)
         try:
-            result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=10,
-            )
+            if cwd and boundary_for(cwd) is not None:
+                result = run_isolated(["/bin/bash", "-c", cmd], cwd, timeout=10)
+            else:
+                result = subprocess.run(
+                    cmd, shell=True, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=10,
+                )
             return result.stdout.strip()
         except Exception:
             return f"(error running: {cmd})"
