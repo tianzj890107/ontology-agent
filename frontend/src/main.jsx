@@ -171,6 +171,7 @@ function StandaloneApp() {
   const [run, setRun] = useState(null);
   const [preview, setPreview] = useState(null);
   const [runFilesOpen, setRunFilesOpen] = useState(true);
+  const [runFilesLoading, setRunFilesLoading] = useState(false);
   const [selectedRunFiles, setSelectedRunFiles] = useState([]);
   const [standaloneComposerText, setStandaloneComposerText] = useState("");
   const [standalonePendingFiles, setStandalonePendingFiles] = useState([]);
@@ -236,6 +237,19 @@ function StandaloneApp() {
       ? { ...item, ...summary, events: undefined }
       : item));
   };
+  const loadRunFiles = async (runId, generation = runRequestRef.current.generation) => {
+    if (!runId || !isCurrentRunRequest(runId, generation)) return;
+    setRunFilesLoading(true);
+    try {
+      const result = await standaloneApi(`/api/modeling-runs/${encodeURIComponent(runId)}/files`, "", {
+        signal: runRequestRef.current.controller?.signal,
+      });
+      if (result._aborted || !isCurrentRunRequest(runId, generation) || result.error) return;
+      setRun((current) => current?.runId === runId ? { ...current, files: result.files || [] } : current);
+    } finally {
+      if (isCurrentRunRequest(runId, generation)) setRunFilesLoading(false);
+    }
+  };
   const loadRun = async (runId, showError = true) => {
     if (!runId) return null;
     selectedRunIdRef.current = runId;
@@ -251,7 +265,9 @@ function StandaloneApp() {
     // Loading a large historical event journal must never block selecting a
     // different run, and selecting a run is view-only: it does not stop or
     // mutate any server-side execution.
-    const summaryRun = { ...summary, events: [] };
+    // File metadata is loaded after the newest thought-chain window. Keep the
+    // task header/input shell immediate without rendering a large file tree.
+    const summaryRun = { ...summary, files: [], events: [] };
     if (summary.model) setStandaloneModel(summary.model);
     setRun(summaryRun);
     updateRunSummary(summary);
@@ -266,10 +282,13 @@ function StandaloneApp() {
     const start = Number(events.eventStart ?? Math.max(0, total - latestEvents.length));
     eventCursorRef.current.set(runId, Number(summary.eventsCount) || total);
     eventWindowRef.current.set(runId, { start, total });
-    const result = { ...summary, events: latestEvents };
+    const result = { ...summary, files: [], events: latestEvents };
     if (summary.model) setStandaloneModel(summary.model);
     if (isCurrentRunRequest(runId, request.generation)) setRun(result);
-    scheduleIdle(() => { void loadOlderStandaloneEvents(runId, request.generation); });
+    scheduleIdle(async () => {
+      await loadOlderStandaloneEvents(runId, request.generation);
+      await loadRunFiles(runId, request.generation);
+    });
     return result;
   };
   const loadOlderStandaloneEvents = async (runId, generation = runRequestRef.current.generation) => {
@@ -334,7 +353,7 @@ function StandaloneApp() {
       const window = eventWindowRef.current.get(runId);
       if (window) eventWindowRef.current.set(runId, { ...window, total: window.total + delta.length });
       setRun((current) => current?.runId === runId
-        ? { ...summary, events: [...(current.events || []), ...delta] }
+        ? { ...summary, files: current.files || [], events: [...(current.events || []), ...delta] }
         : current);
       updateRunSummary(summary);
       return summary;
@@ -355,6 +374,7 @@ function StandaloneApp() {
     setSelectedRunFiles([]);
     setStandaloneComposerText("");
     setStandalonePendingFiles([]);
+    setRunFilesLoading(false);
     setRunFilesOpen(true);
   };
   useEffect(() => {
@@ -537,7 +557,7 @@ function StandaloneApp() {
         <main className="standalone-main">
           {!run && <div className="standalone-title"><div><h1>独立智能建模</h1><p>上传输入资料或连接已有数据库，完成建模并查看可追溯产物。</p></div></div>}
           {error && <Alert type="error" showIcon closable onClose={() => setError("")} message={error} />}
-          {!run ? <div className="standalone-card"><h2>建模输入</h2><div className="standalone-form-row"><Select size="large" value={sourceMode} onChange={setSourceMode} options={[{ value: "DATABASE", label: "数据库建模" }, { value: "DOCUMENT", label: "文档建模" }, { value: "NATURAL_LANGUAGE", label: "自然语言建模" }]} /><Input size="large" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="建模要求可选；不填写时直接使用四份 v0.0.1 规范/模板建模" /></div><div className="standalone-upload"><input type="file" multiple onChange={(event) => setInputFiles(Array.from(event.target.files || []))} /><span>{inputFiles.length ? inputFiles.map((file) => file.name).join("、") : "可上传 schema、文档或其他输入文件"}</span></div>{sourceMode === "DATABASE" && <><Divider orientation="left">选择数据源</Divider><Select className="standalone-database-select" value={databaseSourceId || undefined} onChange={(value) => { setDatabaseSourceId(value); setSelectedTables([]); }} placeholder="请选择数据库" loading={!databaseSources.length} options={databaseSources.map((item) => ({ value: item.id, label: item.name }))} notFoundContent="暂无可用数据库" /><Divider orientation="left">选择数据表</Divider><div className="standalone-table-toolbar"><span>Schema：{databaseSchema || "-"}</span><Checkbox checked={databaseTables.length > 0 && selectedTables.length === databaseTables.length} indeterminate={selectedTables.length > 0 && selectedTables.length < databaseTables.length} disabled={tablesLoading || !databaseTables.length} onChange={(event) => setSelectedTables(event.target.checked ? databaseTables : [])}>全选</Checkbox></div>{tablesLoading ? <div className="standalone-table-loading">正在读取数据表…</div> : <Checkbox.Group className="standalone-table-list" value={selectedTables} onChange={setSelectedTables} options={databaseTables.map((item) => ({ value: item, label: item }))} />}<div className="standalone-selected-count">已选 {selectedTables.length} 张表</div></>}<Divider orientation="left">解析要素</Divider><Checkbox.Group value={selectedArtifacts} onChange={setSelectedArtifacts} options={STANDALONE_ARTIFACTS.map((item) => ({ value: item, label: STANDALONE_ARTIFACT_LABELS[item] }))} /><Button type="primary" size="large" loading={busy} disabled={busy} onClick={startModeling} className="standalone-start">开始建模</Button></div> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || run.model || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}
+          {!run ? <div className="standalone-card"><h2>建模输入</h2><div className="standalone-form-row"><Select size="large" value={sourceMode} onChange={setSourceMode} options={[{ value: "DATABASE", label: "数据库建模" }, { value: "DOCUMENT", label: "文档建模" }, { value: "NATURAL_LANGUAGE", label: "自然语言建模" }]} /><Input size="large" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="建模要求可选；不填写时直接使用四份 v0.0.1 规范/模板建模" /></div><div className="standalone-upload"><input type="file" multiple onChange={(event) => setInputFiles(Array.from(event.target.files || []))} /><span>{inputFiles.length ? inputFiles.map((file) => file.name).join("、") : "可上传 schema、文档或其他输入文件"}</span></div>{sourceMode === "DATABASE" && <><Divider orientation="left">选择数据源</Divider><Select className="standalone-database-select" value={databaseSourceId || undefined} onChange={(value) => { setDatabaseSourceId(value); setSelectedTables([]); }} placeholder="请选择数据库" loading={!databaseSources.length} options={databaseSources.map((item) => ({ value: item.id, label: item.name }))} notFoundContent="暂无可用数据库" /><Divider orientation="left">选择数据表</Divider><div className="standalone-table-toolbar"><span>Schema：{databaseSchema || "-"}</span><Checkbox checked={databaseTables.length > 0 && selectedTables.length === databaseTables.length} indeterminate={selectedTables.length > 0 && selectedTables.length < databaseTables.length} disabled={tablesLoading || !databaseTables.length} onChange={(event) => setSelectedTables(event.target.checked ? databaseTables : [])}>全选</Checkbox></div>{tablesLoading ? <div className="standalone-table-loading">正在读取数据表…</div> : <Checkbox.Group className="standalone-table-list" value={selectedTables} onChange={setSelectedTables} options={databaseTables.map((item) => ({ value: item, label: item }))} />}<div className="standalone-selected-count">已选 {selectedTables.length} 张表</div></>}<Divider orientation="left">解析要素</Divider><Checkbox.Group value={selectedArtifacts} onChange={setSelectedArtifacts} options={STANDALONE_ARTIFACTS.map((item) => ({ value: item, label: STANDALONE_ARTIFACT_LABELS[item] }))} /><Button type="primary" size="large" loading={busy} disabled={busy} onClick={startModeling} className="standalone-start">开始建模</Button></div> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} filesLoading={runFilesLoading} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || run.model || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}
         </main>
       </div>
       <input ref={standaloneFileInputRef} type="file" multiple hidden onChange={onStandaloneFilesSelected} />
@@ -546,7 +566,7 @@ function StandaloneApp() {
   </ConfigProvider>;
 }
 
-function StandaloneAgentWorkspace({ run, busy, filesOpen, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
+function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
   const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", READY_FOR_EXPORT: "success", FAILED: "error" }[run?.status] || "default";
   const files = run?.files || [];
   // The standalone API persists every streamed thinking token. Reuse the
@@ -558,7 +578,7 @@ function StandaloneAgentWorkspace({ run, busy, filesOpen, selectedFiles, onToggl
   ], [run.events, run.prompt]);
   return <section className="task-view standalone-agent-task-view">
     <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{run.status}</Tag>{run.status === "FAILED" && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
-    <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={false} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
+    <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
   </section>;
 }
 
