@@ -156,6 +156,16 @@ function cancelScheduledIdle(handle) {
   else window.clearTimeout(handle);
 }
 
+function waitForNextPaint() {
+  return new Promise((resolve) => {
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => resolve());
+    } else {
+      globalThis.setTimeout(resolve, 0);
+    }
+  });
+}
+
 function StandaloneApp() {
   const [prompt, setPrompt] = useState("");
   const [sourceMode, setSourceMode] = useState("DATABASE");
@@ -292,16 +302,21 @@ function StandaloneApp() {
     if (summary.model) setStandaloneModel(summary.model);
     if (isCurrentRunRequest(runId, request.generation)) setRun(result);
     scheduleIdle(async () => {
-      await loadOlderStandaloneEvents(runId);
+      // Render roughly ten viewport heights of recent history first. This
+      // gives the user useful scrollback quickly, then prioritizes the file
+      // panel before replaying the remaining old journal.
+      const historyHasMore = await loadOlderStandaloneEvents(runId, 10);
       await loadRunFiles(runId);
+      if (historyHasMore) await loadOlderStandaloneEvents(runId);
     });
     return result;
   };
-  const loadOlderStandaloneEvents = async (runId) => {
+  const loadOlderStandaloneEvents = async (runId, maxViewportPages = Infinity) => {
     if (!runId || selectedRunIdRef.current !== runId || olderEventsLoadingRef.current.has(runId)) return;
     const initialWindow = eventWindowRef.current.get(runId);
     if (!initialWindow || initialWindow.start <= 0) return;
     olderEventsLoadingRef.current.add(runId);
+    let loadedHeight = 0;
     try {
       while (selectedRunIdRef.current === runId) {
         const window = eventWindowRef.current.get(runId);
@@ -316,6 +331,7 @@ function StandaloneApp() {
         eventWindowRef.current.set(runId, { start: nextStart, total: window.total });
         if (older.length) {
           const feed = document.querySelector(".standalone-agent-feed");
+          const beforeHeight = feed?.scrollHeight || 0;
           if (feed) {
             standaloneFeedPrependAnchorRef.current = {
               top: feed.scrollTop,
@@ -325,6 +341,15 @@ function StandaloneApp() {
           setRun((current) => current?.runId === runId
             ? { ...current, events: [...older, ...(current.events || [])] }
             : current);
+          await waitForNextPaint();
+          const renderedFeed = document.querySelector(".standalone-agent-feed");
+          if (renderedFeed && beforeHeight) {
+            loadedHeight += Math.max(0, renderedFeed.scrollHeight - beforeHeight);
+            if (renderedFeed.clientHeight > 0
+                && loadedHeight >= renderedFeed.clientHeight * maxViewportPages) {
+              return true;
+            }
+          }
         }
         if (!older.length || nextStart >= window.start) break;
         await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
@@ -332,6 +357,7 @@ function StandaloneApp() {
     } finally {
       olderEventsLoadingRef.current.delete(runId);
     }
+    return Boolean(eventWindowRef.current.get(runId)?.start > 0);
   };
   const selectRun = (runId) => {
     setError("");
@@ -1350,11 +1376,12 @@ function App() {
     feedPinnedRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight <= 56;
   };
 
-  const loadOlderTaskEvents = async (task, generation = 0) => {
-    if (!task?.id || olderLogLoadingRef.current.has(task.id)) return;
+  const loadOlderTaskEvents = async (task, generation = 0, maxViewportPages = Infinity) => {
+    if (!task?.id || olderLogLoadingRef.current.has(task.id)) return false;
     const initialWindow = logWindowRef.current.get(task.id);
-    if (!initialWindow || initialWindow.start <= 0) return;
+    if (!initialWindow || initialWindow.start <= 0) return false;
     olderLogLoadingRef.current.add(task.id);
+    let loadedHeight = 0;
     try {
       while (!generation || generation === logWindowRef.current.get(task.id)?.generation) {
         const window = logWindowRef.current.get(task.id);
@@ -1371,6 +1398,7 @@ function App() {
         logWindowRef.current.set(task.id, { ...window, start: nextStart });
         if (older.length) {
           const feed = feedRef.current;
+          const beforeHeight = feed?.scrollHeight || 0;
           if (feed) {
             feedPrependAnchorRef.current = {
               top: feed.scrollTop,
@@ -1379,6 +1407,15 @@ function App() {
             };
           }
           setEvents((current) => activeTaskIdRef.current === task.id ? [...older, ...current] : current);
+          await waitForNextPaint();
+          const renderedFeed = feedRef.current;
+          if (renderedFeed && beforeHeight) {
+            loadedHeight += Math.max(0, renderedFeed.scrollHeight - beforeHeight);
+            if (renderedFeed.clientHeight > 0
+                && loadedHeight >= renderedFeed.clientHeight * maxViewportPages) {
+              return true;
+            }
+          }
         }
         if (!older.length || nextStart >= window.start) break;
         await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
@@ -1386,6 +1423,7 @@ function App() {
     } finally {
       olderLogLoadingRef.current.delete(task.id);
     }
+    return Boolean(logWindowRef.current.get(task.id)?.start > 0);
   };
 
   const openTask = async (task) => {
@@ -1416,8 +1454,11 @@ function App() {
     // The newest thought-chain is rendered first. Older history and the full
     // workspace listing are deliberately filled after that first viewport is
     // usable, so a large replay log or file tree cannot block task input.
-    await loadOlderTaskEvents(current);
     scheduleIdle(async () => {
+      // Stop after roughly ten viewport heights so the user gets meaningful
+      // recent history first; files are loaded next, then the old journal
+      // resumes in the background.
+      const historyHasMore = await loadOlderTaskEvents(current, 0, 10);
       const loadedFiles = await loadFiles(current);
       if (activeTaskIdRef.current === current.id) {
         // Reopening a session with generated results should expose the result
@@ -1433,6 +1474,7 @@ function App() {
         }
         setFilesOpen(shouldOpenFiles);
       }
+      if (historyHasMore) await loadOlderTaskEvents(current);
     });
   };
 
