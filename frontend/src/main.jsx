@@ -143,6 +143,19 @@ async function standaloneApi(path, apiKey, options = {}) {
   return { ...body, _status: response.status };
 }
 
+function scheduleIdle(callback) {
+  if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+    return window.requestIdleCallback(callback, { timeout: 1200 });
+  }
+  return window.setTimeout(callback, 0);
+}
+
+function cancelScheduledIdle(handle) {
+  if (handle == null || typeof window === "undefined") return;
+  if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(handle);
+  else window.clearTimeout(handle);
+}
+
 function StandaloneApp() {
   const [prompt, setPrompt] = useState("");
   const [sourceMode, setSourceMode] = useState("DATABASE");
@@ -169,6 +182,8 @@ function StandaloneApp() {
   const selectedRunIdRef = useRef("");
   const runRequestRef = useRef({ generation: 0, controller: null });
   const eventCursorRef = useRef(new Map());
+  const eventWindowRef = useRef(new Map());
+  const olderEventsLoadingRef = useRef(new Set());
   const pollInFlightRef = useRef(false);
   const standaloneFileInputRef = useRef(null);
 
@@ -241,17 +256,43 @@ function StandaloneApp() {
     setRun(summaryRun);
     updateRunSummary(summary);
     const events = await standaloneApi(
-      `/api/modeling-runs/${encodedId}/events?since=0`, "",
+      `/api/modeling-runs/${encodedId}/events?tail=1&limit=80`, "",
       { signal: request.controller.signal },
     );
     if (events._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
     if (events.error) { if (showError) setError(events.error); return null; }
-    const allEvents = Array.isArray(events.events) ? events.events : [];
-    eventCursorRef.current.set(runId, Number(summary.eventsCount) || allEvents.length);
-    const result = { ...summary, events: allEvents };
+    const latestEvents = Array.isArray(events.events) ? events.events : [];
+    const total = Number(events.eventTotal ?? summary.eventsCount) || latestEvents.length;
+    const start = Number(events.eventStart ?? Math.max(0, total - latestEvents.length));
+    eventCursorRef.current.set(runId, Number(summary.eventsCount) || total);
+    eventWindowRef.current.set(runId, { start, total });
+    const result = { ...summary, events: latestEvents };
     if (summary.model) setStandaloneModel(summary.model);
     if (isCurrentRunRequest(runId, request.generation)) setRun(result);
+    scheduleIdle(() => { void loadOlderStandaloneEvents(runId, request.generation); });
     return result;
+  };
+  const loadOlderStandaloneEvents = async (runId, generation = runRequestRef.current.generation) => {
+    if (!runId || !isCurrentRunRequest(runId, generation) || olderEventsLoadingRef.current.has(runId)) return;
+    const window = eventWindowRef.current.get(runId);
+    if (!window || window.start <= 0) return;
+    olderEventsLoadingRef.current.add(runId);
+    try {
+      const encodedId = encodeURIComponent(runId);
+      const result = await standaloneApi(
+        `/api/modeling-runs/${encodedId}/events?before=${window.start}&limit=160`, "",
+        { signal: runRequestRef.current.controller?.signal },
+      );
+      if (result._aborted || !isCurrentRunRequest(runId, generation) || result.error) return;
+      const older = Array.isArray(result.events) ? result.events : [];
+      const nextStart = Number(result.eventStart ?? Math.max(0, window.start - older.length));
+      eventWindowRef.current.set(runId, { start: nextStart, total: window.total });
+      if (older.length) setRun((current) => current?.runId === runId
+        ? { ...current, events: [...older, ...(current.events || [])] }
+        : current);
+    } finally {
+      olderEventsLoadingRef.current.delete(runId);
+    }
   };
   const selectRun = (runId) => {
     setError("");
@@ -290,6 +331,8 @@ function StandaloneApp() {
       // the summary request remain for the next poll instead of being skipped
       // or appended twice.
       eventCursorRef.current.set(runId, cursor + delta.length);
+      const window = eventWindowRef.current.get(runId);
+      if (window) eventWindowRef.current.set(runId, { ...window, total: window.total + delta.length });
       setRun((current) => current?.runId === runId
         ? { ...summary, events: [...(current.events || []), ...delta] }
         : current);
@@ -314,7 +357,14 @@ function StandaloneApp() {
     setStandalonePendingFiles([]);
     setRunFilesOpen(true);
   };
-  useEffect(() => { void loadRuns(); void loadDatabaseSources(); void loadStandaloneModels(); }, []);
+  useEffect(() => {
+    void loadRuns();
+    void loadDatabaseSources();
+    // Model selection is secondary to the task/input shell. Load it after the
+    // first browser idle period so it cannot delay the initial form.
+    const handle = scheduleIdle(() => { void loadStandaloneModels(); });
+    return () => cancelScheduledIdle(handle);
+  }, []);
   useEffect(() => {
     // Keep queued/background runs' status visible in the history list while
     // detailed events continue to poll only for the selected run.
@@ -1161,6 +1211,9 @@ function App() {
   const [autoApprove, setAutoApprove] = useState(() => localStorage.getItem("oc_auto_approve") === "1");
   const autoApproveRef = useRef(autoApprove);
   const approvalInFlightRef = useRef(new Set());
+  const activeTaskIdRef = useRef("");
+  const logWindowRef = useRef(new Map());
+  const olderLogLoadingRef = useRef(new Set());
   const previewImageUrlRef = useRef("");
   const previewRequestRef = useRef(0);
   const [messageApi, contextHolder] = message.useMessage();
@@ -1195,13 +1248,15 @@ function App() {
   };
 
   useEffect(() => {
-    // Mission loading also authenticates and claims compatible legacy local
-    // sessions.  Serialize it before loading/opening tasks so a historical
-    // conversation cannot race that ownership migration.
+    // The input shell and task list should become usable together. Mission
+    // metadata and task summaries are independent reads; only opening a
+    // conversation waits for the selected task detail.
     const bootstrap = async () => {
       await loadMeta();
-      if (MISSION) await loadMission();
-      await loadTasks();
+      await Promise.all([
+        MISSION ? loadMission() : Promise.resolve(),
+        loadTasks(),
+      ]);
     };
     void bootstrap();
   }, []);
@@ -1214,6 +1269,7 @@ function App() {
   }, [tasks, active]);
   useEffect(() => { if (active && filesOpen) loadFiles(); }, [active, filesOpen]);
   useEffect(() => {
+    activeTaskIdRef.current = active?.id || "";
     setSelectedFiles([]);
     setFocusFile("");
     closePreview();
@@ -1239,9 +1295,32 @@ function App() {
     feedPinnedRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight <= 56;
   };
 
+  const loadOlderTaskEvents = async (task, generation = 0) => {
+    if (!task?.id || olderLogLoadingRef.current.has(task.id)) return;
+    const window = logWindowRef.current.get(task.id);
+    if (!window || window.start <= 0) return;
+    olderLogLoadingRef.current.add(task.id);
+    try {
+      const taskMission = missionIdentity(task);
+      const identity = taskMission
+        ? `&repositoryId=${encodeURIComponent(taskMission.repositoryId)}&taskCode=${encodeURIComponent(taskMission.taskCode)}`
+        : "";
+      const result = await api(`/api/tasks/${task.id}?before=${window.start}&limit=160${identity}`);
+      if (generation && generation !== logWindowRef.current.get(task.id)?.generation) return;
+      if (result.error) return;
+      const older = normalizeEvents(result);
+      const nextStart = Number(result.logStart ?? Math.max(0, window.start - older.length));
+      logWindowRef.current.set(task.id, { ...window, start: nextStart });
+      if (older.length) setEvents((current) => activeTaskIdRef.current === task.id ? [...older, ...current] : current);
+    } finally {
+      olderLogLoadingRef.current.delete(task.id);
+    }
+  };
+
   const openTask = async (task) => {
     const taskMission = missionIdentity(task);
-    const detailQuery = taskMission ? `?repositoryId=${encodeURIComponent(taskMission.repositoryId)}&taskCode=${encodeURIComponent(taskMission.taskCode)}` : "";
+    const identityQuery = taskMission ? `&repositoryId=${encodeURIComponent(taskMission.repositoryId)}&taskCode=${encodeURIComponent(taskMission.taskCode)}` : "";
+    const detailQuery = `?tail=1&limit=80${identityQuery}`;
     const result = await api(`/api/tasks/${task.id}${detailQuery}`);
     if (result.error) { messageApi.error(`打开历史会话失败：${result.error}`); return; }
     const current = { ...result };
@@ -1250,7 +1329,12 @@ function App() {
       if (missionResult?.platformStatus) current.platformStatus = missionResult.platformStatus;
     }
     feedPinnedRef.current = true;
-    setActive(current); setEvents(normalizeEvents(current)); setView("task"); setText("");
+    const recentEvents = normalizeEvents(current);
+    const logStart = Number(result.logStart ?? 0);
+    const logTotal = Number(result.logTotal ?? recentEvents.length);
+    logWindowRef.current.set(current.id, { start: logStart, total: logTotal, generation: Date.now() });
+    activeTaskIdRef.current = current.id;
+    setActive(current); setEvents(recentEvents); setView("task"); setText("");
     if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, current.id);
     // 页面刷新或重新打开历史会话时，审批请求可能已经在服务端挂起，
     // 不会再次经过 SSE；自动确认开启时要主动恢复这类请求。
@@ -1258,10 +1342,18 @@ function App() {
       const pending = normalizeEvents(current).find((event) => event.type === "approval_request");
       if (pending) void approve(pending.id, true, current);
     }
-    const loadedFiles = await loadFiles(current);
-    // Reopening a session with generated results should expose the result
-    // workspace immediately; sessions without output keep the panel closed.
-    setFilesOpen(hasMissionOutputFiles(loadedFiles));
+    // The newest thought-chain is rendered first. Older history and the full
+    // workspace listing are deliberately filled after that first viewport is
+    // usable, so a large replay log or file tree cannot block task input.
+    await loadOlderTaskEvents(current);
+    scheduleIdle(async () => {
+      const loadedFiles = await loadFiles(current);
+      if (activeTaskIdRef.current === current.id) {
+        // Reopening a session with generated results should expose the result
+        // workspace, but loading its contents must not block the conversation.
+        setFilesOpen(hasMissionOutputFiles(loadedFiles));
+      }
+    });
   };
 
   const loadFiles = async (task = active) => {

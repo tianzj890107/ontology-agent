@@ -1230,10 +1230,26 @@ class ModelingHandler(BaseHTTPRequestHandler):
                 self._send(200, {"runId": run.run_id, "files": self.manager.store.list_files(run)})
             elif suffix == "events":
                 query = parse_qs(parsed.query)
-                since = int((query.get("since") or ["0"])[0])
                 with run.state_lock:
-                    events = list(run.events[since:])
-                self._send(200, {"runId": run.run_id, "events": events})
+                    total = len(run.events)
+                    if "tail" in query or "before" in query:
+                        try:
+                            limit = max(1, min(200, int((query.get("limit") or ["80"])[0])))
+                        except (TypeError, ValueError):
+                            limit = 80
+                        try:
+                            end = (max(0, min(total, int(query["before"][0])))
+                                   if "before" in query else total)
+                        except (TypeError, ValueError):
+                            end = total
+                        start = max(0, end - limit)
+                    else:
+                        start = max(0, min(total, int((query.get("since") or ["0"])[0])))
+                        end = total
+                    events = list(run.events[start:end])
+                self._send(200, {"runId": run.run_id, "events": events,
+                                 "eventStart": start, "eventTotal": total,
+                                 "eventHasMore": start > 0})
             else:
                 query = parse_qs(parsed.query)
                 include_events = (query.get("includeEvents", ["true"])[0].lower()

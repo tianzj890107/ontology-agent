@@ -4699,7 +4699,24 @@ class Handler(BaseHTTPRequestHandler):
                     if task.log:
                         _seed_task_history(task.id, task.log)
                         persist_tasks()
-                self._send_json({**task.summary(), "log": task.replay_events()})
+                replay = task.replay_events()
+                total = len(replay)
+                try:
+                    limit = max(1, min(200, int((detail_query.get("limit") or ["80"])[0])))
+                except (TypeError, ValueError):
+                    limit = 80
+                windowed = "before" in detail_query or "tail" in detail_query
+                try:
+                    if "before" in detail_query:
+                        end = max(0, min(total, int(detail_query["before"][0])))
+                    else:
+                        end = total
+                except (TypeError, ValueError):
+                    end = total
+                start = max(0, end - limit) if windowed else 0
+                self._send_json({**task.summary(), "log": replay[start:end],
+                                 "logStart": start, "logTotal": total,
+                                 "logHasMore": start > 0})
                 return
             self.send_error(404)
 
