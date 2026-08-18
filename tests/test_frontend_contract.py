@@ -13,6 +13,12 @@ class FrontendContractTests(unittest.TestCase):
         for name in ("react", "react-dom", "antd", "@ant-design/x", "vite"):
             self.assertIn(name, dependencies)
 
+    def test_frontend_build_splits_stable_dependency_chunks(self):
+        config = (ROOT / "frontend" / "vite.config.js").read_text(encoding="utf-8")
+        self.assertIn("manualChunks", config)
+        self.assertIn('return "ui"', config)
+        self.assertIn('return undefined', config)
+
     def test_workbench_uses_thought_chain_and_existing_api_routes(self):
         source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
         # StandaloneApp renders an Ant Design Alert for request failures. Keep

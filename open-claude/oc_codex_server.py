@@ -56,9 +56,6 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from open_claude.repl import Conversation
-from open_claude.profile import AgentProfile
-from open_claude.api import stream_message
 from open_claude.config import (
     AVAILABLE_MODELS,
     PROVIDERS,
@@ -78,12 +75,6 @@ except ImportError:
     # contract tests and downstream integrations.
     def configured_models():
         return AVAILABLE_MODELS
-from open_claude.ontology_knowledge import (
-    load_static_knowledge,
-    modeling_skill_modules,
-    normalize_task_type,
-)
-from open_claude.document_parser import prepare_mission_documents
 from open_claude.modeling_reliability import (
     load_modeling_state,
     semantic_validation_issues,
@@ -108,6 +99,7 @@ from open_claude.credential_crypto import (
     decrypt_connection_credential,
     startup_crypto_check,
 )
+from open_claude.lifecycle import LazyService, LifecycleTracker
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIST = os.path.join(SCRIPT_DIR, "..", "frontend", "dist")
@@ -132,6 +124,54 @@ _USER_SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".claude", "ontology
 _USAGE_PATH = os.path.join(os.path.expanduser("~"), ".claude", "ontology-agent-user-usage.json")
 _AUTH_LOCK = threading.RLock()
 _USAGE_LOCK = threading.RLock()
+
+BOOT = LifecycleTracker("ontology-workbench")
+
+
+def _load_agent_runtime():
+    """Load the LLM/Agent runtime only when the first task needs it."""
+    import importlib
+    import sys
+    from types import SimpleNamespace
+    # A lightweight contract test or embedding host may temporarily install a
+    # stub module in sys.modules.  Never cache such a stub as the production
+    # runtime; discard modules without a source file before the real import.
+    for module_name in ("open_claude.repl", "open_claude.profile", "open_claude.api", "open_claude.config"):
+        module = sys.modules.get(module_name)
+        if module is not None and not getattr(module, "__file__", None):
+            sys.modules.pop(module_name, None)
+    from open_claude.api import stream_message
+    from open_claude.profile import AgentProfile
+    from open_claude.repl import Conversation
+    return SimpleNamespace(
+        Conversation=Conversation,
+        AgentProfile=AgentProfile,
+        stream_message=stream_message,
+    )
+
+
+AGENT_RUNTIME = LazyService("agent_runtime", _load_agent_runtime)
+
+
+def normalize_task_type(*args, **kwargs):
+    from open_claude.ontology_knowledge import normalize_task_type as impl
+    return impl(*args, **kwargs)
+
+
+def modeling_skill_modules(*args, **kwargs):
+    from open_claude.ontology_knowledge import modeling_skill_modules as impl
+    return impl(*args, **kwargs)
+
+
+def load_static_knowledge(*args, **kwargs):
+    from open_claude.ontology_knowledge import load_static_knowledge as impl
+    return impl(*args, **kwargs)
+
+
+def prepare_mission_documents(*args, **kwargs):
+    """Compatibility export with deferred document-parser initialization."""
+    from open_claude.document_parser import prepare_mission_documents as impl
+    return impl(*args, **kwargs)
 
 
 def _auth_secret():
@@ -3344,9 +3384,10 @@ class Task:
         # which we redirect to the web approval flow below.
         # Pin the model via profile (highest precedence) so a Claude Code-only id
         # in ~/.claude/settings.json (e.g. "claude-fable-5[1m]") can't leak in.
-        self.conv = Conversation(cwd, permission_mode="default",
-                                 resume_session_id=resume_session_id,
-                                 profile=AgentProfile(
+        runtime = AGENT_RUNTIME.get()
+        self.conv = runtime.Conversation(cwd, permission_mode="default",
+                                          resume_session_id=resume_session_id,
+                                          profile=runtime.AgentProfile(
                                      model=user_model(self.user_id),
                                      style="始终使用简体中文回复用户;代码、命令、文件名等技术标识除外。"))
         self.conv.permissions._prompt_user = self._web_prompt_user
@@ -3472,6 +3513,7 @@ class Task:
         if spreadsheet_errors:
             safe["agentSpreadsheetErrors"] = spreadsheet_errors
         try:
+            from open_claude.document_parser import prepare_mission_documents
             document_manifests, document_errors = prepare_mission_documents(self.cwd)
         except Exception as e:
             document_manifests, document_errors = [], [{"error": str(e)}]
@@ -3913,7 +3955,7 @@ class Task:
             emit(error_event)
             return "error"
 
-        gen = stream_message(
+        gen = AGENT_RUNTIME.get().stream_message(
             conv.client, conv.messages, conv.system_prompt,
             model=conv.model, tools=conv.tool_schemas,
             max_tokens=conv.profile.max_tokens,
@@ -4487,6 +4529,15 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         qs = parse_qs(parsed.query)
+        if path in {"/health", "/readiness"}:
+            snapshot = BOOT.snapshot()
+            snapshot["capabilities"] = {
+                "agent_runtime": AGENT_RUNTIME.status,
+                "ontology_knowledge": "on_demand",
+                "document_parser": "on_demand",
+            }
+            self._send_json(snapshot)
+            return
         # Vite assets are public static resources; API and workspace routes
         # below still require the normal external-platform identity.
         if path.startswith("/assets/"):
@@ -5566,12 +5617,14 @@ def main():
     parser.add_argument("--port", type=int, default=47313)
     args = parser.parse_args()
 
+    BOOT.mark("process_bootstrap")
     os.makedirs(SANDBOX_DIR, exist_ok=True)
     # Confine every tool call in this process to the sandbox tree. The pure-chat
     # bridge uses OC_READONLY_FS instead; here the agent keeps full tools but
     # can only touch sandbox/ (see execute_tool in open_claude/tools.py).
     os.environ["OC_SANDBOX_ROOT"] = SANDBOX_DIR
     restore_tasks()
+    BOOT.mark("common_ready", detail="task store restored")
 
     crypto = startup_crypto_check()
     print(f"[codex] credential crypto: {crypto['mode']} ({crypto['algorithm']})",
@@ -5588,10 +5641,14 @@ def main():
               f"可在页面「参数」面板中填入,或设置环境变量 {envs}。", file=sys.stderr)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
+    BOOT.mark("core_ready")
+    BOOT.mark("routes_ready")
     shown_host = "127.0.0.1" if args.host in ("0.0.0.0", "") else args.host
     url = f"http://{shown_host}:{args.port}/"
     print(f"[codex] sandbox: {SANDBOX_DIR}")
     print(f"[codex] model={get_model()}")
+    print(f"[BOOT] core ready: {BOOT.snapshot()['stages']['core_ready']['elapsedMs']}ms")
+    print("[BOOT] heavy Agent runtime: on-demand")
     print(f"[codex] listening on {args.host}:{args.port}  ->  {url}  (Ctrl+C to stop)")
     try:
         server.serve_forever()

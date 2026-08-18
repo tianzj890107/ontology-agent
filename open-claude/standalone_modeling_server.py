@@ -37,6 +37,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from open_claude.lifecycle import LazyService, LifecycleTracker
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_ROOT = SCRIPT_DIR / "sandbox" / "standalone-modeling-runs"
@@ -87,9 +89,10 @@ DEFAULT_MODELING_PROMPT = (
     "无需等待用户补充建模要求。"
 )
 _MISSING = object()
+BOOT = LifecycleTracker("standalone-modeling")
 
 
-def _model_catalog() -> dict[str, Any]:
+def _load_model_catalog() -> dict[str, Any]:
     """Expose the same safe model choices used by the 47313 workbench."""
     try:
         from open_claude.config import configured_models, get_model, get_model_provider
@@ -104,6 +107,13 @@ def _model_catalog() -> dict[str, Any]:
         # The API-only test/runtime path can run without the LLM configuration
         # stack. Keep the endpoint stable and let the UI show its fallback.
         return {"model": "", "provider": "", "models": []}
+
+
+MODEL_CATALOG = LazyService("model_catalog", _load_model_catalog)
+
+
+def _model_catalog() -> dict[str, Any]:
+    return MODEL_CATALOG.get()
 
 
 def _is_web_visible_file(rel: str) -> bool:
@@ -1152,7 +1162,16 @@ class ModelingHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/health":
-            self._send(200, {"status": "ok", "service": "standalone-modeling", "port": self.server.server_port})
+            self._send(200, {
+                "status": "ok", "service": "standalone-modeling",
+                "port": self.server.server_port,
+                "readiness": BOOT.snapshot(),
+                "capabilities": {
+                    "model_catalog": MODEL_CATALOG.status,
+                    "database_metadata": "on_demand",
+                    "agent_runtime": "on_demand",
+                },
+            })
             return
         if not parsed.path.startswith("/api/") and self._serve_frontend(parsed.path):
             return
@@ -1310,6 +1329,7 @@ def main(argv: list[str] | None = None) -> int:
         help=f"maximum number of simultaneous modeling workers (1-{MAX_ACTIVE_RUNS_LIMIT})",
     )
     args = parser.parse_args(argv)
+    BOOT.mark("process_bootstrap")
     root = str(Path(args.root).resolve())
     # The reused execution engine reads this boundary from process env.  This
     # process owns its own root and never changes the existing 47313 process.
@@ -1319,13 +1339,18 @@ def main(argv: list[str] | None = None) -> int:
         sys.path.insert(0, str(SCRIPT_DIR))
     store = RunStore(root)
     manager = ModelingRunManager(store, max_active_runs=args.max_active_runs)
+    BOOT.mark("common_ready", detail="run store restored")
     ModelingHandler.manager = manager
     server = ThreadingHTTPServer((args.host, args.port), ModelingHandler)
+    BOOT.mark("core_ready")
+    BOOT.mark("routes_ready")
     print(
         f"standalone modeling server listening on {args.host}:{args.port} "
         f"root={root} max_active_runs={manager.max_active_runs}",
         flush=True,
     )
+    print(f"[BOOT] core ready: {BOOT.snapshot()['stages']['core_ready']['elapsedMs']:.2f}ms", flush=True)
+    print("[BOOT] database metadata, Agent runtime and document parsing: on-demand", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -78,6 +78,24 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         connection.close()
         return response.status, data
 
+    @staticmethod
+    def _get(httpd, path):
+        connection = HTTPConnection("127.0.0.1", httpd.server_port, timeout=3)
+        connection.request("GET", path)
+        response = connection.getresponse()
+        data = json.loads(response.read().decode("utf-8"))
+        connection.close()
+        return response.status, data
+
+    def test_health_exposes_staged_readiness_and_on_demand_capabilities(self):
+        httpd = self._http_server(self._manager())
+        status, payload = self._get(httpd, "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["status"], "ok")
+        self.assertIn("readiness", payload)
+        self.assertIn("stages", payload["readiness"])
+        self.assertEqual(payload["capabilities"]["database_metadata"], "on_demand")
+
     def test_runtime_workspace_is_one_isolated_input_work_output_space(self):
         run = self.store.create("DATABASE", "build ontology")
         self.store.put_files(run, [{"name": "input/schema.json", "content": '{"ok":true}'}])
