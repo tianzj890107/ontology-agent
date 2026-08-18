@@ -62,7 +62,7 @@ _WEB_HIDDEN_FILES = {".db_connection.json", ".env", ".env.local", "credentials.j
                     "db_connection.py", "verify_database.py"}
 _DECISION_AUDIT_FILENAMES = {
     "business_object_decisions.csv", "relation_decisions.csv", "rule_decisions.csv",
-    "indicator_decisions.csv", "logical_entity_decisions.csv",
+    "indicator_decisions.csv", "logical_entity_decisions.csv", "all_attributes.csv",
 }
 LEGACY_ALIASES = {
     "mission-input": "input",
@@ -72,7 +72,7 @@ LEGACY_ALIASES = {
 INTERNAL_FILENAMES = {
     "modeling_state.json", "validation_report.json", "business_object_decisions.csv",
     "relation_decisions.csv", "rule_decisions.csv", "indicator_decisions.csv",
-    "logical_entity_decisions.csv",
+    "logical_entity_decisions.csv", "all_attributes.csv",
 }
 DEFAULT_ARTIFACTS = (
     "business_objects.csv",

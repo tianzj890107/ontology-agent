@@ -134,7 +134,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("数据模型建模规范v0.0.1.xlsx", modeling)
         self.assertNotIn("数据模型建模规范-20260626.xlsx", modeling)
         v6_rules = (ROOT / "agent_knowledge" / "modeling" / "通用业务对象与逻辑实体识别规范v0.0.1.md").read_text(encoding="utf-8")
-        self.assertIn("通用业务对象与逻辑实体识别规范 V6", v6_rules)
+        self.assertIn("通用业务对象与逻辑实体识别规范 v0.0.1", v6_rules)
         self.assertIn("业务对象判定标准", v6_rules)
         self.assertIn("UNKNOWN 闭环校验", v6_rules)
         self.assertIn("业务属性识别", v6_rules)

@@ -63,6 +63,7 @@ class PipelineDecisionAuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             paths = write_decision_audits(directory, state)
             self.assertEqual(set(paths), {
+                "all_attributes.csv",
                 "business_object_decisions.csv", "relation_decisions.csv",
                 "rule_decisions.csv", "indicator_decisions.csv",
                 "logical_entity_decisions.csv",

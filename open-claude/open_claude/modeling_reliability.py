@@ -23,6 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from .modeling_rule_registry import (
+    RuleFinding,
+    validate_formal_rows,
+    validate_v0001_state,
+)
+
 
 CONFIRMED = "CONFIRMED"
 CANDIDATE = "CANDIDATE"
@@ -98,6 +104,14 @@ DECISION_AUDIT_FILES = (
     "logical_entity_decisions.csv",
     "validation_report.json",
     "modeling_state.json",
+)
+WORK_REQUIRED_FILES = ("all_attributes.csv",)
+
+ALL_ATTRIBUTES_HEADERS = (
+    "逻辑实体编码", "逻辑实体名称", "属性编码", "属性名称", "属性英文名称",
+    "属性定义", "来源表", "来源字段", "数据类型", "数据长度", "数据精度",
+    "是否物理主键", "是否逻辑主键", "是否外键", "是否唯一", "是否非空",
+    "是否技术字段", "是否派生字段", "属性状态", "排除原因", "证据",
 )
 
 BUSINESS_OBJECT_RULE_STATUSES = frozenset({"PASS", "FAIL", "UNKNOWN"})
@@ -623,6 +637,14 @@ def _issue(code: str, severity: str, message: str, *, artifact_type: str = "",
     return ValidationIssue(code=code, severity=severity, message=message,
                            artifact_type=artifact_type, artifact_id=artifact_id,
                            details=info)
+
+
+def _registry_issue(finding: RuleFinding) -> ValidationIssue:
+    """Convert one v0.0.1 registry result to the shared issue contract."""
+    return _issue(finding.code, finding.severity, finding.message,
+                  artifact_type=finding.artifact_type,
+                  artifact_id=finding.artifact_id,
+                  details=dict(finding.details or {}))
 
 
 def _find_composition_cycles(edges: Iterable[tuple[str, Mapping[str, Any]]]) -> list[tuple[set[str], set[str]]]:
@@ -1899,6 +1921,10 @@ def semantic_validation_issues(state: Mapping[str, Any] | None) -> list[Validati
     if not isinstance(state, Mapping):
         return []
     issues: list[ValidationIssue] = []
+    # The registry is the single v0.0.1 dispatch point for cross-artifact
+    # decision identity checks.  It deliberately validates the audit layer;
+    # candidates are not subjected to formal-output completeness here.
+    issues.extend(_registry_issue(item) for item in validate_v0001_state(state))
     # Business-object decisions are validated from the same structured
     # records that feed the audit CSV and formal output.  This is deliberately
     # read-only; it never upgrades a candidate or invents missing evidence.
@@ -2344,6 +2370,141 @@ def _pending_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda item: (item["artifact_type"], item["artifact_id"]))
 
 
+def _all_attribute_records(state: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    """Return the complete attribute inventory, before business filtering.
+
+    ``allAttributes`` is the canonical collection.  Older state producers may
+    use one of the compatible names below; those are accepted during the
+    migration, but the writer always emits the same CSV contract.  We do not
+    derive technical attributes from the formal business-attribute list: if a
+    producer has no full inventory yet, the output is an honest empty audit
+    rather than a fabricated reconstruction.
+    """
+    if not isinstance(state, Mapping):
+        return []
+    records = _records_for_keys(state, (
+        "allAttributes", "all_attributes", "allAttributeDecisions",
+        "candidateAttributes", "candidate_attributes", "attributes",
+        "attributeCandidates",
+    ))
+    if records:
+        return records
+    # A legacy state that only has businessAttributes is still represented,
+    # but it is not claimed to be a complete physical inventory.
+    return _records_for_keys(state, ("businessAttributes", "business_attributes"))
+
+
+def _attribute_value(record: Mapping[str, Any], *keys: str) -> str:
+    value = _first_value(record, keys)
+    if isinstance(value, (list, tuple, set)):
+        return "|".join(_text(item) for item in value if _text(item))
+    if isinstance(value, Mapping):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return _text(value)
+
+
+def _all_attribute_rows(state: Mapping[str, Any] | None) -> list[dict[str, str]]:
+    rows = []
+    for record in _all_attribute_records(state):
+        rows.append({
+            "逻辑实体编码": _attribute_value(record, "logicalEntityCode", "logical_entity_code", "逻辑实体编码", "entityId"),
+            "逻辑实体名称": _attribute_value(record, "logicalEntityName", "logical_entity_name", "逻辑实体名称", "entityName"),
+            "属性编码": _attribute_value(record, "attributeCode", "attribute_code", "businessAttributeId", "业务属性编码", "code", "id"),
+            "属性名称": _attribute_value(record, "attributeName", "attribute_name", "业务属性名称", "name"),
+            "属性英文名称": _attribute_value(record, "attributeEnglishName", "attribute_english_name", "业务属性英文名称", "englishName"),
+            "属性定义": _attribute_value(record, "definition", "description", "业务属性定义"),
+            "来源表": _attribute_value(record, "sourceTable", "source_table", "table", "tableName", "来源表"),
+            "来源字段": _attribute_value(record, "sourceColumn", "source_column", "column", "columnName", "来源字段"),
+            "数据类型": _attribute_value(record, "dataType", "data_type", "数据类型", "type"),
+            "数据长度": _attribute_value(record, "dataLength", "data_length", "数据长度"),
+            "数据精度": _attribute_value(record, "dataPrecision", "data_precision", "数据精度"),
+            "是否物理主键": _attribute_value(record, "isPhysicalKey", "is_physical_key", "是否物理主键", "physicalKey"),
+            "是否逻辑主键": _attribute_value(record, "isLogicalKey", "is_logical_key", "是否逻辑主键", "logicalKey"),
+            "是否外键": _attribute_value(record, "isForeignKey", "is_foreign_key", "是否外键", "foreignKey"),
+            "是否唯一": _attribute_value(record, "isUnique", "is_unique", "是否唯一"),
+            "是否非空": _attribute_value(record, "isNotNull", "is_not_null", "是否非空", "notNull"),
+            "是否技术字段": _attribute_value(record, "isTechnical", "is_technical", "是否技术字段", "technicalField"),
+            "是否派生字段": _attribute_value(record, "isDerived", "is_derived", "是否派生字段", "derivedField"),
+            "属性状态": _attribute_value(record, "status", "decision", "attributeStatus", "attribute_status"),
+            "排除原因": _attribute_value(record, "exclusionReason", "exclusion_reason", "排除原因"),
+            "证据": _attribute_value(record, "evidence", "evidenceIds", "evidence_ids", "provenance"),
+        })
+    return sorted(rows, key=lambda row: (row["属性编码"], row["来源表"], row["来源字段"]))
+
+
+def write_all_attributes_csv(work_dir: str | os.PathLike[str],
+                            state: Mapping[str, Any] | None) -> str:
+    """Persist the complete pre-filter attribute inventory to the work area."""
+    target = Path(work_dir) / "all_attributes.csv"
+    _atomic_csv_write(target, ALL_ATTRIBUTES_HEADERS, _all_attribute_rows(state))
+    return str(target)
+
+
+def validate_formal_attribute_inventory(blob: bytes,
+                                        state: Mapping[str, Any] | None) -> list[ValidationIssue]:
+    """Ensure formal attributes are a filtered subset of the full inventory.
+
+    This check never requires technical attributes to appear in the formal
+    CSV.  It only prevents a technical/all-field classification from being
+    lost before PK/FK and provenance analysis, and prevents an output row from
+    appearing without a corresponding all-attribute record when that record
+    set is available.
+    """
+    if not isinstance(state, Mapping):
+        return []
+    inventory = _all_attribute_rows(state)
+    if not inventory:
+        return []
+    try:
+        rows = list(csv.DictReader(io.StringIO(blob.decode("utf-8-sig"), newline="")))
+    except (UnicodeDecodeError, csv.Error):
+        return []
+    # Attribute codes are only stable inside their owning logical entity.  A
+    # global code-only lookup would make two legitimate same-named attributes
+    # collide and could incorrectly mark one as technical.
+    by_identity = {}
+    by_code = {}
+    for item in inventory:
+        code = _text(item.get("属性编码"))
+        entity = _text(item.get("逻辑实体编码"))
+        source = _text(item.get("来源表"))
+        if not code:
+            continue
+        by_code.setdefault(code, []).append(item)
+        by_identity[(entity, code, source)] = item
+    issues: list[ValidationIssue] = []
+    for row in rows:
+        code = _text(row.get("业务属性编码"))
+        entity = _text(row.get("逻辑实体编码"))
+        source_table = _text(row.get("来源表") or row.get("物理表") or row.get("来源表名"))
+        source = by_identity.get((entity, code, source_table))
+        if source is None:
+            candidates = by_code.get(code, [])
+            source = candidates[0] if len(candidates) == 1 else None
+        if source is None:
+            issues.append(_issue("FORMAL_ATTRIBUTE_NOT_IN_ALL_ATTRIBUTES", "ERROR",
+                                 f"正式业务属性 {code} 不在 work/all_attributes.csv 全量属性清单中",
+                                 artifact_type="BUSINESS_ATTRIBUTE", artifact_id=code))
+            continue
+        technical = _key(source.get("是否技术字段")) in {"Y", "YES", "TRUE", "1"}
+        if technical:
+            issues.append(_issue("TECHNICAL_ATTRIBUTE_IN_FORMAL_OUTPUT", "ERROR",
+                                 f"技术字段 {code} 不能进入正式 business_attributes.csv",
+                                 artifact_type="BUSINESS_ATTRIBUTE", artifact_id=code,
+                                 details={"sourceTable": source.get("来源表"),
+                                          "sourceField": source.get("来源字段")}))
+        logical_key = _key(source.get("是否逻辑主键")) in {"Y", "YES", "TRUE", "1"}
+        physical_key = _key(source.get("是否物理主键")) in {"Y", "YES", "TRUE", "1"}
+        key_evidence = _text(source.get("证据"))
+        if technical and physical_key and logical_key and not key_evidence:
+            issues.append(_issue("PHYSICAL_KEY_NOT_PROVEN_LOGICAL_KEY", "ERROR",
+                                 f"技术物理主键 {code} 未提供业务/逻辑主键证据，不能自动升级为逻辑主键",
+                                 artifact_type="BUSINESS_ATTRIBUTE", artifact_id=code,
+                                 details={"sourceTable": source.get("来源表"),
+                                          "sourceField": source.get("来源字段")}))
+    return issues
+
+
 def write_decision_audits(work_dir: str | os.PathLike[str],
                           state: Mapping[str, Any] | None) -> dict[str, str]:
     """Materialize every semantic decision before any formal export."""
@@ -2351,6 +2512,7 @@ def write_decision_audits(work_dir: str | os.PathLike[str],
     target_dir.mkdir(parents=True, exist_ok=True)
     state = state if isinstance(state, Mapping) else {}
     paths: dict[str, str] = {}
+    paths["all_attributes.csv"] = write_all_attributes_csv(target_dir, state)
     paths["business_object_decisions.csv"] = write_business_object_decisions_csv(target_dir, state)
     _atomic_csv_write(target_dir / "relation_decisions.csv", RELATION_DECISION_HEADERS,
                       _localized_audit_rows("relation_decisions.csv", _relation_rows(state)))
@@ -2373,6 +2535,10 @@ def write_decision_audits(work_dir: str | os.PathLike[str],
     for name in DECISION_AUDIT_FILES:
         if name.endswith(".csv"):
             paths[name] = str(target_dir / name)
+    # all_attributes.csv is a work-area inventory, not a decision audit.  It
+    # nevertheless has a mandatory path because physical PK/FK evidence must
+    # survive formal business-attribute filtering.
+    paths["all_attributes.csv"] = str(target_dir / "all_attributes.csv")
     if isinstance(state, Mapping):
         persisted_state = dict(state)
         persisted_state["decisionAuditTemplateVersion"] = DECISION_AUDIT_TEMPLATE_VERSION
@@ -2577,11 +2743,13 @@ def validate_decision_audits(work_dir: str | os.PathLike[str],
     if state is None:
         state = load_modeling_state(target_dir) or {}
     issues: list[ValidationIssue] = []
-    for name in DECISION_AUDIT_FILES:
+    for name in (*DECISION_AUDIT_FILES, *WORK_REQUIRED_FILES):
         if not (target_dir / name).is_file():
-            issues.append(_issue("MISSING_DECISION_AUDIT", "ERROR",
-                                 f"缺少必须的 mission-work 审计文件 {name}",
-                                 artifact_type="DECISION_AUDIT", artifact_id=name))
+            code = "MISSING_WORK_ATTRIBUTE_INVENTORY" if name in WORK_REQUIRED_FILES else "MISSING_DECISION_AUDIT"
+            artifact_type = "ATTRIBUTE_INVENTORY" if name in WORK_REQUIRED_FILES else "DECISION_AUDIT"
+            issues.append(_issue(code, "ERROR",
+                                 f"缺少必须的 mission-work 文件 {name}",
+                                 artifact_type=artifact_type, artifact_id=name))
     expected = {
         "business_object_decisions.csv": len(business_object_decision_records(state)),
         "relation_decisions.csv": len(_relation_rows(state)),
@@ -2762,10 +2930,21 @@ def _formal_output_issues(output_dir: Path, work_dir: Path,
             issues.append(_issue("FORMAL_OUTPUT_EMPTY", "ERROR",
                                  f"正式输出 {name} 为空", artifact_type="OUTPUT", artifact_id=name))
             continue
+        try:
+            parsed = list(csv.reader(io.StringIO(blob.decode("utf-8-sig"), newline="")))
+            if parsed:
+                issues.extend(_registry_issue(item) for item in validate_formal_rows(
+                    name, parsed[0], parsed[1:], state))
+        except (UnicodeDecodeError, csv.Error):
+            # The existing schema validator owns encoding/CSV parse errors.
+            # Do not duplicate or mask them in the registry.
+            pass
         if validate_artifact_schema:
             issues.extend(_formal_artifact_schema_issues(name, blob))
         if name == "business_objects.csv":
             issues.extend(validate_formal_business_object_csv(blob, state))
+        elif name == "business_attributes.csv":
+            issues.extend(validate_formal_attribute_inventory(blob, state))
         elif name in {"entity_relations.csv", "entity_relationships.csv"}:
             issues.extend(validate_formal_relation_csv(blob, state))
         elif name in {"business_rules.csv", "rules.csv"}:
@@ -2791,7 +2970,7 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
     target_dir.mkdir(parents=True, exist_ok=True)
     state = state if isinstance(state, Mapping) else (load_modeling_state(target_dir) or {})
     marker_exists = (target_dir / "validation_report.json").is_file()
-    missing_before = [name for name in DECISION_AUDIT_FILES
+    missing_before = [name for name in (*DECISION_AUDIT_FILES, *WORK_REQUIRED_FILES)
                       if not (target_dir / name).is_file()]
     if marker_exists and missing_before:
         audit_issues = [_issue("MISSING_DECISION_AUDIT", "ERROR",

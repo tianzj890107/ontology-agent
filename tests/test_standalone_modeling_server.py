@@ -102,10 +102,12 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         # work/output are runtime-owned namespaces; simulate the engine's
         # writes directly rather than using the untrusted input API.
         Path(run.root, "work/modeling_state.json").write_text('{"status":"UNKNOWN"}', encoding="utf-8")
+        Path(run.root, "work/all_attributes.csv").write_text("属性编码\nAT1\n", encoding="utf-8")
         Path(run.root, "output/business_objects.csv").write_text("code\nBO1\n", encoding="utf-8")
 
         paths = {item["path"] for item in self.store.list_files(run)}
-        self.assertEqual(paths, {"input/schema.json", "work/modeling_state.json", "output/business_objects.csv"})
+        self.assertEqual(paths, {"input/schema.json", "work/modeling_state.json",
+                                 "work/all_attributes.csv", "output/business_objects.csv"})
         self.assertEqual(self.store.read_file(run, "work/modeling_state.json"), b'{"status":"UNKNOWN"}')
         self.assertEqual(self.store.read_file(run, "mission-output/business_objects.csv"), b"code\nBO1\n")
 
@@ -137,6 +139,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             "input/upload-sheets/manifest.json": "derived",
             "input/db_connection.py": "hidden",
             "work/business_object_decisions.csv": "decision",
+            "work/all_attributes.csv": "all attributes",
             "work/modeling_state.json": "state",
             "work/db_metadata.json": "metadata",
             "work/pylibs/dependency.py": "runtime",
@@ -152,6 +155,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             "input/upload.csv": "input/upload.csv",
             "input/upload-sheets/manifest.json": "root/work/upload-sheets/manifest.json",
             "work/business_object_decisions.csv": "work/business_object_decisions.csv",
+            "work/all_attributes.csv": "work/all_attributes.csv",
             "work/modeling_state.json": "root/work/modeling_state.json",
             "work/db_metadata.json": "root/work/db_metadata.json",
             "output/business_objects.csv": "output/business_objects.csv",
