@@ -47,6 +47,9 @@ STRONG_EVIDENCE = {
     "CODE_REFERENCE",
     "EXPLICIT_CONFIG",
     "EXISTING_ONTOLOGY",
+    "COMPOSITION_EVIDENCE",
+    "OWNERSHIP_EVIDENCE",
+    "LIFECYCLE_DEPENDENCY",
     "VIEW_SQL_LINEAGE",  # legacy alias; new state should use typed VIEW_* evidence
 }
 # Kept as a compatibility alias for old state files.  It is deliberately not
@@ -72,6 +75,7 @@ WEAK_EVIDENCE = {
 EVIDENCE_REQUIRED_FOR_RELATION = tuple(sorted(STRONG_EVIDENCE | MODERATE_EVIDENCE))
 COMPOSITION_SEMANTIC_EVIDENCE = frozenset({
     "EXPLICIT_CONFIG", "EXISTING_ONTOLOGY", "CODE_REFERENCE", "DOCUMENTATION",
+    "COMPOSITION_EVIDENCE", "OWNERSHIP_EVIDENCE", "LIFECYCLE_DEPENDENCY",
 })
 
 RULE_EXISTENCE_STATUSES = frozenset({
@@ -247,9 +251,16 @@ def _independent_evidence_count(decision: Mapping[str, Any]) -> int:
     groups = evidence_independence_groups(decision)
     if groups:
         return len(set(groups))
+    # Structured evidence records may have separate IDs even when they were
+    # extracted from one source file.  Those IDs represent independently
+    # checked claims and should not be discarded merely because the older
+    # state format did not persist independenceGroup.
+    ids = evidence_ids(decision)
+    if ids:
+        return len(set(ids))
     # Legacy records have no explicit family/group.  Distinct provenance
-    # locators are the conservative fallback; repeated labels from one source
-    # are never counted twice.
+    # locators are the final fallback; repeated labels from one source are
+    # never counted twice.
     refs = _provenance_refs(decision)
     return len(set(refs))
 
@@ -296,6 +307,21 @@ def _provenance_refs(decision: Mapping[str, Any]) -> list[str]:
         value = _text(value)
         if value and value not in refs:
             refs.append(value)
+    # Newer state may keep the source locator only on the structured
+    # evidence record.  Treat that locator as provenance without requiring
+    # every producer to duplicate it at the relation root.
+    for record in _evidence_records(decision):
+        value = (record.get("provenance") or record.get("sourceRef")
+                 or record.get("source") or record.get("path")
+                 or record.get("uri") or record.get("location"))
+        if isinstance(value, list):
+            candidates = value
+        else:
+            candidates = [value]
+        for candidate in candidates:
+            candidate = _text(candidate)
+            if candidate and candidate not in refs:
+                refs.append(candidate)
     return refs
 
 
@@ -307,16 +333,22 @@ def _evidence_level(decision: Mapping[str, Any]) -> str:
 def has_formal_evidence(decision: Mapping[str, Any]) -> bool:
     """Return whether evidence types meet the semantic relation threshold.
 
-    One independently strong source is sufficient.  Moderate evidence needs
-    at least two different evidence categories.  Confidence text alone,
-    including HIGH or a numeric score, never crosses the gate.
+    One traceable strong source is sufficient.  Moderate evidence needs at
+    least two different evidence categories and independently recorded
+    claims.  Confidence text alone, including HIGH or a numeric score, never
+    crosses the gate.
     """
     types = evidence_types(decision)
     level = _evidence_level(decision)
-    if not level or not _provenance_refs(decision):
+    if not _provenance_refs(decision):
         return False
     if types & STRONG_EVIDENCE:
-        return level == "STRONG"
+        # Evidence type is the semantic classification; evidenceLevel is a
+        # model-produced summary and was previously causing valid FK/DDL
+        # records labelled MODERATE (or missing the redundant label) to be
+        # rejected.  An explicitly WEAK label still cannot override a strong
+        # source type.
+        return level not in {"WEAK"}
     return (len(types & MODERATE_EVIDENCE) >= 2
             and _independent_evidence_count(decision) >= 2
             and level in {"MODERATE", "STRONG"})
@@ -2110,12 +2142,16 @@ def _rule_existence_status(rule: Mapping[str, Any]) -> str:
     if explicit in RULE_EXISTENCE_STATUSES:
         return explicit
     types = evidence_types(rule)
-    if types & {"DECLARED_CONSTRAINT", "CHECK_CONSTRAINT", "UNIQUE_CONSTRAINT",
-                "NOT_NULL_CONSTRAINT", "TRIGGER", "ENFORCEMENT_CONFIG",
-                "DATA_CONTRACT", "BUSINESS_DOCUMENT"}:
+    if types & {"DECLARED_CONSTRAINT", "CHECK_CONSTRAINT", "CHECK",
+                "UNIQUE_CONSTRAINT", "UNIQUE", "NOT_NULL_CONSTRAINT",
+                "NOT_NULL", "FOREIGN_KEY", "REFERENTIAL_CONSTRAINT",
+                "TRIGGER", "ENFORCEMENT_CONFIG", "DATA_CONTRACT",
+                "BUSINESS_DOCUMENT", "RULE_TABLE", "POLICY"}:
         return "DECLARED"
-    if types & {"VIEW_DERIVATION_LINEAGE", "VIEW_CALCULATION_LOGIC", "ETL_SQL_LINEAGE",
-                "CODE_REFERENCE", "EXPLICIT_CONFIG"}:
+    if types & {"VIEW_DERIVATION_LINEAGE", "VIEW_CALCULATION_LOGIC",
+                "VIEW_FILTER_LOGIC", "ETL_SQL_LINEAGE", "CODE_REFERENCE",
+                "APPLICATION_CODE", "EXPLICIT_CONFIG", "WORKFLOW_DEFINITION",
+                "CONFIGURATION"}:
         return "IMPLEMENTED"
     if types & {"LLM_SEMANTIC_INFERENCE", "BUSINESS_COMMON_SENSE"}:
         return "INFERRED"
@@ -2136,6 +2172,7 @@ def _rule_origin(rule: Mapping[str, Any]) -> str:
         "UNIQUE_CONSTRAINT": "DATABASE_CONSTRAINT",
         "VIEW_DERIVATION_LINEAGE": "VIEW_IMPLEMENTATION",
         "VIEW_CALCULATION_LOGIC": "VIEW_IMPLEMENTATION",
+        "VIEW_FILTER_LOGIC": "VIEW_IMPLEMENTATION",
         "CODE_REFERENCE": "APPLICATION_CODE",
         "EXPLICIT_CONFIG": "CONFIGURATION",
         "BUSINESS_DOCUMENT": "BUSINESS_DOCUMENT",

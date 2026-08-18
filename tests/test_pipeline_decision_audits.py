@@ -115,6 +115,18 @@ class PipelineDecisionAuditTests(unittest.TestCase):
         self.assertIn("INVALID_AGGREGATION_EDGE", codes)
         self.assertIn("TRANSFORMATION_EVIDENCE_GATE", codes)
 
+    def test_view_filter_rule_with_direct_implementation_evidence_is_formal(self):
+        state = {"ruleDecisions": [{
+            "ruleId": "R_VIEW_FILTER",
+            "ruleType": "ALERT_DETECTION_RULE",
+            "evidenceTypes": ["VIEW_FILTER_LOGIC"],
+            "provenance": ["mission-input/report.sql"],
+            "sampleCount": 104,
+            "hitCount": 46,
+        }]}
+        blob = "规则编码,规则名称\nR_VIEW_FILTER,库存预警\n".encode("utf-8")
+        self.assertEqual(validate_formal_business_rule_csv(blob, state), [])
+
     def test_view_join_is_not_lineage(self):
         state = {"relationDecisions": [{
             "relationId": "T_JOIN", "sourceEntity": "A", "targetEntity": "B",

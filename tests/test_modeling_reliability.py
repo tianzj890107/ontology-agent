@@ -138,6 +138,32 @@ class ModelingEvidenceGateTests(unittest.TestCase):
         }]}
         self.assertEqual(validate_formal_relation_csv(relation_csv("REL000003"), state), [])
 
+    def test_traceable_strong_fk_does_not_require_redundant_strong_label(self):
+        state = {"relationDecisions": [{
+            "relationId": "REL000003A",
+            "sourceEntity": "LE_LINE",
+            "targetEntity": "LE_ORDER",
+            "relationType": "REFERENCE",
+            "status": CONFIRMED,
+            "evidenceTypes": ["FOREIGN_KEY"],
+            "evidenceLevel": "MODERATE",
+            "evidence": [{"type": "FOREIGN_KEY", "evidenceId": "FK_1",
+                          "source": "mission-input/schema.sql"}],
+        }]}
+        self.assertEqual(validate_formal_relation_csv(relation_csv("REL000003A"), state), [])
+
+    def test_structured_evidence_records_supply_provenance(self):
+        state = {"relationDecisions": [{
+            "relationId": "REL000003B",
+            "sourceEntity": "LE_LINE",
+            "targetEntity": "LE_ORDER",
+            "relationType": "REFERENCE",
+            "status": CONFIRMED,
+            "evidence": [{"type": "FOREIGN_KEY", "evidenceId": "FK_2",
+                          "path": "mission-input/schema.sql"}],
+        }]}
+        self.assertEqual(validate_formal_relation_csv(relation_csv("REL000003B"), state), [])
+
     def test_new_independent_evidence_allows_unknown_to_confirmed(self):
         state = {"relationDecisions": [{
             "relationId": "REL000004",
