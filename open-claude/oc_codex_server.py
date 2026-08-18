@@ -108,6 +108,142 @@ STATIC_KNOWLEDGE_DIR = os.path.join(SCRIPT_DIR, "..", "agent_knowledge")
 MAX_JSON_BODY_BYTES = 32 * 1024 * 1024
 MAX_MISSION_ENTRY_BYTES = 1 * 1024 * 1024
 
+# Modeling execution safety valves.  These are per modeling turn rather than
+# daily quotas: a successful task must remain unaffected, while a broken
+# semantic gate cannot consume an unbounded amount of provider/tool time.
+MODEL_GATE_RETRIES_ENV = "ONTOLOGY_MODELING_MAX_GATE_RETRIES"
+MODEL_MAX_SECONDS_ENV = "ONTOLOGY_MODELING_MAX_SECONDS"
+MODEL_MAX_TOOL_CALLS_ENV = "ONTOLOGY_MODELING_MAX_TOOL_CALLS"
+MODEL_MAX_TOKENS_ENV = "ONTOLOGY_MODELING_MAX_TOKENS"
+APPROVAL_TIMEOUT_ENV = "ONTOLOGY_APPROVAL_TIMEOUT_SECONDS"
+DEFAULT_MODEL_MAX_GATE_RETRIES = 3
+DEFAULT_MODEL_MAX_SECONDS = 3600.0
+DEFAULT_MODEL_MAX_TOOL_CALLS = 200
+DEFAULT_MODEL_MAX_TOKENS = 1_000_000
+DEFAULT_APPROVAL_TIMEOUT_SECONDS = 90.0
+
+
+def _bounded_env_number(name: str, default: float, minimum: float = 1.0) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(float(minimum), value)
+
+
+def _modeling_evidence_signature(cwd: str) -> str:
+    """Fingerprint independent evidence, excluding mutable formal outputs.
+
+    A model changing only a status, CSV row, or validator field must not count
+    as new evidence.  Evidence-bearing fields in the canonical state and
+    explicitly added evidence files are included; input/reference files are
+    intentionally not included because they are fixed for a task.
+    """
+    root = mission_work_dir(cwd)
+    parts: list[tuple[str, object]] = []
+    state_path = os.path.join(root, "modeling_state.json")
+    try:
+        with open(state_path, encoding="utf-8") as handle:
+            state = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        state = {}
+
+    evidence_tokens = ("evidence", "provenance", "lineage", "source", "sql",
+                       "confirmation", "confirmquestion", "unknownreason")
+
+    def collect(value, path=""):
+        if isinstance(value, dict):
+            for key in sorted(value):
+                key_text = str(key).lower().replace("_", "")
+                child = f"{path}.{key}" if path else str(key)
+                if any(token in key_text for token in evidence_tokens):
+                    parts.append((child, value[key]))
+                elif isinstance(value[key], (dict, list)):
+                    collect(value[key], child)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, (dict, list)):
+                    collect(item, f"{path}[{index}]")
+
+    collect(state)
+    evidence_dir = os.path.join(root, "evidence")
+    if os.path.isdir(evidence_dir):
+        for base, _, names in os.walk(evidence_dir):
+            for name in sorted(names):
+                path = os.path.join(base, name)
+                try:
+                    with open(path, "rb") as handle:
+                        digest = hashlib.sha256(handle.read()).hexdigest()
+                    parts.append((os.path.relpath(path, root).replace("\\", "/"), digest))
+                except OSError:
+                    continue
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True,
+                                     default=str).encode("utf-8")).hexdigest()
+
+
+def _modeling_gate_signature(checkpoint: dict) -> str:
+    """Return a stable signature for the current semantic blocker set."""
+    issues = []
+    for issue in (checkpoint.get("issues", []) if isinstance(checkpoint, dict) else []):
+        issues.append((str(getattr(issue, "code", "") or "VALIDATION_ERROR"),
+                       str(getattr(issue, "severity", "") or ""),
+                       str(getattr(issue, "message", "") or "")))
+    return hashlib.sha256(json.dumps(sorted(issues), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+class ModelingExecutionGuard:
+    """Per-run budget and semantic-gate guard shared by both services."""
+
+    def __init__(self):
+        self.started_at = time.monotonic()
+        self.max_seconds = _bounded_env_number(MODEL_MAX_SECONDS_ENV,
+                                               DEFAULT_MODEL_MAX_SECONDS)
+        self.max_tool_calls = int(_bounded_env_number(MODEL_MAX_TOOL_CALLS_ENV,
+                                                      DEFAULT_MODEL_MAX_TOOL_CALLS))
+        self.max_tokens = int(_bounded_env_number(MODEL_MAX_TOKENS_ENV,
+                                                  DEFAULT_MODEL_MAX_TOKENS))
+        self.max_gate_retries = int(_bounded_env_number(MODEL_GATE_RETRIES_ENV,
+                                                        DEFAULT_MODEL_MAX_GATE_RETRIES,
+                                                        minimum=0))
+        self.tool_calls = 0
+        self.tokens = 0
+        self.gate_retries = 0
+        self.last_gate_signature = ""
+        self.last_evidence_signature = ""
+        self.block_reason = ""
+
+    def check(self) -> str:
+        if time.monotonic() - self.started_at >= self.max_seconds:
+            return "MODEL_EXECUTION_TIMEOUT"
+        if self.tool_calls >= self.max_tool_calls:
+            return "MODEL_TOOL_CALL_LIMIT"
+        if self.tokens >= self.max_tokens:
+            return "MODEL_TOKEN_BUDGET_EXCEEDED"
+        return ""
+
+    def record_tool_call(self) -> str:
+        self.tool_calls += 1
+        return self.check()
+
+    def record_usage(self, usage: dict) -> str:
+        usage = usage if isinstance(usage, dict) else {}
+        self.tokens += int(usage.get("input_tokens", 0) or 0)
+        self.tokens += int(usage.get("output_tokens", 0) or 0)
+        return self.check()
+
+    def observe_gate(self, checkpoint: dict, evidence_signature: str) -> str:
+        """Return empty when another repair window is justified, else a code."""
+        gate_signature = _modeling_gate_signature(checkpoint)
+        if (self.last_gate_signature == gate_signature
+                and self.last_evidence_signature == evidence_signature):
+            return "MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE"
+        if self.gate_retries >= self.max_gate_retries:
+            return "MODEL_GATE_RETRY_LIMIT"
+        self.gate_retries += 1
+        self.last_gate_signature = gate_signature
+        self.last_evidence_signature = evidence_signature
+        return ""
+
 # Project names: letters/digits/CJK plus - _ . (no separators, no traversal).
 _PROJECT_NAME_RE = re.compile(r"^[\w\-.一-鿿]{1,64}$")
 
@@ -3425,6 +3561,8 @@ class Task:
         self._approval_event: threading.Event | None = None
         self._approval_answer = False
         self._rec = None              # 当前回合的 record+emit,供确认流推送事件
+        self._modeling_guard: ModelingExecutionGuard | None = None
+        self.modeling_block_reason = ""
 
         # Full-capability agent, confined to the project dir by OC_SANDBOX_ROOT.
         # default mode: dangerous tools (Bash/Write/Edit) route to _prompt_user,
@@ -3656,7 +3794,9 @@ class Task:
                "summary": summary, "detail": detail[:2000]}
         self.pending_approval = req
         rec(req)
-        answered = self._approval_event.wait(timeout=900)   # 最长等 15 分钟
+        approval_timeout = _bounded_env_number(
+            APPROVAL_TIMEOUT_ENV, DEFAULT_APPROVAL_TIMEOUT_SECONDS)
+        answered = self._approval_event.wait(timeout=approval_timeout)
         self.pending_approval = None
         self._approval_event = None
         approved = bool(self._approval_answer) if answered else False
@@ -3895,35 +4035,75 @@ class Task:
                     text_buf.clear()
 
             try:
+                modeling_turn = (not conversational
+                                  and task_callback_kind(self) == "modeling")
+                guard = ModelingExecutionGuard() if modeling_turn else None
+                self._modeling_guard = guard
+
+                def block_modeling(reason: str, checkpoint: dict | None = None):
+                    self.modeling_block_reason = str(reason or "MODEL_EXECUTION_BLOCKED")
+                    self.status = "blocked"
+                    errors = [self.modeling_block_reason]
+                    if isinstance(checkpoint, dict):
+                        errors.extend(
+                            str(getattr(issue, "code", "") or "VALIDATION_ERROR")
+                            for issue in checkpoint.get("issues", [])
+                            if getattr(issue, "severity", "") == "ERROR")
+                    set_task_run_result(self, "BLOCKED", errors=errors)
+                    rec({
+                        "type": "execution_guard",
+                        "status": "blocked",
+                        "code": self.modeling_block_reason,
+                        "message": "建模已停止，保留当前 work/output 供人工处理",
+                    })
+
+                def handle_gate_failure(checkpoint: dict) -> bool:
+                    if guard is None:
+                        return False
+                    decision = guard.observe_gate(
+                        checkpoint, _modeling_evidence_signature(self.cwd))
+                    if decision:
+                        block_modeling(decision, checkpoint)
+                        return True
+                    gate_message = modeling_gate_retry_message(checkpoint)
+                    rec({
+                        "type": "execution_gate",
+                        "status": "blocked",
+                        "message": gate_message,
+                        "repairAttempt": guard.gate_retries,
+                    })
+                    conv.add_user_message(gate_message)
+                    return False
+
                 max_iterations = max(1, conv.profile.max_iterations)
-                # max_iterations limits one provider/tool-call window.  It is
-                # not allowed to terminate an incomplete modeling task.  If
-                # the semantic gate is still blocked at the end of a window,
-                # start another window in the same conversation and keep the
-                # task running until the gate passes or the provider returns
-                # an actual unrecoverable error.
                 iteration = 0
+                stop_reason = "end_turn"
                 while True:
+                    if guard is not None:
+                        budget_error = guard.check()
+                        if budget_error:
+                            block_modeling(budget_error)
+                            break
                     if iteration >= max_iterations:
-                        if (not conversational
-                                and task_callback_kind(self) == "modeling"):
+                        if modeling_turn:
                             ensure_mission_output_files(self.cwd, self.mission_context)
                             checkpoint = finalize_modeling_task(self)
                             if checkpoint.get("status") == "PASSED":
                                 break
-                            gate_message = modeling_gate_retry_message(checkpoint)
-                            rec({
-                                "type": "execution_gate",
-                                "status": "blocked",
-                                "message": gate_message,
-                            })
-                            conv.add_user_message(gate_message)
+                            if handle_gate_failure(checkpoint):
+                                break
                             iteration = 0
                             continue
                         break
                     iteration += 1
                     conv._maybe_compact()
                     stop_reason = self._stream_once(conv, emit_timed, text_buf, flush_text)
+
+                    if guard is not None:
+                        budget_error = guard.check()
+                        if budget_error:
+                            block_modeling(budget_error)
+                            break
 
                     if stop_reason == "tool_use":
                         # Reuse open-claude's exact execution path (permissions,
@@ -3955,16 +4135,12 @@ class Task:
                         ensure_mission_output_files(self.cwd, self.mission_context)
                         checkpoint = finalize_modeling_task(self)
                         if checkpoint.get("status") != "PASSED":
-                            gate_message = modeling_gate_retry_message(checkpoint)
-                            rec({
-                                "type": "execution_gate",
-                                "status": "blocked",
-                                "message": gate_message,
-                            })
-                            conv.add_user_message(gate_message)
+                            if handle_gate_failure(checkpoint):
+                                break
                             continue
                     break
-                self.status = "error" if stop_reason == "error" else "idle"
+                if self.status != "blocked":
+                    self.status = "error" if stop_reason == "error" else "idle"
                 if stop_reason == "error":
                     failure_message = "Agent 执行返回不可恢复错误，请查看该任务的执行审计记录"
             except Exception as e:
@@ -3973,13 +4149,14 @@ class Task:
                 failure_message = str(e) or "Agent 执行发生不可恢复异常"
                 rec({"type": "error", "error": failure_message})
             finally:
+                self._modeling_guard = None
                 self._rec = None
                 flush_text()
                 if conversational and original_system_prompt is not None:
                     self.conv.system_prompt = original_system_prompt
                 if self.mission_context:
                     ensure_mission_output_files(self.cwd, self.mission_context)
-                if (not conversational and self.status != "error"
+                if (not conversational and self.status not in {"error", "blocked"}
                         and task_callback_kind(self) == "modeling"):
                     finalize_result = finalize_modeling_task(self)
                     if finalize_result.get("status") != "PASSED":
@@ -4026,6 +4203,9 @@ class Task:
             error_event = self._record_event({"type": "error", "error": budget_error})
             emit(error_event)
             return "error"
+        guard = self._modeling_guard
+        if guard is not None and guard.check():
+            return "budget_exceeded"
 
         gen = AGENT_RUNTIME.get().stream_message(
             conv.client, conv.messages, conv.system_prompt,
@@ -4036,6 +4216,9 @@ class Task:
             api_key=api_key,
         )
         for ev in gen:
+            if guard is not None and guard.check():
+                stop_reason = "budget_exceeded"
+                break
             t = ev["type"]
             if t == "text_delta":
                 turn_text.append(ev["text"])
@@ -4049,6 +4232,8 @@ class Task:
                 thinking_event = self._record_event({"type": "thinking", "text": ev["text"]})
                 emit(thinking_event)
             elif t == "tool_use_end":
+                if guard is not None:
+                    guard.record_tool_call()
                 tool_uses.append({"type": "tool_use", "id": ev["id"],
                                   "name": ev["name"], "input": ev["input"]})
                 flush_text()
@@ -4070,6 +4255,8 @@ class Task:
                     cache_read=u.get("cache_read_input_tokens", 0),
                     cache_creation=u.get("cache_creation_input_tokens", 0),
                 )
+                if guard is not None:
+                    guard.record_usage(u)
                 if self.user_id:
                     record_user_usage(self.user_id, u, conv.model)
             elif t == "model_switch":

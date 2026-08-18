@@ -13,7 +13,102 @@ from open_claude.tasks import TaskStore, get_task_store  # noqa: E402
 import oc_codex_server  # noqa: E402
 
 
+class _FakeConversation:
+    def __init__(self):
+        self.profile = type("Profile", (), {"max_iterations": 1})()
+        self.messages = []
+        self.system_prompt = ""
+        self.model = "test-model"
+        self.cost_tracker = type("Cost", (), {"total_cost_usd": 0.0})()
+
+    def add_user_message(self, text):
+        self.messages.append({"role": "user", "content": text})
+
+    def _maybe_compact(self):
+        return None
+
+
 class TaskStateMachineTests(unittest.TestCase):
+    @staticmethod
+    def _modeling_task(directory, project, expected_files=None):
+        task = oc_codex_server.Task(
+            project=project,
+            cwd=directory,
+            task_type="modeling",
+            mission_context={
+                "taskType": "modeling",
+                "expectedFiles": expected_files or [],
+            },
+            user_id="test",
+            defer_runtime=True,
+        )
+        task.conv = _FakeConversation()
+        return task
+
+    def test_modeling_guard_limits_and_counts(self):
+        with patch.dict(os.environ, {
+            "ONTOLOGY_MODELING_MAX_SECONDS": "1",
+            "ONTOLOGY_MODELING_MAX_TOOL_CALLS": "2",
+            "ONTOLOGY_MODELING_MAX_TOKENS": "10",
+            "ONTOLOGY_MODELING_MAX_GATE_RETRIES": "3",
+        }, clear=False):
+            guard = oc_codex_server.ModelingExecutionGuard()
+            self.assertEqual(guard.record_tool_call(), "")
+            self.assertEqual(guard.record_tool_call(), "MODEL_TOOL_CALL_LIMIT")
+            self.assertEqual(guard.record_usage({"input_tokens": 10}),
+                             "MODEL_TOOL_CALL_LIMIT")
+
+    def test_same_gate_without_new_evidence_blocks_and_preserves_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "mission-work").mkdir()
+            (Path(directory) / "mission-work" / "existing.csv").write_text(
+                "preserve", encoding="utf-8")
+            task = self._modeling_task(directory, "gate-repeat-test",
+                                       ["business_objects.csv"])
+            task.conv.profile.max_iterations = 1
+            checkpoint = {
+                "status": "FAILED",
+                "issues": [type("Issue", (), {
+                    "code": "MISSING_EVIDENCE",
+                    "severity": "ERROR",
+                    "message": "需要独立证据",
+                })()],
+            }
+            with patch.object(task, "_stream_once", return_value="end_turn") as stream, \
+                    patch.object(oc_codex_server, "finalize_modeling_task",
+                                 return_value=checkpoint), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("开始建模", lambda _event: None, conversational=False)
+
+            self.assertEqual(task.status, "blocked")
+            self.assertEqual(task.run_result.get("status"), "BLOCKED")
+            self.assertEqual(task.modeling_block_reason,
+                             "MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE")
+            self.assertEqual(stream.call_count, 1)
+            self.assertTrue((Path(directory) / "mission-work").exists())
+
+    def test_new_evidence_allows_one_gate_repair_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._modeling_task(directory, "gate-evidence-test")
+            task.conv.profile.max_iterations = 1
+            failed = {"status": "FAILED", "issues": []}
+            checkpoints = [failed, {"status": "PASSED", "issues": []},
+                           {"status": "PASSED", "issues": []}]
+            evidence = iter(["before", "after"])
+
+            with patch.object(task, "_stream_once", return_value="end_turn") as stream, \
+                    patch.object(oc_codex_server, "finalize_modeling_task",
+                                 side_effect=lambda _task: checkpoints.pop(0)), \
+                    patch.object(oc_codex_server, "_modeling_evidence_signature",
+                                 side_effect=lambda _cwd: next(evidence)), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("开始建模", lambda _event: None, conversational=False)
+
+            self.assertEqual(task.status, "idle")
+            self.assertEqual(stream.call_count, 1)
+
     def test_user_daily_quota_is_not_an_agent_execution_block(self):
         with patch.dict(os.environ, {
             "ONTOLOGY_USER_DAILY_CALL_LIMIT": "0",
@@ -26,16 +121,8 @@ class TaskStateMachineTests(unittest.TestCase):
 
     def test_modeling_gate_opens_next_window_until_passed(self):
         with tempfile.TemporaryDirectory() as directory:
-            task = oc_codex_server.Task(
-                project="gate-test",
-                cwd=directory,
-                task_type="modeling",
-                mission_context={
-                    "taskType": "modeling",
-                    "expectedFiles": ["business_objects.csv"],
-                },
-                user_id="test",
-            )
+            task = self._modeling_task(directory, "gate-test",
+                                       ["business_objects.csv"])
             task.conv.profile.max_iterations = 1
             checkpoints = []
 

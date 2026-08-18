@@ -19,11 +19,12 @@
 ## 状态
 
 ```text
-CREATED/INPUT_READY → QUEUED → ANALYZING → VALIDATING → READY_FOR_EXPORT
-                                      └────────→ FAILED
+CREATED/INPUT_READY → QUEUED → CLAIMED → ANALYZING → VALIDATING → READY_FOR_EXPORT → SUCCEEDED
+                         │          └────→ CANCELLING → CANCELLED
+                         └──────────────────────────────────────────────→ FAILED
 ```
 
-外部调用在 `QUEUED`、`ANALYZING`、`VALIDATING` 和 `READY_FOR_EXPORT` 状态不能上传输入、重复执行或重复校验；外部 `validate` 不允许借用 execute 的内部 `ANALYZING → VALIDATING` 转换。状态来源检查和转换在同一个 run 锁内原子完成；服务重启时排队或处理中状态会恢复为 `FAILED` 并记录中断原因。
+外部调用在 `QUEUED`、`CLAIMED`、`ANALYZING`、`VALIDATING`、`CANCELLING` 和 `READY_FOR_EXPORT` 状态不能上传输入、重复执行或重复校验；外部 `validate` 不允许借用 execute 的内部 `ANALYZING → VALIDATING` 转换。状态来源检查和转换在同一个 run 锁及 Repository 条件写入内原子完成；服务重启时已 claim/处理中状态会恢复为 `FAILED` 并记录中断原因，尚未 claim 的 `QUEUED` run 保留并由新 scheduler 接续。
 
 显式调用 `validate` 会执行现有语义 finalize、决策审计和正式输出一致性校验。审计文件落在 `work/`，正式 CSV 落在 `output/`。
 
@@ -100,7 +101,17 @@ GET /api/modeling-data-sources/{databaseSourceId}/tables
 X-Modeling-API-Key: <key>
 ```
 
-创建数据库建模 run 时只提交 `databaseSourceId` 和选中的 `selectedTables`；完整连接配置由 47314 服务端安全配置解析，不能由浏览器覆盖。
+读取可选 Schema（PG 支持多选）：
+
+```http
+GET /api/modeling-data-sources/{databaseSourceId}/schemas
+X-Modeling-API-Key: <key>
+```
+
+选择多个 Schema 后可通过重复的 `schemas` 查询参数读取合并后的表清单，例如
+`/tables?schemas=ontology_dev&schemas=po`。创建数据库建模 run 时提交
+`databaseSourceId`、`selectedSchemas` 和选中的 `selectedTables`；完整连接配置由
+47314 服务端安全配置解析，不能由浏览器覆盖。
 
 浏览器访问页面后由服务端签发短期 HttpOnly 会话 Cookie，页面内 API 请求不再要求用户手填长期 API Key。程序化客户端仍可使用 `X-Modeling-API-Key`。
 
@@ -120,7 +131,9 @@ POST /api/modeling-runs/{runId}/validate
 
 `FAILED` run 可以再次调用 `execute` 继续运行，复用该 run 已保存的输入、提示词和工作区；历史运行列表可重新打开失败 run。运行中的 `QUEUED`/`ANALYZING`/`VALIDATING` run 仍不可重复执行。
 
-47314 通过 `MODELING_SERVER_MAX_ACTIVE_RUNS` 控制同时执行的 run 数，默认值为 `2`，允许范围为 `1` 到 `32`。超过并发上限的 run 先进入 `QUEUED`，空闲 worker slot 释放后自动进入 `ANALYZING`；排队不返回 `ACTIVE_RUN_EXISTS`。每个运行仍保持独立线程、会话、工作区和事件日志。
+47314 使用有界 worker pool 和公平调度：在线用户默认 `100`，全局 active run 默认 `10`，单用户 active run 默认 `3`，单用户 queued run 默认 `3`，全局 queued run 默认 `50`。超过 active 上限的第 11 个任务进入 `QUEUED`，不会直接失败；超过在线用户、用户队列或全局队列上限分别返回 `ONLINE_USER_LIMIT_REACHED`、`USER_QUEUE_LIMIT_REACHED` / `GLOBAL_QUEUE_FULL`（HTTP 429）。通过 `MODELING_SERVER_MAX_ONLINE_USERS`、`MODELING_SERVER_MAX_ACTIVE_RUNS`、`MODELING_SERVER_MAX_ACTIVE_PER_USER`、`MODELING_SERVER_MAX_QUEUED_PER_USER`、`MODELING_SERVER_MAX_QUEUED` 可配置。
+
+每个被 claim 的 attempt 记录 `attemptId`、`attemptNumber`、`workerId`、lease 和 heartbeat；worker 丢失后由 lease recovery 标记为 `FAILED` 并记录 `worker_lost`。Run 元数据通过共享 SQLite Repository 持久化（`.runs.sqlite3`），`.runs.json` 仅作为兼容快照；后续可无业务层改动切换 PostgreSQL Repository。事件带有 `userId`、`runId` 和 `attemptId`，API 列表、详情和事件按用户隔离。
 
 事件接口支持增量读取：客户端保存已消费的事件数量后，将其作为 `since` 参数传入，避免重复下载完整思考历史。`GET /api/modeling-runs/{runId}?includeEvents=false` 只返回运行摘要和文件列表，适合轮询状态；不传该参数时保留完整事件响应以兼容旧客户端。
 

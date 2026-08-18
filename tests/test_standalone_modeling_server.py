@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from http.client import HTTPConnection
@@ -21,8 +22,10 @@ from standalone_modeling_server import (
     ClientInputError,
     ModelingRunManager,
     ModelingHandler,
+    QueueLimitError,
     RunStore,
     StateTransitionError,
+    _normalize_database_config,
 )
 
 
@@ -32,6 +35,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.store = RunStore(self.tmp.name)
 
     def tearDown(self):
+        self.store.close_managers()
         self.tmp.cleanup()
 
     @staticmethod
@@ -56,6 +60,19 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
 
     def _manager(self):
         return ModelingRunManager(self.store)
+
+    def test_database_config_allows_empty_password_only_when_explicit(self):
+        config = {
+            "host": "doris.example", "username": "admin", "password": "",
+            "database": "ontology", "dbType": "MYSQL",
+            "selectedSchemas": ["ontology_dev", "po"],
+        }
+        with self.assertRaises(ClientInputError):
+            _normalize_database_config(config)
+        config["allowEmptyPassword"] = True
+        normalized = _normalize_database_config(config)
+        self.assertEqual(normalized["password"], "")
+        self.assertEqual(normalized["selectedSchemas"], ["ontology_dev", "po"])
 
     def _http_server(self, manager):
         ModelingHandler.manager = manager
@@ -550,6 +567,145 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             manager.execute(run)
             manager.threads[run.run_id].join(timeout=2)
         self.assertEqual(run.status, "ANALYZING")
+
+    def test_per_user_active_limit_is_three_and_fourth_is_queued(self):
+        manager = ModelingRunManager(self.store, max_active_runs=10,
+                                     max_active_per_user=3,
+                                     max_queued_per_user=3,
+                                     heartbeat_seconds=0.05)
+        release = threading.Event()
+        started = threading.Event()
+        active_count = 0
+        active_lock = threading.Lock()
+
+        def blocked(_run):
+            nonlocal active_count
+            with active_lock:
+                active_count += 1
+                if active_count == 3:
+                    started.set()
+            release.wait(2)
+
+        runs = [self.store.create("DATABASE", f"u1-{i}", user_id="u1") for i in range(4)]
+        with patch.object(manager, "_execute", side_effect=blocked):
+            for run in runs:
+                manager.execute(run)
+            self.assertTrue(started.wait(2))
+            self.assertEqual([run.status for run in runs[:3]], ["ANALYZING"] * 3)
+            self.assertEqual(runs[3].status, "QUEUED")
+            release.set()
+            for run in runs:
+                manager.threads[run.run_id].join(3)
+        manager.close()
+
+    def test_global_tenth_active_and_eleventh_queued(self):
+        manager = ModelingRunManager(self.store, max_active_runs=10,
+                                     max_active_per_user=10, max_queued_per_user=3)
+        release = threading.Event()
+        started = threading.Event()
+        count = 0
+        count_lock = threading.Lock()
+
+        def blocked(_run):
+            nonlocal count
+            with count_lock:
+                count += 1
+                if count == 10:
+                    started.set()
+            release.wait(3)
+
+        runs = [self.store.create("DATABASE", str(i), user_id=f"u{i}") for i in range(11)]
+        with patch.object(manager, "_execute", side_effect=blocked):
+            for run in runs:
+                manager.execute(run)
+            self.assertTrue(started.wait(3))
+            self.assertEqual(sum(run.status == "ANALYZING" for run in runs), 10)
+            self.assertEqual(runs[-1].status, "QUEUED")
+            release.set()
+            for run in runs:
+                manager.threads[run.run_id].join(3)
+        manager.close()
+
+    def test_global_queue_cap_is_independent_from_per_user_cap(self):
+        manager = ModelingRunManager(self.store, max_active_runs=1,
+                                     max_active_per_user=1, max_queued_per_user=3,
+                                     max_queued_runs=50)
+        release = threading.Event()
+        active = self.store.create("DATABASE", "active", user_id="active")
+        with patch.object(manager, "_execute", side_effect=lambda _run: release.wait()):
+            manager.execute(active)
+            deadline = time.time() + 2
+            while active.status != "ANALYZING" and time.time() < deadline:
+                time.sleep(0.01)
+            queued = [self.store.create("DATABASE", str(i), user_id=f"u{i}")
+                      for i in range(51)]
+            for run in queued[:50]:
+                manager.execute(run)
+            with self.assertRaises(QueueLimitError) as error:
+                manager.execute(queued[50])
+            self.assertEqual(error.exception.code, "GLOBAL_QUEUE_FULL")
+            release.set()
+        manager.close()
+
+    def test_user_queue_limit_returns_explicit_429_semantics(self):
+        manager = ModelingRunManager(self.store, max_active_runs=1,
+                                     max_active_per_user=1, max_queued_per_user=3,
+                                     max_queued_runs=50)
+        release = threading.Event()
+        first = self.store.create("DATABASE", "active", user_id="u1")
+        with patch.object(manager, "_execute", side_effect=lambda _run: release.wait()):
+            manager.execute(first)
+            deadline = time.time() + 2
+            while first.status != "ANALYZING" and time.time() < deadline:
+                time.sleep(0.01)
+            queued = [self.store.create("DATABASE", str(i), user_id="u1") for i in range(4)]
+            for run in queued[:3]:
+                manager.execute(run)
+            with self.assertRaises(QueueLimitError) as error:
+                manager.execute(queued[3])
+            self.assertEqual(error.exception.code, "USER_QUEUE_LIMIT_REACHED")
+            release.set()
+        manager.close()
+
+    def test_repository_snapshot_is_shared_and_idempotency_is_stable(self):
+        first = self.store.create("DATABASE", "same", user_id="u1", idempotency_key="k1")
+        duplicate = self.store.create("DATABASE", "different", user_id="u1", idempotency_key="k1")
+        self.assertIs(first, duplicate)
+        restarted = RunStore(self.tmp.name)
+        self.assertEqual(restarted.get(first.run_id).user_id, "u1")
+        self.assertTrue((Path(self.tmp.name) / ".runs.sqlite3").exists())
+
+    def test_online_user_capacity_is_bounded_at_one_hundred(self):
+        manager = ModelingRunManager(self.store, max_active_runs=10)
+        for index in range(100):
+            manager.touch_user(f"user-{index}")
+        with self.assertRaises(QueueLimitError) as error:
+            manager.touch_user("user-100")
+        self.assertEqual(error.exception.code, "ONLINE_USER_LIMIT_REACHED")
+        manager.close()
+
+    def test_lease_expiry_is_recovered_without_stuck_running_state(self):
+        manager = ModelingRunManager(self.store, max_active_runs=1, lease_seconds=1)
+        run = self.store.create("DATABASE", "lease", user_id="u1")
+        self.store.transition(run, "QUEUED")
+        self.store.transition(run, "CLAIMED")
+        run.worker_id = "lost-worker"
+        run.lease_expires_at = time.time() - 1
+        manager._recover_expired_leases()
+        self.assertEqual(run.status, "FAILED")
+        self.assertEqual(run.error, "WORKER_LEASE_EXPIRED")
+        self.assertTrue(any(event["type"] == "worker_lost" for event in run.events))
+        manager.close()
+
+    def test_queued_cancel_cannot_be_claimed(self):
+        manager = ModelingRunManager(self.store, max_active_runs=1)
+        run = self.store.create("DATABASE", "cancel", user_id="u1")
+        self.store.transition(run, "QUEUED")
+        self.store.request_cancel(run)
+        self.assertEqual(run.status, "CANCELLED")
+        with self.assertRaises(StateTransitionError):
+            manager.execute(run)
+        manager.close()
 
     def test_standalone_adapter_never_changes_legacy_web_tasks_snapshot(self):
         import oc_codex_server as web

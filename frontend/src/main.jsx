@@ -174,6 +174,8 @@ function StandaloneApp() {
   const [databaseSources, setDatabaseSources] = useState([]);
   const [databaseSourceId, setDatabaseSourceId] = useState("");
   const [databaseSchema, setDatabaseSchema] = useState("");
+  const [databaseSchemas, setDatabaseSchemas] = useState([]);
+  const [selectedSchemas, setSelectedSchemas] = useState([]);
   const [databaseTables, setDatabaseTables] = useState([]);
   const [selectedTables, setSelectedTables] = useState([]);
   const [tablesLoading, setTablesLoading] = useState(false);
@@ -219,13 +221,25 @@ function StandaloneApp() {
       setStandaloneModel((current) => current || result.model || result.models?.[0]?.id || "");
     } else if (result._status !== 401) setError(result.error);
   };
-  const loadDatabaseTables = async (sourceId) => {
+  const loadDatabaseSchemas = async (sourceId) => {
+    if (!sourceId) return;
+    const result = await standaloneApi(`/api/modeling-data-sources/${encodeURIComponent(sourceId)}/schemas`, "");
+    if (!result.error) {
+      const schemas = (result.schemas || []).filter(Boolean);
+      const defaultSchema = result.defaultSchema && schemas.includes(result.defaultSchema)
+        ? [result.defaultSchema] : [];
+      setDatabaseSchemas(schemas);
+      setSelectedSchemas(defaultSchema);
+    } else if (result._status !== 401) setError(result.error);
+  };
+  const loadDatabaseTables = async (sourceId, schemas = selectedSchemas) => {
     if (!sourceId) return;
     setTablesLoading(true);
-    const result = await standaloneApi(`/api/modeling-data-sources/${encodeURIComponent(sourceId)}/tables`, "");
+    const query = (schemas || []).map((schema) => `schemas=${encodeURIComponent(schema)}`).join("&");
+    const result = await standaloneApi(`/api/modeling-data-sources/${encodeURIComponent(sourceId)}/tables${query ? `?${query}` : ""}`, "");
     if (!result.error) {
-      const tables = (result.tables || []).map((item) => item.name).filter(Boolean);
-      setDatabaseSchema(result.schema || "");
+      const tables = (result.tables || []).map((item) => `${item.schema}.${item.name}`).filter(Boolean);
+      setDatabaseSchema((result.schemas || []).join(", ") || result.schema || "");
       setDatabaseTables(tables);
       setSelectedTables((current) => current.filter((item) => tables.includes(item)));
     } else if (result._status !== 401) setError(result.error);
@@ -415,6 +429,7 @@ function StandaloneApp() {
     setError("");
     setPrompt("");
     setInputFiles([]);
+    setSelectedSchemas([]);
     setSelectedTables([]);
     setSelectedArtifacts(STANDALONE_ARTIFACTS);
     setSelectedRunFiles([]);
@@ -437,7 +452,8 @@ function StandaloneApp() {
     const timer = window.setInterval(() => { void loadRuns(); }, 3000);
     return () => window.clearInterval(timer);
   }, []);
-  useEffect(() => { void loadDatabaseTables(databaseSourceId); }, [databaseSourceId]);
+  useEffect(() => { void loadDatabaseSchemas(databaseSourceId); }, [databaseSourceId]);
+  useEffect(() => { void loadDatabaseTables(databaseSourceId, selectedSchemas); }, [databaseSourceId, selectedSchemas]);
   useEffect(() => {
     if (!run?.runId) return undefined;
     const activeStatuses = new Set(["QUEUED", "ANALYZING", "VALIDATING"]);
@@ -456,6 +472,7 @@ function StandaloneApp() {
     setError("");
     if (!selectedArtifacts.length) { setError("至少选择一个正式产物"); return; }
     if (sourceMode === "DATABASE" && !databaseSourceId) { setError("请选择数据库"); return; }
+    if (sourceMode === "DATABASE" && !selectedSchemas.length) { setError("至少选择一个 Schema"); return; }
     if (sourceMode === "DATABASE" && !selectedTables.length) { setError("至少选择一张数据表"); return; }
     setBusy(true);
     try {
@@ -467,6 +484,7 @@ function StandaloneApp() {
       };
       if (sourceMode === "DATABASE") {
         payload.databaseSourceId = databaseSourceId;
+        payload.selectedSchemas = selectedSchemas;
         payload.selectedTables = selectedTables;
       }
       const created = await standaloneApi("/api/modeling-runs", "", {
@@ -601,6 +619,7 @@ function StandaloneApp() {
       <div className={`standalone-layout ${run ? "standalone-layout-running" : ""}`}>
         <aside className="standalone-history"><Button type="primary" block className="standalone-new-task" onClick={startNewTask}>＋ 新任务</Button><div className="standalone-section-title">历史运行</div>{runs.length ? <List size="small" dataSource={runs} renderItem={(item) => <List.Item role="button" tabIndex={0} className={run?.runId === item.runId ? "standalone-run-active" : "standalone-run"} onClick={() => selectRun(item.runId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRun(item.runId); } }}><div><strong>{standaloneRunTitle(item)}</strong><small>{formatRunCreatedAt(item.createdAt)} · {item.status}</small></div></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行记录" />}</aside>
         <main className="standalone-main">
+          {!run && sourceMode === "DATABASE" && <div className="standalone-schema-picker"><Divider orientation="left">选择 Schema（可多选）</Divider><Select mode="multiple" allowClear className="standalone-database-select" value={selectedSchemas} onChange={(value) => { setSelectedSchemas(value); setSelectedTables([]); }} placeholder="请选择一个或多个 Schema" loading={!databaseSchemas.length && !!databaseSourceId} options={databaseSchemas.map((schema) => ({ value: schema, label: schema }))} notFoundContent="暂无可用 Schema" /></div>}
           {!run && <div className="standalone-title"><div><h1>独立智能建模</h1><p>上传输入资料或连接已有数据库，完成建模并查看可追溯产物。</p></div></div>}
           {error && <Alert type="error" showIcon closable onClose={() => setError("")} message={error} />}
           {!run ? <div className="standalone-card"><h2>建模输入</h2><div className="standalone-form-row"><Select size="large" value={sourceMode} onChange={setSourceMode} options={[{ value: "DATABASE", label: "数据库建模" }, { value: "DOCUMENT", label: "文档建模" }, { value: "NATURAL_LANGUAGE", label: "自然语言建模" }]} /><Input size="large" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="建模要求可选；不填写时直接使用四份 v0.0.1 规范/模板建模" /></div><div className="standalone-upload"><input type="file" multiple onChange={(event) => setInputFiles(Array.from(event.target.files || []))} /><span>{inputFiles.length ? inputFiles.map((file) => file.name).join("、") : "可上传 schema、文档或其他输入文件"}</span></div>{sourceMode === "DATABASE" && <><Divider orientation="left">选择数据源</Divider><Select className="standalone-database-select" value={databaseSourceId || undefined} onChange={(value) => { setDatabaseSourceId(value); setSelectedTables([]); }} placeholder="请选择数据库" loading={!databaseSources.length} options={databaseSources.map((item) => ({ value: item.id, label: item.name }))} notFoundContent="暂无可用数据库" /><Divider orientation="left">选择数据表</Divider><div className="standalone-table-toolbar"><span>Schema：{databaseSchema || "-"}</span><Checkbox checked={databaseTables.length > 0 && selectedTables.length === databaseTables.length} indeterminate={selectedTables.length > 0 && selectedTables.length < databaseTables.length} disabled={tablesLoading || !databaseTables.length} onChange={(event) => setSelectedTables(event.target.checked ? databaseTables : [])}>全选</Checkbox></div>{tablesLoading ? <div className="standalone-table-loading">正在读取数据表…</div> : <Checkbox.Group className="standalone-table-list" value={selectedTables} onChange={setSelectedTables} options={databaseTables.map((item) => ({ value: item, label: item }))} />}<div className="standalone-selected-count">已选 {selectedTables.length} 张表</div></>}<Divider orientation="left">解析要素</Divider><Checkbox.Group value={selectedArtifacts} onChange={setSelectedArtifacts} options={STANDALONE_ARTIFACTS.map((item) => ({ value: item, label: STANDALONE_ARTIFACT_LABELS[item] }))} /><Button type="primary" size="large" loading={busy} disabled={busy} onClick={startModeling} className="standalone-start">开始建模</Button></div> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} filesLoading={runFilesLoading} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || run.model || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}

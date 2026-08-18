@@ -30,6 +30,8 @@ import sys
 import threading
 import time
 import uuid
+import weakref
+from concurrent.futures import Future, ThreadPoolExecutor
 from collections import Counter
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +40,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from open_claude.lifecycle import LazyService, LifecycleTracker
+from open_claude.run_repository import SQLiteRunRepository
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -51,11 +54,19 @@ RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$")
 MAX_BODY_BYTES = 64 * 1024 * 1024
 EVENT_CHECKPOINT_COUNT = 64
 EVENT_CHECKPOINT_SECONDS = 0.5
-DEFAULT_MAX_ACTIVE_RUNS = 2
+DEFAULT_MAX_ACTIVE_RUNS = 10
+DEFAULT_MAX_ACTIVE_PER_USER = 3
+DEFAULT_MAX_QUEUED_PER_USER = 3
+DEFAULT_MAX_QUEUED_RUNS = 50
+DEFAULT_MAX_ONLINE_USERS = 100
 MAX_ACTIVE_RUNS_LIMIT = 32
+MAX_QUEUED_RUNS_LIMIT = 1000
+DEFAULT_LEASE_SECONDS = 120.0
+DEFAULT_HEARTBEAT_SECONDS = 5.0
 _BROWSER_SESSION_TTL = 30 * 60
 _BROWSER_SESSION_LOCK = threading.RLock()
 _BROWSER_SESSIONS: dict[str, float] = {}
+_BROWSER_SESSION_USERS: dict[str, str] = {}
 PUBLIC_DIRS = ("input", "work", "output")
 _FILE_TREE_SKIP_DIRS = {".git", ".open-claude", "node_modules", "__pycache__", ".venv", "venv", "pylibs", ".py_deps"}
 _WEB_HIDDEN_FILES = {".db_connection.json", ".env", ".env.local", "credentials.json",
@@ -195,10 +206,9 @@ def _database_source_config(source_id: Any) -> tuple[str, dict[str, Any]]:
         details={"invalidDatabaseSourceId": requested}, status=422)
 
 
-def _list_database_source_tables(source_id: Any) -> dict[str, Any]:
-    """Read table names through the same SQLAlchemy credential path as 47313."""
-    _, config = _database_source_config(source_id)
-    from sqlalchemy import URL, create_engine, text
+def _database_source_engine(config: dict[str, Any]):
+    """Create a SQLAlchemy engine for a registered source."""
+    from sqlalchemy import URL, create_engine
     from open_claude.credential_crypto import decrypt_connection_credential
 
     db_type = str(config.get("dbType") or "POSTGRESQL").upper().replace("-", "_")
@@ -213,26 +223,64 @@ def _list_database_source_tables(source_id: Any) -> dict[str, Any]:
         raise RuntimeError(f"暂不支持的数据库类型: {db_type}")
     password = decrypt_connection_credential(config.get("password"),
                                               config.get("passwordEncrypted"))
-    engine = create_engine(URL.create(
+    return create_engine(URL.create(
         dialect,
         username=config["username"], password=password,
         host=config["host"], port=int(config.get("port", 5432)),
         database=config["database"],
     ))
-    schema = str(config.get("sourceSchema") or "public")
+
+
+def _list_database_source_schemas(source_id: Any) -> dict[str, Any]:
+    """List selectable schemas without exposing connection credentials."""
+    _, config = _database_source_config(source_id)
+    from sqlalchemy import text
+
+    engine = _database_source_engine(config)
     try:
         with engine.connect() as connection:
             rows = connection.execute(text(
+                "SELECT schema_name FROM information_schema.schemata "
+                "ORDER BY schema_name"
+            )).mappings().all()
+    finally:
+        engine.dispose()
+    excluded = {"information_schema", "pg_catalog"}
+    schemas = [str(row["schema_name"]) for row in rows
+               if str(row["schema_name"]) not in excluded
+               and not str(row["schema_name"]).lower().startswith("pg_")]
+    default_schema = str(config.get("sourceSchema") or "").strip()
+    return {"schemas": schemas, "defaultSchema": default_schema}
+
+
+def _list_database_source_tables(source_id: Any, schemas: list[str] | None = None) -> dict[str, Any]:
+    """Read table names through the same SQLAlchemy credential path as 47313."""
+    _, config = _database_source_config(source_id)
+    from sqlalchemy import text
+
+    selected = schemas if schemas is not None else config.get("selectedSchemas")
+    if not isinstance(selected, list) or not selected:
+        selected = [str(config.get("sourceSchema") or "public")]
+    selected = list(dict.fromkeys(str(schema).strip() for schema in selected if str(schema).strip()))
+    if not selected:
+        raise ClientInputError("至少选择一个 Schema", status=422)
+    engine = _database_source_engine(config)
+    try:
+        with engine.connect() as connection:
+            placeholders = ", ".join(f":schema_{index}" for index in range(len(selected)))
+            params = {f"schema_{index}": schema for index, schema in enumerate(selected)}
+            rows = connection.execute(text(
                 "SELECT table_schema, table_name, table_type "
                 "FROM information_schema.tables "
-                "WHERE table_schema = :schema "
+                f"WHERE table_schema IN ({placeholders}) "
                 "AND table_type IN ('BASE TABLE', 'VIEW') "
-                "ORDER BY table_name"
-            ), {"schema": schema}).mappings().all()
+                "ORDER BY table_schema, table_name"
+            ), params).mappings().all()
     finally:
         engine.dispose()
     return {
-        "schema": schema,
+        "schemas": selected,
+        "schema": selected[0] if len(selected) == 1 else "",
         "tables": [{"schema": row["table_schema"], "name": row["table_name"],
                     "type": row["table_type"]}
                    for row in rows],
@@ -249,7 +297,8 @@ def _is_table_count_request(prompt: Any) -> bool:
 
 def _table_count_answer(run: "ModelingRun") -> str:
     if run.database_source_id:
-        result = _list_database_source_tables(run.database_source_id)
+        selected_schemas = (run.database or {}).get("selectedSchemas") if isinstance(run.database, dict) else None
+        result = _list_database_source_tables(run.database_source_id, selected_schemas)
     else:
         raise ClientInputError("当前运行没有可查询的数据源", status=422)
     counts = Counter(str(item.get("type") or "").upper() for item in result.get("tables", []))
@@ -261,18 +310,24 @@ def _table_count_answer(run: "ModelingRun") -> str:
             f"{base_tables} 张物理表、{views} 个视图。按表清单口径，当前共有 {total} 个对象；"
             "本轮按你的要求只回答数量，不启动建模。")
 RUN_STATES = {
-    "CREATED", "INPUT_READY", "QUEUED", "ANALYZING", "VALIDATING", "READY_FOR_EXPORT", "FAILED",
+    "CREATED", "INPUT_READY", "QUEUED", "CLAIMED", "ANALYZING", "VALIDATING",
+    "READY_FOR_EXPORT", "SUCCEEDED", "CANCELLING", "CANCELLED", "FAILED", "BLOCKED",
 }
 RUN_TRANSITIONS = {
-    "CREATED": {"INPUT_READY", "QUEUED", "ANALYZING", "VALIDATING", "FAILED"},
-    "INPUT_READY": {"INPUT_READY", "QUEUED", "ANALYZING", "VALIDATING", "FAILED"},
-    "QUEUED": {"ANALYZING", "FAILED"},
+    "CREATED": {"INPUT_READY", "QUEUED", "ANALYZING", "VALIDATING", "FAILED", "BLOCKED"},
+    "INPUT_READY": {"INPUT_READY", "QUEUED", "ANALYZING", "VALIDATING", "FAILED", "BLOCKED"},
+    "QUEUED": {"CLAIMED", "CANCELLED", "FAILED"},
+    "CLAIMED": {"ANALYZING", "CANCELLING", "FAILED"},
     # VALIDATING is an internal completion step; the public validate endpoint
     # still rejects ANALYZING through ModelingRunManager.validate().
-    "ANALYZING": {"VALIDATING", "READY_FOR_EXPORT", "FAILED"},
-    "VALIDATING": {"READY_FOR_EXPORT", "FAILED"},
-    "READY_FOR_EXPORT": set(),
+    "ANALYZING": {"VALIDATING", "READY_FOR_EXPORT", "SUCCEEDED", "CANCELLING", "FAILED", "BLOCKED"},
+    "VALIDATING": {"READY_FOR_EXPORT", "SUCCEEDED", "CANCELLING", "FAILED", "BLOCKED"},
+    "READY_FOR_EXPORT": {"SUCCEEDED"},
+    "SUCCEEDED": set(),
+    "CANCELLING": {"CANCELLED", "FAILED"},
+    "CANCELLED": {"QUEUED", "FAILED"},
     "FAILED": {"INPUT_READY", "QUEUED", "ANALYZING", "VALIDATING"},
+    "BLOCKED": {"INPUT_READY", "QUEUED", "ANALYZING", "VALIDATING"},
 }
 ARTIFACT_PARSE_ELEMENTS = {
     "business_objects.csv": "BUSINESS_OBJECT",
@@ -306,6 +361,45 @@ class StateTransitionError(RuntimeError):
         self.run_id = run_id
         self.previous = previous
         self.requested = requested
+
+
+class QueueLimitError(RuntimeError):
+    def __init__(self, code: str, message: str, *, details: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+
+class _RunHandle:
+    """Small compatibility handle with a Thread-like join API.
+
+    The actual work is owned by the bounded executor; this object only lets
+    existing callers wait for a run without reintroducing one thread per
+    queued run.
+    """
+    def __init__(self):
+        self._ready = threading.Event()
+        self._future: Future[Any] | None = None
+
+    def attach(self, future: Future[Any]) -> None:
+        self._future = future
+        self._ready.set()
+
+    def join(self, timeout: float | None = None) -> None:
+        if not self._ready.wait(timeout):
+            return
+        future = self._future
+        if future is not None:
+            try:
+                future.result(timeout=timeout)
+            except Exception:
+                # The worker persists its failure on the run.  join mirrors
+                # Thread.join and does not rethrow worker exceptions.
+                return
+
+    def is_alive(self) -> bool:
+        future = self._future
+        return bool(future is None or not future.done())
 
 
 def _normalize_requested_artifacts(value: Any) -> list[str]:
@@ -343,9 +437,15 @@ def _normalize_database_config(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         raise ClientInputError("database must be an object", status=422)
     config = dict(value)
-    required = ("host", "username", "password", "database")
+    allow_empty_password = config.get("allowEmptyPassword", False)
+    if not isinstance(allow_empty_password, bool):
+        raise ClientInputError("database.allowEmptyPassword must be a boolean", status=422)
+    required = ("host", "username", "database")
     missing = [name for name in required if not isinstance(config.get(name), str)
                or not config[name].strip()]
+    if not allow_empty_password and (not isinstance(config.get("password"), str)
+                                     or not config["password"].strip()):
+        missing.append("password")
     if missing:
         raise ClientInputError(
             "database is missing required connection fields",
@@ -361,6 +461,10 @@ def _normalize_database_config(value: Any) -> dict[str, Any] | None:
     for name in ("dbType", "sourceSchema"):
         if name in config and config[name] is not None and not isinstance(config[name], str):
             raise ClientInputError(f"database.{name} must be a string", status=422)
+    if "selectedSchemas" in config:
+        if not isinstance(config["selectedSchemas"], list) or not all(
+                isinstance(item, str) and item.strip() for item in config["selectedSchemas"]):
+            raise ClientInputError("database.selectedSchemas must be an array of strings", status=422)
     if "selectedTables" in config:
         if not isinstance(config["selectedTables"], list) or not all(
                 isinstance(item, str) and item.strip() for item in config["selectedTables"]):
@@ -397,6 +501,8 @@ def _safe_relpath(value: str) -> str:
 class ModelingRun:
     run_id: str
     root: str
+    user_id: str = "anonymous"
+    idempotency_key: str = ""
     status: str = "CREATED"
     source_mode: str = "NATURAL_LANGUAGE"
     prompt: str = ""
@@ -407,6 +513,14 @@ class ModelingRun:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     error: str = ""
+    attempt_id: str = ""
+    attempt_number: int = 0
+    worker_id: str = ""
+    claimed_at: float = 0.0
+    heartbeat_at: float = 0.0
+    lease_expires_at: float = 0.0
+    cancel_requested: bool = False
+    result_attempt_id: str = ""
     events: list[dict[str, Any]] = field(default_factory=list)
     state_lock: threading.RLock = field(default_factory=threading.RLock,
                                          repr=False, compare=False)
@@ -417,6 +531,8 @@ class ModelingRun:
             "runId": self.run_id,
             "workspaceId": self.run_id,
             "root": self.root,
+            "userId": self.user_id,
+            "idempotencyKey": self.idempotency_key or None,
             "status": self.status,
             "sourceMode": self.source_mode,
             "prompt": self.prompt,
@@ -428,6 +544,14 @@ class ModelingRun:
             "eventsCount": len(self.events),
             "databaseConfigured": bool(self.database),
             "model": self.model,
+            "attemptId": self.attempt_id or None,
+            "attemptNumber": self.attempt_number,
+            "workerId": self.worker_id or None,
+            "claimedAt": self.claimed_at or None,
+            "heartbeatAt": self.heartbeat_at or None,
+            "leaseExpiresAt": self.lease_expires_at or None,
+            "cancelRequested": self.cancel_requested,
+            "resultAttemptId": self.result_attempt_id or None,
         }
         if include_events:
             result["events"] = self.events
@@ -443,15 +567,27 @@ class RunStore:
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.index_path = self.root / ".runs.json"
+        self.repository = SQLiteRunRepository(self.root / ".runs.sqlite3")
         self.lock = threading.RLock()
         # Event journals are per-run files.  Keep checkpoint bookkeeping out
         # of the store lock so concurrent runs do not serialize every streamed
         # thinking event behind the global run index lock.
         self._checkpoint_lock = threading.RLock()
         self.runs: dict[str, ModelingRun] = {}
+        self._managers: weakref.WeakSet[Any] = weakref.WeakSet()
         self._events_since_checkpoint: dict[str, int] = {}
         self._last_event_checkpoint: dict[str, float] = {}
         self._load()
+
+    def register_manager(self, manager: Any) -> None:
+        self._managers.add(manager)
+
+    def close_managers(self) -> None:
+        for manager in list(self._managers):
+            try:
+                manager.close()
+            except Exception:
+                continue
 
     @staticmethod
     def _events_path(run: ModelingRun) -> Path:
@@ -487,6 +623,63 @@ class RunStore:
                        for event in journal})
         return [merged[key] for key in sorted(merged)]
 
+    def _hydrate_repository_item(self, item: dict[str, Any]) -> ModelingRun:
+        run = ModelingRun(
+            run_id=str(item["runId"]), root=str(item["root"]),
+            user_id=str(item.get("userId") or "anonymous"),
+            idempotency_key=str(item.get("idempotencyKey") or ""),
+            status=str(item.get("status", "CREATED")),
+            source_mode=str(item.get("sourceMode", "NATURAL_LANGUAGE")),
+            prompt=str(item.get("prompt", "")),
+            requested_artifacts=list(item.get("requestedArtifacts") or DEFAULT_ARTIFACTS),
+            database_source_id=str(item.get("databaseSourceId") or ""),
+            database=(dict(item["database"]) if isinstance(item.get("database"), dict) else None),
+            model=str(item.get("model") or ""),
+            created_at=float(item.get("createdAt", time.time())),
+            updated_at=float(item.get("updatedAt", time.time())),
+            error=str(item.get("error", "")),
+            attempt_id=str(item.get("attemptId") or ""),
+            attempt_number=int(item.get("attemptNumber") or 0),
+            worker_id=str(item.get("workerId") or ""),
+            claimed_at=float(item.get("claimedAt") or 0),
+            heartbeat_at=float(item.get("heartbeatAt") or 0),
+            lease_expires_at=float(item.get("leaseExpiresAt") or 0),
+            cancel_requested=bool(item.get("cancelRequested", False)),
+            result_attempt_id=str(item.get("resultAttemptId") or ""),
+            events=[],
+        )
+        run.events = self._read_event_journal(run, [])
+        return run
+
+    def refresh_from_repository(self) -> None:
+        """Refresh run metadata so separate API/worker processes converge."""
+        with self.lock:
+            for item in self.repository.load_all():
+                run_id = str(item.get("runId") or "")
+                if not run_id:
+                    continue
+                existing = self.runs.get(run_id)
+                if existing is None:
+                    self.runs[run_id] = self._hydrate_repository_item(item)
+                    continue
+                if float(item.get("updatedAt") or 0) <= existing.updated_at:
+                    continue
+                with existing.state_lock:
+                    existing.status = str(item.get("status") or existing.status)
+                    existing.error = str(item.get("error") or "")
+                    existing.user_id = str(item.get("userId") or existing.user_id)
+                    existing.prompt = str(item.get("prompt") or existing.prompt)
+                    existing.model = str(item.get("model") or existing.model)
+                    existing.attempt_id = str(item.get("attemptId") or "")
+                    existing.attempt_number = int(item.get("attemptNumber") or 0)
+                    existing.worker_id = str(item.get("workerId") or "")
+                    existing.claimed_at = float(item.get("claimedAt") or 0)
+                    existing.heartbeat_at = float(item.get("heartbeatAt") or 0)
+                    existing.lease_expires_at = float(item.get("leaseExpiresAt") or 0)
+                    existing.cancel_requested = bool(item.get("cancelRequested", False))
+                    existing.result_attempt_id = str(item.get("resultAttemptId") or "")
+                    existing.updated_at = float(item.get("updatedAt") or existing.updated_at)
+
     def _append_event_journal(self, run: ModelingRun, event: dict[str, Any]) -> None:
         path = self._events_path(run)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -504,13 +697,22 @@ class RunStore:
             handle.flush()
 
     def _load(self) -> None:
-        if not self.index_path.exists():
+        repository_items = self.repository.load_all()
+        if repository_items:
+            raw_items = repository_items
+        elif self.index_path.exists():
+            try:
+                raw_items = json.loads(self.index_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                raw_items = []
+        else:
             return
         try:
-            raw = json.loads(self.index_path.read_text(encoding="utf-8"))
-            for item in raw if isinstance(raw, list) else []:
+            for item in raw_items if isinstance(raw_items, list) else []:
                 run = ModelingRun(
                     run_id=str(item["runId"]), root=str(item["root"]),
+                    user_id=str(item.get("userId") or "anonymous"),
+                    idempotency_key=str(item.get("idempotencyKey") or ""),
                     status=str(item.get("status", "CREATED")),
                     source_mode=str(item.get("sourceMode", "NATURAL_LANGUAGE")),
                     prompt=str(item.get("prompt", "")),
@@ -522,6 +724,14 @@ class RunStore:
                     created_at=float(item.get("createdAt", time.time())),
                     updated_at=float(item.get("updatedAt", time.time())),
                     error=str(item.get("error", "")),
+                    attempt_id=str(item.get("attemptId") or ""),
+                    attempt_number=int(item.get("attemptNumber") or 0),
+                    worker_id=str(item.get("workerId") or ""),
+                    claimed_at=float(item.get("claimedAt") or 0),
+                    heartbeat_at=float(item.get("heartbeatAt") or 0),
+                    lease_expires_at=float(item.get("leaseExpiresAt") or 0),
+                    cancel_requested=bool(item.get("cancelRequested", False)),
+                    result_attempt_id=str(item.get("resultAttemptId") or ""),
                     events=[],
                 )
                 legacy_events = [event for event in (item.get("events") or [])
@@ -533,21 +743,27 @@ class RunStore:
             # inaccessible.  New runs can still be created and the index will
             # be repaired on the next save.
             self.runs = {}
+        if not repository_items and self.runs:
+            # Migrate the legacy JSON index once; subsequent state changes use
+            # the shared repository as the conditional-write source.
+            self._save()
         self._recover_interrupted_runs()
 
     def _recover_interrupted_runs(self) -> None:
         changed = False
         for run in self.runs.values():
-            if run.status not in {"QUEUED", "ANALYZING", "VALIDATING"}:
+            if run.status not in {"CLAIMED", "ANALYZING", "VALIDATING"}:
                 continue
             previous = run.status
             reason = {
-                "QUEUED": "SERVER_RESTARTED_WHILE_QUEUED",
+                "CLAIMED": "SERVER_RESTARTED_AFTER_WORKER_CLAIM",
                 "ANALYZING": "SERVER_RESTARTED_DURING_ANALYSIS",
                 "VALIDATING": "SERVER_RESTARTED_DURING_VALIDATION",
             }[previous]
             run.status = "FAILED"
             run.error = reason
+            run.worker_id = ""
+            run.lease_expires_at = 0.0
             run.updated_at = time.time()
             event = {"seq": len(run.events), "type": "run_interrupted",
                      "timestamp": run.updated_at,
@@ -558,12 +774,15 @@ class RunStore:
         if changed:
             self._save()
 
-    def _save(self) -> None:
+    def _save(self, *, persist_repository: bool = True) -> None:
         with self.lock:
             snapshots = []
             for run in self.runs.values():
                 with run.state_lock:
                     snapshots.append(run.as_dict(include_database=True, include_events=False))
+            if persist_repository:
+                for snapshot in snapshots:
+                    self.repository.upsert(snapshot)
             _atomic_write(self.index_path, _json_dump(snapshots))
 
     def _run_root(self, run_id: str) -> Path:
@@ -588,7 +807,9 @@ class RunStore:
 
     def create(self, source_mode: str, prompt: str, artifacts: Any = None,
                database: Any = None, database_source_id: Any = None,
-               selected_tables: Any = None) -> ModelingRun:
+               selected_tables: Any = None, selected_schemas: Any = None,
+               user_id: str = "anonymous",
+               idempotency_key: str | None = None) -> ModelingRun:
         # Validate all client-controlled options before creating the run root.
         # In particular, an invalid requestedArtifacts value must not leave an
         # unregistered directory behind.
@@ -602,7 +823,17 @@ class RunStore:
         if normalized_database is not None and selected_tables is not None:
             normalized_database["selectedTables"] = selected_tables
             normalized_database = _normalize_database_config(normalized_database)
+        if normalized_database is not None and selected_schemas is not None:
+            normalized_database["selectedSchemas"] = selected_schemas
+            normalized_database = _normalize_database_config(normalized_database)
+        normalized_user = str(user_id or "anonymous").strip() or "anonymous"
+        normalized_key = str(idempotency_key or "").strip()
         with self.lock:
+            if normalized_key:
+                for existing in self.runs.values():
+                    if (existing.user_id == normalized_user
+                            and existing.idempotency_key == normalized_key):
+                        return existing
             run_id = f"run_{uuid.uuid4().hex}"
             root = self._run_root(run_id)
             root.mkdir(parents=True, exist_ok=False)
@@ -612,6 +843,7 @@ class RunStore:
                 self._ensure_alias(root, alias, target)
             normalized_prompt = str(prompt or "").strip() or DEFAULT_MODELING_PROMPT
             run = ModelingRun(run_id=run_id, root=str(root),
+                              user_id=normalized_user, idempotency_key=normalized_key,
                               source_mode=str(source_mode or "NATURAL_LANGUAGE"),
                               prompt=normalized_prompt, requested_artifacts=requested,
                               database_source_id=source_id,
@@ -620,16 +852,81 @@ class RunStore:
             self._save()
             return run
 
+    def counts(self, *, user_id: str | None = None) -> dict[str, int]:
+        with self.lock:
+            runs = [run for run in self.runs.values()
+                    if user_id is None or run.user_id == user_id]
+            return {
+                "active": sum(run.status in {"CLAIMED", "ANALYZING", "VALIDATING", "CANCELLING"}
+                               for run in runs),
+                "queued": sum(run.status == "QUEUED" for run in runs),
+            }
+
+    def list_for_user(self, user_id: str) -> list[ModelingRun]:
+        with self.lock:
+            return [run for run in self.runs.values() if run.user_id == user_id]
+
+    def request_cancel(self, run: ModelingRun) -> None:
+        if run.status == "QUEUED":
+            self.transition_and_update(run, "CANCELLED", allowed_from={"QUEUED"},
+                                       changes={"cancel_requested": True})
+        elif run.status in {"CLAIMED", "ANALYZING", "VALIDATING"}:
+            self.transition_and_update(
+                run, "CANCELLING",
+                allowed_from={"CLAIMED", "ANALYZING", "VALIDATING"},
+                changes={"cancel_requested": True})
+        else:
+            raise StateTransitionError(run.run_id, run.status, "CANCELLING")
+        self.append_event(run, "run_cancellation_requested")
+
+    def heartbeat(self, run: ModelingRun, *, worker_id: str,
+                  lease_seconds: float) -> None:
+        with self.lock, run.state_lock:
+            if run.worker_id != worker_id or run.status not in {
+                    "CLAIMED", "ANALYZING", "VALIDATING", "CANCELLING"}:
+                return
+            now = time.time()
+        try:
+            self.transition_and_update(
+                run, run.status, allowed_from={run.status},
+                changes={"heartbeat_at": now, "lease_expires_at": now + lease_seconds})
+        except StateTransitionError:
+            # A cancellation, failure or another worker's terminal update won
+            # the CAS; the heartbeat must not resurrect it.
+            return
+
     def get(self, run_id: str) -> ModelingRun:
         with self.lock:
             if run_id not in self.runs:
-                raise KeyError(run_id)
-            return self.runs[run_id]
+                snapshot = self.repository.get(run_id)
+                if snapshot:
+                    self.runs[run_id] = self._hydrate_repository_item(snapshot)
+                else:
+                    raise KeyError(run_id)
+            run = self.runs[run_id]
+            snapshot = self.repository.get(run_id)
+            if snapshot and float(snapshot.get("updatedAt") or 0) > run.updated_at:
+                with run.state_lock:
+                    run.status = str(snapshot.get("status") or run.status)
+                    run.error = str(snapshot.get("error") or "")
+                    run.prompt = str(snapshot.get("prompt") or run.prompt)
+                    run.model = str(snapshot.get("model") or run.model)
+                    run.attempt_id = str(snapshot.get("attemptId") or "")
+                    run.attempt_number = int(snapshot.get("attemptNumber") or 0)
+                    run.worker_id = str(snapshot.get("workerId") or "")
+                    run.claimed_at = float(snapshot.get("claimedAt") or 0)
+                    run.heartbeat_at = float(snapshot.get("heartbeatAt") or 0)
+                    run.lease_expires_at = float(snapshot.get("leaseExpiresAt") or 0)
+                    run.cancel_requested = bool(snapshot.get("cancelRequested", False))
+                    run.result_attempt_id = str(snapshot.get("resultAttemptId") or "")
+                    run.updated_at = float(snapshot.get("updatedAt") or run.updated_at)
+            return run
 
     def remove(self, run: ModelingRun) -> None:
         """Rollback a run that failed during initial persistence."""
         with self.lock, run.state_lock:
             self.runs.pop(run.run_id, None)
+            self.repository.delete(run.run_id)
             root = Path(run.root)
             if root.exists():
                 import shutil
@@ -646,6 +943,35 @@ class RunStore:
                     setattr(run, key, value)
                 run.updated_at = time.time()
                 self._save()
+
+    def transition_and_update(self, run: ModelingRun, target: str, *,
+                              allowed_from: set[str] | None = None,
+                              changes: dict[str, Any] | None = None) -> None:
+        """Atomically validate, transition and update run metadata.
+
+        This is the write path used by queue admission and worker claim so a
+        second API/worker process cannot win the same source-state transition
+        after the first process has read it.
+        """
+        changes = dict(changes or {})
+        with self.lock, run.state_lock:
+            previous = run.status
+            previous_updated_at = run.updated_at
+            previous_values = {key: getattr(run, key) for key in changes if hasattr(run, key)}
+            self._transition_locked(run, target, allowed_from=allowed_from)
+            for key, value in changes.items():
+                setattr(run, key, value)
+            run.updated_at = time.time()
+            snapshot = run.as_dict(include_database=True, include_events=False)
+            if not self.repository.compare_and_swap(
+                    snapshot, expected_status=previous,
+                    expected_updated_at=previous_updated_at):
+                run.status = previous
+                run.updated_at = previous_updated_at
+                for key, value in previous_values.items():
+                    setattr(run, key, value)
+                raise StateTransitionError(run.run_id, previous, str(target))
+            self._save()
 
     def _transition_locked(self, run: ModelingRun, target: str,
                            *, allowed_from: set[str] | None = None) -> None:
@@ -667,10 +993,21 @@ class RunStore:
             # The source-state check and mutation intentionally share this
             # critical section.  Callers must not check run.status first and
             # then call transition after releasing the lock.
+            previous = run.status
+            previous_updated_at = run.updated_at
+            previous_error = run.error
             self._transition_locked(run, target, allowed_from=allowed_from)
             if error is not None:
                 run.error = str(error)
             run.updated_at = time.time()
+            snapshot = run.as_dict(include_database=True, include_events=False)
+            if not self.repository.compare_and_swap(
+                    snapshot, expected_status=previous,
+                    expected_updated_at=previous_updated_at):
+                run.status = previous
+                run.error = previous_error
+                run.updated_at = previous_updated_at
+                raise StateTransitionError(run.run_id, previous, str(target))
             self._save()
 
     def restore_after_question(self, run: ModelingRun, target: str) -> None:
@@ -694,9 +1031,10 @@ class RunStore:
 
     def append_event(self, run: ModelingRun, event_type: str, **payload: Any) -> dict[str, Any]:
         with run.state_lock:
-            event = {"seq": len(run.events), "type": event_type, "timestamp": time.time(), **payload}
+            event = {"seq": len(run.events), "type": event_type, "timestamp": time.time(),
+                     "userId": run.user_id, "runId": run.run_id,
+                     "attemptId": run.attempt_id or None, **payload}
             run.events.append(event)
-            run.updated_at = event["timestamp"]
             self._append_event_journal(run, event)
             now = event["timestamp"]
         # Journal append is already serialized per run.  Only the occasional
@@ -710,7 +1048,11 @@ class RunStore:
             else:
                 self._events_since_checkpoint[run.run_id] = count
         if checkpoint:
-            self._save()
+            # Event journals are append-only and intentionally do not write a
+            # stale in-memory run snapshot over a newer state committed by a
+            # different API/worker process.  State mutations call _save with
+            # repository persistence enabled.
+            self._save(persist_repository=False)
             with self._checkpoint_lock:
                 current = self._events_since_checkpoint.get(run.run_id, 0)
                 self._events_since_checkpoint[run.run_id] = max(0, current - count)
@@ -853,32 +1195,128 @@ class RunStore:
 
 
 class ModelingRunManager:
-    def __init__(self, store: RunStore, max_active_runs: int | None = None):
+    """Fair, bounded scheduler for standalone modeling runs.
+
+    Run state remains in RunStore; this manager owns only transient executor
+    futures and scheduling metadata.  A queued run never gets a worker
+    thread, and a claimed run is protected by the store's atomic transition.
+    """
+    def __init__(self, store: RunStore, max_active_runs: int | None = None,
+                 max_active_per_user: int | None = None,
+                 max_queued_per_user: int | None = None,
+                 max_queued_runs: int | None = None,
+                 lease_seconds: float | None = None,
+                 heartbeat_seconds: float | None = None):
         self.store = store
-        self.threads: dict[str, threading.Thread] = {}
+        self.store.register_manager(self)
+        self.threads: dict[str, _RunHandle] = {}
         self.execution_modes: dict[str, tuple[bool, str]] = {}
-        configured_limit = max_active_runs
-        if configured_limit is None:
-            configured_limit = os.environ.get("MODELING_SERVER_MAX_ACTIVE_RUNS", str(DEFAULT_MAX_ACTIVE_RUNS))
-        try:
-            configured_limit = int(configured_limit)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("MODELING_SERVER_MAX_ACTIVE_RUNS must be an integer") from exc
-        if not 1 <= configured_limit <= MAX_ACTIVE_RUNS_LIMIT:
-            raise ValueError(
-                f"MODELING_SERVER_MAX_ACTIVE_RUNS must be between 1 and {MAX_ACTIVE_RUNS_LIMIT}")
-        self.max_active_runs = configured_limit
-        self.active_slots = threading.BoundedSemaphore(configured_limit)
-        # Disable the legacy web-task persistence at the adapter boundary, not
-        # only immediately before one worker starts.  This protects every
-        # standalone code path, including future helpers added to the reused
-        # Task implementation.
+        self.scheduler_lock = threading.RLock()
+        self.scheduler_wakeup = threading.Condition(self.scheduler_lock)
+        self.worker_futures: dict[str, Future[Any]] = {}
+        self.stop_event = threading.Event()
+        self.worker_id = f"standalone-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self.max_online_users = int(os.environ.get("MODELING_SERVER_MAX_ONLINE_USERS",
+                                                   str(DEFAULT_MAX_ONLINE_USERS)))
+        if self.max_online_users < 1:
+            raise ValueError("MODELING_SERVER_MAX_ONLINE_USERS must be positive")
+        self.online_users: dict[str, float] = {}
+
+        def configured(value: int | None, env_name: str, default: int, limit: int) -> int:
+            raw = value if value is not None else os.environ.get(env_name, str(default))
+            try:
+                result = int(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{env_name} must be an integer") from exc
+            if not 1 <= result <= limit:
+                raise ValueError(f"{env_name} must be between 1 and {limit}")
+            return result
+
+        self.max_active_runs = configured(max_active_runs, "MODELING_SERVER_MAX_ACTIVE_RUNS",
+                                          DEFAULT_MAX_ACTIVE_RUNS, MAX_ACTIVE_RUNS_LIMIT)
+        self.max_active_per_user = configured(max_active_per_user,
+                                              "MODELING_SERVER_MAX_ACTIVE_PER_USER",
+                                              DEFAULT_MAX_ACTIVE_PER_USER, MAX_ACTIVE_RUNS_LIMIT)
+        self.max_active_per_user = min(self.max_active_per_user, self.max_active_runs)
+        self.max_queued_per_user = configured(max_queued_per_user,
+                                              "MODELING_SERVER_MAX_QUEUED_PER_USER",
+                                              DEFAULT_MAX_QUEUED_PER_USER, MAX_QUEUED_RUNS_LIMIT)
+        self.max_queued_runs = configured(max_queued_runs, "MODELING_SERVER_MAX_QUEUED",
+                                          DEFAULT_MAX_QUEUED_RUNS, MAX_QUEUED_RUNS_LIMIT)
+        self.lease_seconds = float(lease_seconds if lease_seconds is not None else
+                                   os.environ.get("MODELING_SERVER_LEASE_SECONDS", DEFAULT_LEASE_SECONDS))
+        self.heartbeat_seconds = float(heartbeat_seconds if heartbeat_seconds is not None else
+                                       os.environ.get("MODELING_SERVER_HEARTBEAT_SECONDS",
+                                                      DEFAULT_HEARTBEAT_SECONDS))
+        if self.lease_seconds <= 0 or self.heartbeat_seconds <= 0:
+            raise ValueError("lease and heartbeat intervals must be positive")
+        provider_limit = int(os.environ.get("MODELING_PROVIDER_CONCURRENCY", str(self.max_active_runs)))
+        database_limit = int(os.environ.get("MODELING_DATABASE_CONCURRENCY", str(self.max_active_runs)))
+        if provider_limit < 1 or database_limit < 1:
+            raise ValueError("provider/database concurrency must be positive")
+        self.provider_concurrency = provider_limit
+        self.database_concurrency = database_limit
+        self.provider_slots = threading.BoundedSemaphore(provider_limit)
+        self.database_slots = threading.BoundedSemaphore(database_limit)
+        self.executor = ThreadPoolExecutor(max_workers=self.max_active_runs,
+                                           thread_name_prefix="modeling-worker")
+        self.scheduler_thread = threading.Thread(target=self._scheduler_loop,
+                                                 name="modeling-scheduler", daemon=True)
+        self.scheduler_thread.start()
+        # Disable legacy web-task persistence at the adapter boundary.  The
+        # standalone manager has no authority to write 47313's task index.
         try:
             from oc_codex_server import configure_task_persistence
             configure_task_persistence(False)
         except ImportError:
-            # API-only tests can use RunStore without the LLM execution stack.
             pass
+
+    def close(self) -> None:
+        self.stop_event.set()
+        with self.scheduler_wakeup:
+            self.scheduler_wakeup.notify_all()
+        self.executor.shutdown(wait=True, cancel_futures=False)
+        if self.scheduler_thread is not threading.current_thread():
+            self.scheduler_thread.join(timeout=2)
+
+    def metrics(self) -> dict[str, Any]:
+        counts = self.store.counts()
+        user_counts = {}
+        with self.store.lock:
+            for run in self.store.runs.values():
+                user_counts.setdefault(run.user_id, {"active": 0, "queued": 0})
+                if run.status in {"CLAIMED", "ANALYZING", "VALIDATING", "CANCELLING"}:
+                    user_counts[run.user_id]["active"] += 1
+                elif run.status == "QUEUED":
+                    user_counts[run.user_id]["queued"] += 1
+            queued = [run.created_at for run in self.store.runs.values()
+                      if run.status == "QUEUED"]
+        return {
+            "onlineUsers": len(self.online_users),
+            "maxOnlineUsers": self.max_online_users,
+            "activeRuns": counts["active"], "queuedRuns": counts["queued"],
+            "maxActiveRuns": self.max_active_runs,
+            "maxActivePerUser": self.max_active_per_user,
+            "maxQueuedPerUser": self.max_queued_per_user,
+            "maxQueuedRuns": self.max_queued_runs,
+            "oldestQueuedSeconds": max(0.0, time.time() - min(queued)) if queued else 0.0,
+            "providerConcurrency": self.provider_concurrency,
+            "databaseConcurrency": self.database_concurrency,
+            "users": user_counts,
+        }
+
+    def touch_user(self, user_id: str) -> None:
+        now = time.time()
+        with self.scheduler_lock:
+            self.online_users = {
+                key: seen for key, seen in self.online_users.items()
+                if now - seen < 30 * 60
+            }
+            if user_id not in self.online_users and len(self.online_users) >= self.max_online_users:
+                raise QueueLimitError(
+                    "ONLINE_USER_LIMIT_REACHED", "在线用户数已达到上限",
+                    details={"maxOnlineUsers": self.max_online_users})
+            self.online_users[user_id] = now
 
     def _context(self, run: ModelingRun) -> dict[str, Any]:
         context = {
@@ -913,8 +1351,6 @@ class ModelingRunManager:
 
     def execute(self, run: ModelingRun, prompt: str | None = None,
                 model: str | None = None, intent: str = "auto") -> None:
-        if self.threads.get(run.run_id) and self.threads[run.run_id].is_alive():
-            raise RuntimeError("modeling run is already executing")
         requested_model = str(model or "").strip() if model is not None else None
         if requested_model:
             allowed_models = {item["id"] for item in _model_catalog()["models"]}
@@ -936,48 +1372,177 @@ class ModelingRunManager:
             self.store.append_event(run, "assistant", text=_table_count_answer(run))
             self.store.append_event(run, "done", status="INPUT_READY")
             return
-        with self.store.lock, run.state_lock:
-            return_status = "FAILED" if run.status == "FAILED" else "INPUT_READY"
-            self.store._transition_locked(
-                run, "QUEUED", allowed_from={"CREATED", "INPUT_READY", "FAILED"})
+        with self.scheduler_wakeup, self.store.lock, run.state_lock:
+            self.store.refresh_from_repository()
+            if run.status in {"QUEUED", "CLAIMED", "ANALYZING", "VALIDATING", "CANCELLING"}:
+                raise StateTransitionError(run.run_id, run.status, "QUEUED")
+            queued_global = self.store.counts()["queued"]
+            queued_user = self.store.counts(user_id=run.user_id)["queued"]
+            if queued_user >= self.max_queued_per_user:
+                raise QueueLimitError(
+                    "USER_QUEUE_LIMIT_REACHED",
+                    "该用户排队任务已达到上限",
+                    details={"maxQueuedPerUser": self.max_queued_per_user})
+            if queued_global >= self.max_queued_runs:
+                raise QueueLimitError(
+                    "GLOBAL_QUEUE_FULL", "全局排队任务已达到上限",
+                    details={"maxQueuedRuns": self.max_queued_runs})
+            return_status = run.status if run.status in {"FAILED", "BLOCKED"} else "INPUT_READY"
+            changes = {"error": ""}
             if prompt is not None:
-                run.prompt = str(prompt)
+                changes["prompt"] = str(prompt)
             if model is not None:
-                run.model = requested_model
-            run.error = ""
-            run.updated_at = time.time()
-            self.store._save()
+                changes["model"] = requested_model
+            self.store.transition_and_update(
+                run, "QUEUED", allowed_from={"CREATED", "INPUT_READY", "FAILED", "BLOCKED"},
+                changes=changes)
             self.execution_modes[run.run_id] = (conversational, return_status)
+            self.threads[run.run_id] = _RunHandle()
         self.store.append_event(run, "run_queued", maxActiveRuns=self.max_active_runs)
-        thread = threading.Thread(target=self._run_worker, args=(run,),
-                                  name=f"modeling-{run.run_id}", daemon=True)
-        self.threads[run.run_id] = thread
-        thread.start()
+        with self.scheduler_wakeup:
+            self.scheduler_wakeup.notify_all()
+
+    def _scheduler_loop(self) -> None:
+        while not self.stop_event.is_set():
+            if not self.store.root.exists():
+                self.stop_event.set()
+                return
+            try:
+                self._recover_expired_leases()
+                self._dispatch()
+            except Exception:
+                # A scheduler loop must stay alive; individual run failures
+                # are persisted by their worker and never escape here.
+                pass
+            with self.scheduler_wakeup:
+                self.scheduler_wakeup.wait(timeout=0.25)
+
+    def _dispatch(self) -> None:
+        with self.scheduler_lock, self.store.lock:
+            self.store.refresh_from_repository()
+            for run_id, future in list(self.worker_futures.items()):
+                run = self.store.runs.get(run_id)
+                if future.done() and run is not None and run.status not in {
+                        "CLAIMED", "ANALYZING", "VALIDATING", "CANCELLING"}:
+                    self.worker_futures.pop(run_id, None)
+            live_worker_ids = {run_id for run_id, future in self.worker_futures.items()
+                               if not future.done()}
+            finished_local_ids = {run_id for run_id, future in self.worker_futures.items()
+                                  if future.done()}
+            claimed_without_worker = {run.run_id for run in self.store.runs.values()
+                                      if run.status == "CLAIMED"
+                                      and run.run_id not in self.worker_futures}
+            remote_active_ids = {run.run_id for run in self.store.runs.values()
+                                 if run.status in {"ANALYZING", "VALIDATING", "CANCELLING"}
+                                 and run.run_id not in finished_local_ids}
+            active = len(live_worker_ids | claimed_without_worker | remote_active_ids)
+            capacity = self.max_active_runs - active
+            if capacity <= 0:
+                return
+            queued = sorted((run for run in self.store.runs.values()
+                             if run.status == "QUEUED"),
+                            key=lambda item: (item.created_at, item.run_id))
+            selected: list[ModelingRun] = []
+            user_active: Counter[str] = Counter(
+                run.user_id for run in self.store.runs.values()
+                if run.run_id in live_worker_ids or run.run_id in claimed_without_worker
+                or run.run_id in remote_active_ids)
+            for run in queued:
+                if len(selected) >= capacity:
+                    break
+                if user_active[run.user_id] >= self.max_active_per_user:
+                    continue
+                now = time.time()
+                attempt_number = run.attempt_number + 1
+                try:
+                    self.store.transition_and_update(
+                        run, "CLAIMED", allowed_from={"QUEUED"},
+                        changes={
+                            "attempt_number": attempt_number,
+                            "attempt_id": f"{run.run_id}-attempt-{attempt_number}-{uuid.uuid4().hex[:8]}",
+                            "worker_id": self.worker_id,
+                            "claimed_at": now,
+                            "heartbeat_at": now,
+                            "lease_expires_at": now + self.lease_seconds,
+                            "cancel_requested": False,
+                        })
+                except StateTransitionError:
+                    continue
+                selected.append(run)
+                user_active[run.user_id] += 1
+        for run in selected:
+            future = self.executor.submit(self._run_worker, run)
+            self.worker_futures[run.run_id] = future
+            self.threads[run.run_id].attach(future)
+
+    def _recover_expired_leases(self) -> None:
+        now = time.time()
+        with self.store.lock:
+            expired = [run for run in self.store.runs.values()
+                       if run.status in {"CLAIMED", "ANALYZING", "VALIDATING"}
+                       and run.lease_expires_at and run.lease_expires_at < now
+                       and not (self.worker_futures.get(run.run_id)
+                                and not self.worker_futures[run.run_id].done())]
+        for run in expired:
+            try:
+                self.store.transition(run, "FAILED", error="WORKER_LEASE_EXPIRED",
+                                      allowed_from={"CLAIMED", "ANALYZING", "VALIDATING"})
+                self.store.append_event(run, "worker_lost", reason="WORKER_LEASE_EXPIRED",
+                                        attemptId=run.attempt_id)
+            except StateTransitionError:
+                continue
+
+    def _heartbeat(self, run: ModelingRun, stop: threading.Event) -> None:
+        while not stop.wait(self.heartbeat_seconds):
+            if not self.store.root.exists():
+                return
+            try:
+                self.store.heartbeat(run, worker_id=self.worker_id,
+                                     lease_seconds=self.lease_seconds)
+            except Exception:
+                # Shutdown/temporary workspace removal must not leak an
+                # unhandled exception from this best-effort background loop.
+                return
 
     def _run_worker(self, run: ModelingRun) -> None:
-        acquired = self.active_slots.acquire()
-        if not acquired:
-            self.store.transition(run, "FAILED", error="unable to acquire modeling worker slot",
-                                  allowed_from={"QUEUED"})
-            self.store.append_event(run, "run_failed", error=run.error)
-            return
         try:
-            self.store.transition(run, "ANALYZING", allowed_from={"QUEUED"})
-            self.store.append_event(run, "run_started", maxActiveRuns=self.max_active_runs)
-            self._execute(run)
+            if run.status == "CANCELLING":
+                self.store.transition(run, "CANCELLED", error="cancelled by user",
+                                      allowed_from={"CANCELLING"})
+                return
+            self.store.transition(run, "ANALYZING", allowed_from={"CLAIMED"})
+            self.store.append_event(run, "run_started", maxActiveRuns=self.max_active_runs,
+                                    workerId=self.worker_id, attemptId=run.attempt_id)
+            heartbeat_stop = threading.Event()
+            heartbeat_thread = threading.Thread(target=self._heartbeat,
+                                                 args=(run, heartbeat_stop), daemon=True)
+            heartbeat_thread.start()
+            with self.provider_slots:
+                if run.database is not None or run.database_source_id:
+                    with self.database_slots:
+                        self._execute(run)
+                else:
+                    self._execute(run)
+            heartbeat_stop.set()
+            if run.status == "CANCELLING":
+                self.store.transition(run, "CANCELLED", error="cancelled by user",
+                                      allowed_from={"CANCELLING"})
         except Exception as exc:  # noqa: BLE001 - queued worker failures are persisted.
-            if run.status in {"ANALYZING", "VALIDATING"}:
+            if run.status in {"CLAIMED", "ANALYZING", "VALIDATING", "CANCELLING"}:
                 self.store.transition(run, "FAILED", error=f"{type(exc).__name__}: {exc}")
             else:
                 self.store.update(run, error=f"{type(exc).__name__}: {exc}")
             self.store.append_event(run, "run_failed", error=run.error)
         finally:
-            self.active_slots.release()
+            with self.scheduler_wakeup:
+                self.scheduler_wakeup.notify_all()
 
     def _execute(self, run: ModelingRun) -> None:
         conversational, return_status = self.execution_modes.get(
             run.run_id, (False, "INPUT_READY"))
         try:
+            if run.cancel_requested:
+                return
             # The import is intentionally inside the worker: API-only tests do
             # not need model/provider dependencies, and 47313 has no shared
             # process state with this service.
@@ -1005,7 +1570,17 @@ class ModelingRunManager:
                 self.store.append_event(run, event.get("type", "agent_event"), **event)
 
             task.stream_turn(run.prompt, emit, conversational=conversational)
-            if task.status == "error":
+            if run.cancel_requested:
+                if run.status in {"ANALYZING", "VALIDATING"}:
+                    self.store.transition(run, "CANCELLING",
+                                          allowed_from={"ANALYZING", "VALIDATING"})
+                return
+            if task.status == "blocked":
+                self.store.transition(
+                    run, "BLOCKED", error=task.modeling_block_reason or "modeling execution blocked",
+                    allowed_from={"ANALYZING", "VALIDATING"})
+                self.store.append_event(run, "run_blocked", error=run.error)
+            elif task.status == "error":
                 self.store.transition(run, "FAILED", error="modeling execution failed")
                 self.store.append_event(run, "run_failed", error=run.error)
             elif conversational:
@@ -1035,7 +1610,7 @@ class ModelingRunManager:
         # analysis reaches ANALYZING completion.  The public endpoint has a
         # separate allow-list and can never use ANALYZING -> VALIDATING.
         allowed_from = ({"ANALYZING"} if internal
-                        else {"CREATED", "INPUT_READY", "FAILED"})
+                        else {"CREATED", "INPUT_READY", "FAILED", "BLOCKED"})
         self.store.transition(run, "VALIDATING", error="", allowed_from=allowed_from)
         try:
             result = finalize_semantic_model(Path(run.root) / "work",
@@ -1079,13 +1654,15 @@ def _authorized(handler: BaseHTTPRequestHandler) -> bool:
                    if expires_at <= now]
         for token in expired:
             _BROWSER_SESSIONS.pop(token, None)
+            _BROWSER_SESSION_USERS.pop(token, None)
         return bool(browser_token and _BROWSER_SESSIONS.get(browser_token, 0) > now)
 
 
-def _issue_browser_session() -> str:
+def _issue_browser_session(user_id: str = "browser") -> str:
     token = secrets.token_urlsafe(32)
     with _BROWSER_SESSION_LOCK:
         _BROWSER_SESSIONS[token] = time.time() + _BROWSER_SESSION_TTL
+        _BROWSER_SESSION_USERS[token] = user_id
     return token
 
 
@@ -1159,6 +1736,28 @@ class ModelingHandler(BaseHTTPRequestHandler):
             raise KeyError(run_id)
         return self.manager.store.get(run_id)
 
+    def _user_id(self) -> str:
+        supplied = (self.headers.get("X-Modeling-User") or
+                    self.headers.get("X-User-ID") or "").strip()
+        if supplied:
+            if len(supplied) > 128 or any(ch in supplied for ch in "\r\n"):
+                raise ClientInputError("invalid user identity", status=422)
+            self.manager.touch_user(supplied)
+            return supplied
+        cookie_header = self.headers.get("Cookie", "")
+        browser_token = next((part.strip().split("=", 1)[1]
+                              for part in cookie_header.split(";")
+                              if part.strip().startswith("standalone_session=") and "=" in part), "")
+        with _BROWSER_SESSION_LOCK:
+            user_id = _BROWSER_SESSION_USERS.get(browser_token, "anonymous")
+        self.manager.touch_user(user_id)
+        return user_id
+
+    def _owned_run(self, run: ModelingRun) -> ModelingRun:
+        if run.user_id != self._user_id():
+            raise KeyError(run.run_id)
+        return run
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/health":
@@ -1171,6 +1770,7 @@ class ModelingHandler(BaseHTTPRequestHandler):
                     "database_metadata": "on_demand",
                     "agent_runtime": "on_demand",
                 },
+                "concurrency": self.manager.metrics() if getattr(self, "manager", None) else {},
             })
             return
         if not parsed.path.startswith("/api/") and self._serve_frontend(parsed.path):
@@ -1179,8 +1779,11 @@ class ModelingHandler(BaseHTTPRequestHandler):
             self._send(401, {"error": "unauthorized"})
             return
         if parsed.path == "/api/modeling-runs":
+            user_id = self._user_id()
+            self.manager.store.refresh_from_repository()
             with self.manager.store.lock:
-                runs = sorted(self.manager.store.runs.values(),
+                runs = sorted((item for item in self.manager.store.runs.values()
+                               if item.user_id == user_id),
                               key=lambda item: item.updated_at, reverse=True)
                 self._send(200, {"runs": [run.as_dict(include_events=False) for run in runs]})
             return
@@ -1193,11 +1796,27 @@ class ModelingHandler(BaseHTTPRequestHandler):
             except (ClientInputError, OSError, RuntimeError, ValueError) as exc:
                 self._send(500, {"error": str(exc)})
             return
+        schemas_match = re.fullmatch(r"/api/modeling-data-sources/([^/]+)/schemas", parsed.path)
+        if schemas_match:
+            source_id = unquote(schemas_match.group(1))
+            try:
+                self._send(200, {"sourceId": source_id,
+                                 **_list_database_source_schemas(source_id)})
+            except ClientInputError as exc:
+                self._send(exc.status, {"error": str(exc), **exc.details})
+            except (OSError, RuntimeError, ValueError, ImportError) as exc:
+                self._send(502, {"error": f"无法读取数据库 Schema: {exc}"})
+            return
         tables_match = re.fullmatch(r"/api/modeling-data-sources/([^/]+)/tables", parsed.path)
         if tables_match:
+            source_id = unquote(tables_match.group(1))
             try:
-                result = _list_database_source_tables(unquote(tables_match.group(1)))
-                self._send(200, {"sourceId": unquote(tables_match.group(1)), **result})
+                requested_schemas = []
+                query = parse_qs(parsed.query)
+                for value in query.get("schema", []) + query.get("schemas", []):
+                    requested_schemas.extend(item.strip() for item in value.split(",") if item.strip())
+                result = _list_database_source_tables(source_id, requested_schemas or None)
+                self._send(200, {"sourceId": source_id, **result})
             except ClientInputError as exc:
                 self._send(exc.status, {"error": str(exc), **exc.details})
             except (OSError, RuntimeError, ValueError, ImportError) as exc:
@@ -1206,7 +1825,7 @@ class ModelingHandler(BaseHTTPRequestHandler):
         content_match = re.fullmatch(r"/api/modeling-runs/([^/]+)/files/content", parsed.path)
         if content_match:
             try:
-                run = self._run(unquote(content_match.group(1)))
+                run = self._owned_run(self._run(unquote(content_match.group(1))))
                 rel = (parse_qs(parsed.query).get("path") or [""])[0]
                 data = self.manager.store.read_file(run, rel)
                 self.send_response(200)
@@ -1224,7 +1843,7 @@ class ModelingHandler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
             return
         try:
-            run = self._run(unquote(match.group(1)))
+            run = self._owned_run(self._run(unquote(match.group(1))))
             suffix = match.group(2)
             if suffix == "files":
                 self._send(200, {"runId": run.run_id, "files": self.manager.store.list_files(run)})
@@ -1289,7 +1908,10 @@ class ModelingHandler(BaseHTTPRequestHandler):
                                                  payload.get("requestedArtifacts"),
                                                  database=database,
                                                  database_source_id=database_source_id,
-                                                 selected_tables=payload.get("selectedTables"))
+                                                 selected_tables=payload.get("selectedTables"),
+                                                 selected_schemas=payload.get("selectedSchemas"),
+                                                 user_id=self._user_id(),
+                                                 idempotency_key=self.headers.get("Idempotency-Key"))
                 if files is not _MISSING and files:
                     try:
                         self.manager.store.put_files(run, files)
@@ -1301,11 +1923,11 @@ class ModelingHandler(BaseHTTPRequestHandler):
                         raise
                 self._send(201, run.as_dict())
                 return
-            match = re.fullmatch(r"/api/modeling-runs/([^/]+)/(inputs|execute|validate)", parsed.path)
+            match = re.fullmatch(r"/api/modeling-runs/([^/]+)/(inputs|execute|validate|cancel)", parsed.path)
             if not match:
                 self._send(404, {"error": "not found"})
                 return
-            run = self._run(unquote(match.group(1)))
+            run = self._owned_run(self._run(unquote(match.group(1))))
             action = match.group(2)
             if action == "inputs":
                 files = payload.get("files", _MISSING)
@@ -1316,6 +1938,9 @@ class ModelingHandler(BaseHTTPRequestHandler):
                 intent = str(payload.get("intent") or "auto").strip().lower()
                 self.manager.execute(run, payload.get("prompt"), payload.get("model"), intent)
                 self._send(202, run.as_dict())
+            elif action == "cancel":
+                self.manager.store.request_cancel(run)
+                self._send(202, run.as_dict())
             else:
                 report = self.manager.validate(run)
                 self._send(200, {"runId": run.run_id, "status": run.status, "report": report})
@@ -1324,6 +1949,8 @@ class ModelingHandler(BaseHTTPRequestHandler):
         except ActiveRunError as exc:
             self._send(409, {"error": str(exc), "code": "ACTIVE_RUN_EXISTS",
                              "activeRunId": exc.run_id})
+        except QueueLimitError as exc:
+            self._send(429, {"error": str(exc), "code": exc.code, **exc.details})
         except StateTransitionError as exc:
             self._send(409, {"error": str(exc), "code": "INVALID_STATE_TRANSITION",
                              "runId": exc.run_id, "previousStatus": exc.previous,
@@ -1344,6 +1971,15 @@ def main(argv: list[str] | None = None) -> int:
         default=int(os.environ.get("MODELING_SERVER_MAX_ACTIVE_RUNS", str(DEFAULT_MAX_ACTIVE_RUNS))),
         help=f"maximum number of simultaneous modeling workers (1-{MAX_ACTIVE_RUNS_LIMIT})",
     )
+    parser.add_argument("--max-active-per-user", type=int,
+                        default=int(os.environ.get("MODELING_SERVER_MAX_ACTIVE_PER_USER",
+                                                   str(DEFAULT_MAX_ACTIVE_PER_USER))))
+    parser.add_argument("--max-queued-per-user", type=int,
+                        default=int(os.environ.get("MODELING_SERVER_MAX_QUEUED_PER_USER",
+                                                   str(DEFAULT_MAX_QUEUED_PER_USER))))
+    parser.add_argument("--max-queued-runs", type=int,
+                        default=int(os.environ.get("MODELING_SERVER_MAX_QUEUED",
+                                                   str(DEFAULT_MAX_QUEUED_RUNS))))
     args = parser.parse_args(argv)
     BOOT.mark("process_bootstrap")
     root = str(Path(args.root).resolve())
@@ -1354,7 +1990,10 @@ def main(argv: list[str] | None = None) -> int:
     if str(SCRIPT_DIR) not in sys.path:
         sys.path.insert(0, str(SCRIPT_DIR))
     store = RunStore(root)
-    manager = ModelingRunManager(store, max_active_runs=args.max_active_runs)
+    manager = ModelingRunManager(store, max_active_runs=args.max_active_runs,
+                                 max_active_per_user=args.max_active_per_user,
+                                 max_queued_per_user=args.max_queued_per_user,
+                                 max_queued_runs=args.max_queued_runs)
     BOOT.mark("common_ready", detail="run store restored")
     ModelingHandler.manager = manager
     server = ThreadingHTTPServer((args.host, args.port), ModelingHandler)
@@ -1362,7 +2001,10 @@ def main(argv: list[str] | None = None) -> int:
     BOOT.mark("routes_ready")
     print(
         f"standalone modeling server listening on {args.host}:{args.port} "
-        f"root={root} max_active_runs={manager.max_active_runs}",
+        f"root={root} max_active_runs={manager.max_active_runs} "
+        f"max_active_per_user={manager.max_active_per_user} "
+        f"max_queued_per_user={manager.max_queued_per_user} "
+        f"max_queued_runs={manager.max_queued_runs}",
         flush=True,
     )
     print(f"[BOOT] core ready: {BOOT.snapshot()['stages']['core_ready']['elapsedMs']:.2f}ms", flush=True)
@@ -1373,6 +2015,7 @@ def main(argv: list[str] | None = None) -> int:
         pass
     finally:
         server.server_close()
+        manager.close()
     return 0
 
 
