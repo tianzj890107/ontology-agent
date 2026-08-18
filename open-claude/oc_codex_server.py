@@ -1315,10 +1315,25 @@ def is_conversational_turn(text: object, *, explicit_start: bool = False) -> boo
     if any(re.search(pattern, value, flags=re.IGNORECASE) for pattern in acknowledgement_patterns):
         return True
     # 中文问句常常没有问号，覆盖常见疑问词/句式，同时避免把“怎么
-    # 生成/如何执行”这类明确的任务指令误判为咨询。
-    if re.search(r"(?:为什么|是什么|什么是|哪个|哪些|是否|能否|可以吗|怎么回事|发生了什么|能不能|多少|几张|如何查看|怎么看|告诉我|解释一下|怎么(?:办|回事|配置|连接|查看|操作|使用)|如何(?:配置|连接|操作|使用))", value):
+    # 生成/如何执行/怎么建模”这类明确的任务指令误判为执行请求。
+    if re.search(r"(?:为什么|是什么|什么是|哪个|哪些|是否|能否|可以吗|怎么回事|发生了什么|能不能|多少|几张|如何查看|怎么看|告诉我|解释一下|怎么(?:办|回事|配置|连接|查看|操作|使用|建模|分析|执行|生成)|如何(?:配置|连接|操作|使用|建模|分析|执行|生成))", value):
         return True
-    return bool(re.search(r"(?:吗|呢)$", value))
+    if re.search(r"(?:吗|呢)$", value):
+        return True
+
+    # ``auto`` must not turn an underspecified message into a full modeling
+    # run.  Only an explicit execution verb is allowed to cross the modeling
+    # gate; otherwise the turn remains a normal conversation so the Agent can
+    # ask for the missing task details without creating artifacts or changing
+    # the mission state.  Explicit button starts and ``intent=execute`` are
+    # handled by the caller and never reach this fallback.
+    execution_markers = (
+        "建模", "执行", "继续", "生成", "创建", "分析", "识别", "提取", "解析",
+        "扫描", "导出", "修复", "修改", "部署", "运行", "处理", "梳理",
+    )
+    if any(marker in value for marker in execution_markers):
+        return False
+    return True
 
 
 def modeling_upload_dependency_errors(task, context: Mapping[str, object] | None,

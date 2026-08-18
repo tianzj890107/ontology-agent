@@ -179,7 +179,10 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         manager = self._manager()
         self.assertTrue(manager._resolve_conversational_intent("数据库怎么连接？"))
         self.assertTrue(manager._resolve_conversational_intent("现在有多少张表"))
+        self.assertTrue(manager._resolve_conversational_intent("帮我看看"))
         self.assertFalse(manager._resolve_conversational_intent("请开始建模", "auto"))
+        self.assertFalse(manager._resolve_conversational_intent("请分析数据库并生成模型", "auto"))
+        self.assertTrue(manager._resolve_conversational_intent("怎么建模"))
         self.assertFalse(manager._resolve_conversational_intent("怎么建模", "execute"))
 
     def test_question_turn_skips_semantic_finalize_and_returns_to_input_ready(self):

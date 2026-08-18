@@ -769,7 +769,11 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertTrue(server.is_conversational_turn("你不用做了，问你点问题"))
             self.assertTrue(server.is_conversational_turn("为什么会失败？"))
             self.assertTrue(server.is_conversational_turn("别做了"))
+            self.assertTrue(server.is_conversational_turn("帮我看看"))
+            self.assertTrue(server.is_conversational_turn("先说说这个项目"))
             self.assertFalse(server.is_conversational_turn("继续做"))
+            self.assertFalse(server.is_conversational_turn("请分析数据库并生成模型"))
+            self.assertTrue(server.is_conversational_turn("怎么建模"))
             self.assertFalse(server.is_conversational_turn(
                 "请直接开始执行当前任务", explicit_start=True))
             upload_gate_task = types.SimpleNamespace(
