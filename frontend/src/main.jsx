@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Alert,
@@ -187,6 +187,7 @@ function StandaloneApp() {
   const olderEventsLoadingRef = useRef(new Set());
   const pollInFlightRef = useRef(false);
   const standaloneFileInputRef = useRef(null);
+  const standaloneFeedPrependAnchorRef = useRef(null);
 
   const loadRuns = async () => {
     const result = await standaloneApi("/api/modeling-runs", "");
@@ -237,6 +238,13 @@ function StandaloneApp() {
       ? { ...item, ...summary, events: undefined }
       : item));
   };
+  useLayoutEffect(() => {
+    const anchor = standaloneFeedPrependAnchorRef.current;
+    if (!anchor || !run) return;
+    standaloneFeedPrependAnchorRef.current = null;
+    const feed = document.querySelector(".standalone-agent-feed");
+    if (feed) feed.scrollTop = Math.max(0, anchor.top + feed.scrollHeight - anchor.height);
+  }, [run?.events, run?.runId]);
   const loadRunFiles = async (runId) => {
     if (!runId || selectedRunIdRef.current !== runId) return;
     setRunFilesLoading(true);
@@ -306,9 +314,18 @@ function StandaloneApp() {
         const older = Array.isArray(result.events) ? result.events : [];
         const nextStart = Number(result.eventStart ?? Math.max(0, window.start - older.length));
         eventWindowRef.current.set(runId, { start: nextStart, total: window.total });
-        if (older.length) setRun((current) => current?.runId === runId
-          ? { ...current, events: [...older, ...(current.events || [])] }
-          : current);
+        if (older.length) {
+          const feed = document.querySelector(".standalone-agent-feed");
+          if (feed) {
+            standaloneFeedPrependAnchorRef.current = {
+              top: feed.scrollTop,
+              height: feed.scrollHeight,
+            };
+          }
+          setRun((current) => current?.runId === runId
+            ? { ...current, events: [...older, ...(current.events || [])] }
+            : current);
+        }
         if (!older.length || nextStart >= window.start) break;
         await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
       }
@@ -1243,6 +1260,8 @@ function App() {
   const fileInput = useRef(null);
   const feedRef = useRef(null);
   const feedPinnedRef = useRef(true);
+  const feedScrollEpochRef = useRef(0);
+  const feedPrependAnchorRef = useRef(null);
 
   const model = meta.model || "";
   const params = meta.params || { temperature: null, max_tokens: null, thinking: false, thinking_budget: 8000 };
@@ -1270,6 +1289,18 @@ function App() {
     return result.error ? null : result;
   };
 
+  useLayoutEffect(() => {
+    const anchor = feedPrependAnchorRef.current;
+    if (!anchor || view !== "task" || !feedRef.current) return;
+    feedPrependAnchorRef.current = null;
+    const feed = feedRef.current;
+    // Older events are inserted above the current viewport. Compensate for
+    // the added height before paint so background history replay is invisible
+    // to the user instead of moving the conversation under their cursor.
+    if (anchor.epoch === feedScrollEpochRef.current) {
+      feed.scrollTop = Math.max(0, anchor.top + feed.scrollHeight - anchor.height);
+    }
+  }, [events, view, filesOpen]);
   useEffect(() => {
     // The input shell and task list should become usable together. Mission
     // metadata and task summaries are independent reads; only opening a
@@ -1312,6 +1343,7 @@ function App() {
   const handleFeedScroll = () => {
     const feed = feedRef.current;
     if (!feed) return;
+    feedScrollEpochRef.current += 1;
     // Follow the live stream only while the user is already at the bottom.
     // Once they scroll up, incoming thought-chain events must not pull them
     // back down; returning to the bottom resumes live following automatically.
@@ -1337,7 +1369,17 @@ function App() {
         const older = normalizeEvents(result);
         const nextStart = Number(result.logStart ?? Math.max(0, window.start - older.length));
         logWindowRef.current.set(task.id, { ...window, start: nextStart });
-        if (older.length) setEvents((current) => activeTaskIdRef.current === task.id ? [...older, ...current] : current);
+        if (older.length) {
+          const feed = feedRef.current;
+          if (feed) {
+            feedPrependAnchorRef.current = {
+              top: feed.scrollTop,
+              height: feed.scrollHeight,
+              epoch: feedScrollEpochRef.current,
+            };
+          }
+          setEvents((current) => activeTaskIdRef.current === task.id ? [...older, ...current] : current);
+        }
         if (!older.length || nextStart >= window.start) break;
         await new Promise((resolve) => globalThis.setTimeout(resolve, 0));
       }
@@ -1380,7 +1422,16 @@ function App() {
       if (activeTaskIdRef.current === current.id) {
         // Reopening a session with generated results should expose the result
         // workspace, but loading its contents must not block the conversation.
-        setFilesOpen(hasMissionOutputFiles(loadedFiles));
+        const shouldOpenFiles = hasMissionOutputFiles(loadedFiles);
+        const feed = feedRef.current;
+        if (feed && shouldOpenFiles !== filesOpen) {
+          feedPrependAnchorRef.current = {
+            top: feed.scrollTop,
+            height: feed.scrollHeight,
+            epoch: feedScrollEpochRef.current,
+          };
+        }
+        setFilesOpen(shouldOpenFiles);
       }
     });
   };
