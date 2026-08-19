@@ -455,7 +455,7 @@ def validate_v0001_state(state: Mapping[str, Any] | None) -> list[RuleFinding]:
     bo_records = _records(state, ("businessObjectDecisions", "business_object_decisions"))
     confirmed_bo = [row for row in bo_records if _status(row.get("decision") or row.get("status")) == "CONFIRMED"]
     for value, _ in _unique(confirmed_bo, ("candidateName", "candidate_name", "name")):
-        findings.append(_finding("V0001_DUPLICATE_FORMAL_NAME", ERROR,
+        findings.append(_finding("V0001_DUPLICATE_BUSINESS_OBJECT_NAME", ERROR,
                                  f"正式业务对象名称 {value} 重复", 13, "BUSINESS_OBJECT", value))
     for row in confirmed_bo:
         code = _text(row.get("candidateCode") or row.get("candidate_code") or row.get("code"))
@@ -636,7 +636,7 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
                 findings.append(_finding("V0001_FORMAL_BUSINESS_OBJECT_INCOMPLETE", ERROR,
                                          f"正式业务对象 {code} 缺少名称或定义", 17, "BUSINESS_OBJECT", code))
         for value, _ in _unique(data, ("业务对象名称",)):
-            findings.append(_finding("V0001_DUPLICATE_FORMAL_NAME", ERROR,
+            findings.append(_finding("V0001_DUPLICATE_BUSINESS_OBJECT_NAME", ERROR,
                                      f"正式业务对象名称 {value} 重复", 13, "BUSINESS_OBJECT", value))
         for row in data:
             if _text(row.get("业务对象名称")) and not _text(row.get("业务对象定义")):
@@ -648,7 +648,7 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
             findings.append(_finding("V0001_DUPLICATE_FORMAL_CODE", ERROR,
                                      f"正式逻辑实体编码 {value} 重复", 28, "LOGICAL_ENTITY", value))
         for value, _ in _unique(data, ("逻辑实体名称",)):
-            findings.append(_finding("V0001_DUPLICATE_FORMAL_NAME", ERROR,
+            findings.append(_finding("V0001_DUPLICATE_LOGICAL_ENTITY_NAME", ERROR,
                                      f"正式逻辑实体名称 {value} 重复", 22, "LOGICAL_ENTITY", value))
         groups = {}
         for row in data:

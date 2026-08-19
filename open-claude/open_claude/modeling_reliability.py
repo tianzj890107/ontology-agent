@@ -3277,6 +3277,12 @@ _FORMAL_ARTIFACT_REQUIRED_HEADERS = {
 # against a content signature, so later turns do not re-run validators for an
 # unchanged file.  The final stage still performs cross-file checks once all
 # requested outputs are ready.
+# Bump this constant whenever a validator/rule behavior changes.  It is mixed
+# into every stage signature so stale PASSED/FAILED checkpoints written by an
+# older validator (for example the pre-entity-scope duplicate-name rule) are
+# invalidated and re-validated with the current code instead of being reused.
+VALIDATION_CACHE_VERSION = "2026-08-19-v0001-entity-scope"
+
 MODEL_VALIDATION_STAGES = (
     ("INPUT_CONTEXT", "输入契约"),
     ("ASSET_INVENTORY", "数据资产盘点"),
@@ -3384,8 +3390,10 @@ def _stage_signature(stage: str, work_dir: Path, output_dir: Path,
                     if key in state}
     # The stage cache itself and the generated report are intentionally absent
     # from this signature; writing a checkpoint must not invalidate a passed
-    # stage.
-    return _stage_hash({"stage": stage, "outputs": output_hashes, "state": state_values})
+    # stage.  The validator version is included so a deployed rule change
+    # invalidates checkpoints produced by an older implementation.
+    return _stage_hash({"stage": stage, "outputs": output_hashes, "state": state_values,
+                        "validatorVersion": VALIDATION_CACHE_VERSION})
 
 
 def _stage_state_ready(stage: str, state: Mapping[str, Any]) -> bool:

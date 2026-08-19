@@ -19,3 +19,8 @@
   - retry/blocked/failed 断点续跑与 400 恢复：验证并补测试确认 retry 复用 provider session、从持久化 stage checkpoint 继续、不重复数据库/schema 探测；模型 API 400 自动重试后保留原 checkpoint 与 session。
   - 前端：BLOCKED 原因文案补充三个预算暂停原因（时长/工具数/Token 上限），且暂停建议中的“未通过的门禁校验项”现在输出真实的校验问题（如 `FORMAL_ATTRIBUTE_NOT_IN_ALL_ATTRIBUTES`）而不是通用停止文案；重新构建 `frontend/dist`。
   - 新增 11 个验收回归测试（guard 可恢复暂停、预算暂停保留 checkpoint、已完成 stage 不重复执行、只读/依赖探测不消耗变更预算、破坏性命令仍阻断、all_attributes 中文键编码完整、部分状态不覆盖不重复、合并更新同身份、formal ⊆ all、retry 不重探数据库/schema、400 后从原 checkpoint 恢复）；完整测试集 212 通过（skipped=3）。已部署两个服务（commit `c580547`，web 47313 与 standalone 47314 均已重启，健康检查 200，部署前确认两服务无活跃任务/运行）。
+- 修复 V0001 仍错误阻断（同名门禁专项）：
+  - `V0001_DUPLICATE_FORMAL_NAME` 统一为业务属性名称规则（规则 39）专属：同一逻辑实体内业务属性名称重复为 ERROR 阻断；不同逻辑实体同名允许；跨实体同名且定义明显不同仅 WARNING 记录、不阻断。业务对象名称重复改用 `V0001_DUPLICATE_BUSINESS_OBJECT_NAME`（规则 13），逻辑实体名称重复改用 `V0001_DUPLICATE_LOGICAL_ENTITY_NAME`（规则 22），消除同一编码复用三种规则的旧实现歧义；校验器不改属性名、不加实体前缀、不强行统一语义。
+  - 新增 `VALIDATION_CACHE_VERSION` 并混入 stage signature：部署新校验逻辑后，旧版本写入的 PASSED/FAILED checkpoint 自动失效并重算，避免旧版全局判重产生的 FAILED 缓存继续阻断重跑（覆盖“全部链路”的陈旧报告/缓存路径）。
+  - 核查并确认汇总层不升级 WARNING：`validate_modeling_stages` 与 `finalize_semantic_model` 仅在存在 ERROR 时判 FAILED，WARNING-only 不触发 repair/retry/run_blocked；web 47313 与 standalone 47314 均调用同一实体作用域检测器（`validate_formal_rows` / `validate_v0001_state`）。
+  - 新增回归测试：同 LE 同名 ERROR、跨 LE 同名同义 PASS、跨 LE 同名异义 WARNING 且整体 PASS、BO/LE 名称重复使用独立编码、旧版 stage cache 在版本变更后失效重算；完整测试集 218 通过（skipped=3）。本次未部署。

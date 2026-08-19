@@ -3,11 +3,13 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-claude"))
 
+import open_claude.modeling_reliability as reliability  # noqa: E402
 from open_claude.modeling_reliability import (  # noqa: E402
     CANDIDATE,
     COMPOSITION,
@@ -29,6 +31,8 @@ from open_claude.modeling_reliability import (  # noqa: E402
     write_business_object_decisions_csv,
     semantic_validation_issues,
     validate_formal_relation_csv,
+    validate_modeling_stages,
+    VALIDATION_CACHE_VERSION,
 )
 
 
@@ -679,6 +683,86 @@ class BusinessRuleTypeValidationTests(unittest.TestCase):
                                               "conditionHitCount": 80})
         self.assertEqual(transition.validation_status, "INSUFFICIENT_EVIDENCE")
         self.assertEqual(eligibility.validation_status, "INSUFFICIENT_EVIDENCE")
+
+
+class V0001DuplicateNameGateTests(unittest.TestCase):
+    """Full-chain acceptance for the entity-scoped attribute-name rule."""
+
+    CSV_HEADER = "逻辑实体编码,业务属性编码,业务属性名称,业务属性定义,是否页面显示\n"
+
+    @staticmethod
+    def _empty_state():
+        return {"allAttributes": [], "businessAttributes": []}
+
+    def _run_stage(self, csv_text):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            work = root / "mission-work"
+            output = root / "mission-output"
+            work.mkdir()
+            output.mkdir()
+            (output / "business_attributes.csv").write_text(csv_text, encoding="utf-8")
+            result = validate_modeling_stages(
+                work, output, self._empty_state(), ["business_attributes.csv"])
+            row = next(item for item in result["stages"]
+                       if item["stage"] == "BUSINESS_ATTRIBUTES")
+            return row
+
+    def test_same_entity_duplicate_attribute_name_fails_stage(self):
+        row = self._run_stage(
+            self.CSV_HEADER +
+            "LE1,AT1,金额,订单金额,N\n"
+            "LE1,AT2,金额,订单金额,N\n")
+        self.assertEqual(row["status"], "FAILED")
+        errors = [item for item in row.get("issues", [])
+                  if item.get("code") == "V0001_DUPLICATE_FORMAL_NAME"
+                  and item.get("severity") == "ERROR"]
+        self.assertEqual(len(errors), 1)
+        self.assertIn("LE1", errors[0].get("message", ""))
+
+    def test_cross_entity_same_name_same_definition_passes_stage(self):
+        row = self._run_stage(
+            self.CSV_HEADER +
+            "LE1,AT1,金额,订单金额,N\n"
+            "LE2,AT2,金额,订单金额,N\n")
+        self.assertEqual(row["status"], "PASSED")
+        self.assertNotIn("V0001_DUPLICATE_FORMAL_NAME",
+                         {item.get("code") for item in row.get("issues", [])})
+
+    def test_cross_entity_same_name_different_definition_is_warning_and_passes_stage(self):
+        row = self._run_stage(
+            self.CSV_HEADER +
+            "LE1,AT1,状态,采购订单审批状态,N\n"
+            "LE2,AT2,状态,供应商冻结状态,N\n")
+        # WARNING must not fail the stage or trigger a repair/retry window.
+        self.assertEqual(row["status"], "PASSED")
+        duplicate = [item for item in row.get("issues", [])
+                     if item.get("code") == "V0001_DUPLICATE_FORMAL_NAME"]
+        self.assertEqual(len(duplicate), 1)
+        self.assertEqual(duplicate[0].get("severity"), "WARNING")
+
+    def test_stage_cache_is_invalidated_by_validator_version(self):
+        state = {"allAttributes": [{"来源字段": "id"}],
+                 "logicalEntities": [{"code": "LE001"}]}
+        with tempfile.TemporaryDirectory() as root,                 patch.object(reliability, "_stage_specific_issues", return_value=[]) as validate:
+            root = Path(root)
+            work = root / "mission-work"
+            output = root / "mission-output"
+            work.mkdir()
+            output.mkdir()
+            first = validate_modeling_stages(work, output, state, ["logical_entities.csv"])
+            second = validate_modeling_stages(work, output, first["state"],
+                                              ["logical_entities.csv"])
+            self.assertEqual(validate.call_count, 5)
+            self.assertEqual(second["events"], [])
+            with patch.object(reliability, "VALIDATION_CACHE_VERSION", "older-validator"):
+                third = validate_modeling_stages(work, output, second["state"],
+                                                 ["logical_entities.csv"])
+            # A deployed validator change invalidates stale checkpoints so a
+            # previously cached FAILED stage cannot keep blocking a run.
+            self.assertGreater(validate.call_count, 5)
+            self.assertTrue(any(event.get("stage") == "INPUT_CONTEXT"
+                                for event in third["events"]))
 
 
 if __name__ == "__main__":

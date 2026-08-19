@@ -369,6 +369,51 @@ class V0001RuleRegistryTests(unittest.TestCase):
         self.assertEqual(len(duplicate), 1)
         self.assertEqual(duplicate[0].severity, "WARNING")
 
+    def test_business_object_and_entity_name_duplicates_use_distinct_codes(self):
+        # Rule 13 (business object name) and rule 22 (logical entity name) are
+        # global-name rules.  They must never reuse the attribute-name rule
+        # code V0001_DUPLICATE_FORMAL_NAME, which is scoped to logical-entity
+        # attribute names only.
+        header = ["业务对象编码", "业务对象名称", "业务对象定义"]
+        findings = validate_formal_rows(
+            "business_objects.csv", header,
+            [["CO1", "客户", "定义A"],
+             ["CO2", "客户", "定义B"]],
+        )
+        codes = {item.code for item in findings}
+        self.assertIn("V0001_DUPLICATE_BUSINESS_OBJECT_NAME", codes)
+        self.assertNotIn("V0001_DUPLICATE_FORMAL_NAME", codes)
+
+        entity_header = ["业务对象编码", "逻辑实体编码", "逻辑实体名称", "逻辑实体定义"]
+        findings = validate_formal_rows(
+            "logical_entities.csv", entity_header,
+            [["CO1", "LE1", "订单", "定义A"],
+             ["CO1", "LE2", "订单", "定义B"]],
+        )
+        codes = {item.code for item in findings}
+        self.assertIn("V0001_DUPLICATE_LOGICAL_ENTITY_NAME", codes)
+        self.assertNotIn("V0001_DUPLICATE_FORMAL_NAME", codes)
+
+    def test_state_duplicate_names_keep_distinct_codes_and_attribute_rule_is_entity_scoped(self):
+        state = {
+            "businessObjectDecisions": [
+                {"candidateCode": "CO1", "candidateName": "客户", "decision": "CONFIRMED"},
+                {"candidateCode": "CO2", "candidateName": "客户", "decision": "CONFIRMED"},
+            ],
+            "businessAttributes": [
+                {"logicalEntityCode": "LE1", "attributeCode": "AT1",
+                 "attributeName": "金额", "attributeDefinition": "订单金额"},
+                {"logicalEntityCode": "LE2", "attributeCode": "AT2",
+                 "attributeName": "金额", "attributeDefinition": "订单金额"},
+            ],
+        }
+        findings = validate_v0001_state(state)
+        codes = {item.code for item in findings}
+        self.assertIn("V0001_DUPLICATE_BUSINESS_OBJECT_NAME", codes)
+        # Cross-entity same-name attributes are allowed and must not produce
+        # any V0001_DUPLICATE_FORMAL_NAME finding.
+        self.assertNotIn("V0001_DUPLICATE_FORMAL_NAME", codes)
+
     def test_name_normalization_never_adds_entity_prefix(self):
         rows = [{"logicalEntityCode": "LE1", "attributeName": "金额", "mainFlag": "N"}]
         normalized = normalize_logical_entity_main_flags(rows, {})
