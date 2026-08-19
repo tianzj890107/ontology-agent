@@ -306,7 +306,7 @@ function StandaloneApp() {
       `/api/modeling-runs/${encodedId}?includeEvents=false`, "",
       { signal: request.controller.signal },
     );
-    if (summary._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
+    if (summary._aborted || selectedRunIdRef.current !== runId) return null;
     if (summary.error) { if (showError) setError(summary.error); return null; }
     const cachedRun = runs.find((item) => item.runId === runId);
     const visibleRun = run?.runId === runId ? run : cachedRun;
@@ -332,7 +332,7 @@ function StandaloneApp() {
       `/api/modeling-runs/${encodedId}/events?tail=1&limit=80`, "",
       { signal: request.controller.signal },
     );
-    if (events._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
+    if (events._aborted || selectedRunIdRef.current !== runId) return null;
     let eventPayload = events;
     let latestEvents = Array.isArray(events.events) ? events.events : [];
     if (events.error && !cachedEvents.length) {
@@ -343,7 +343,7 @@ function StandaloneApp() {
         `/api/modeling-runs/${encodedId}?includeEvents=true`, "",
         { signal: request.controller.signal },
       );
-      if (detail._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
+      if (detail._aborted || selectedRunIdRef.current !== runId) return null;
       if (!detail.error && Array.isArray(detail.events)) {
         eventPayload = detail;
         latestEvents = detail.events;
@@ -362,7 +362,7 @@ function StandaloneApp() {
         `/api/modeling-runs/${encodedId}?includeEvents=true`, "",
         { signal: request.controller.signal },
       );
-      if (detail._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
+      if (detail._aborted || selectedRunIdRef.current !== runId) return null;
       if (!detail.error && Array.isArray(detail.events)) {
         eventPayload = detail;
         latestEvents = detail.events;
@@ -375,7 +375,7 @@ function StandaloneApp() {
     const result = { ...summary, files: [], events: latestEvents };
     standaloneEventCacheRef.current.set(runId, latestEvents);
     if (summary.model) setStandaloneModel(summary.model);
-    if (isCurrentRunRequest(runId, request.generation)) setRun(result);
+    if (selectedRunIdRef.current === runId) setRun(result);
     scheduleIdle(async () => {
       // Render roughly ten viewport heights of recent history first. This
       // gives the user useful scrollback quickly, then prioritizes the file
@@ -453,6 +453,11 @@ function StandaloneApp() {
   };
   const refreshRun = async (runId) => {
     if (!runId || selectedRunIdRef.current !== runId || pollInFlightRef.current) return null;
+    // Do not let the first status poll abort the detail request before its
+    // historical event window has been fetched. This race was most visible
+    // for BLOCKED runs, which otherwise showed only the header and never sent
+    // the `/events` request until Continue was clicked.
+    if (!eventWindowRef.current.has(runId)) return null;
     pollInFlightRef.current = true;
     const request = beginRunRequest();
     const encodedId = encodeURIComponent(runId);
