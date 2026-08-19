@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,7 @@ from open_claude.sandbox import (  # noqa: E402
     PUBLIC_VIOLATION,
     SandboxViolation,
     TaskSandboxBoundary,
+    isolated_argv,
 )
 from open_claude.tools import execute_tool  # noqa: E402
 
@@ -21,6 +23,7 @@ from open_claude.tools import execute_tool  # noqa: E402
 class SandboxPathSecurityTests(unittest.TestCase):
     def setUp(self):
         self._old_root = os.environ.get("OC_SANDBOX_ROOT")
+        self._old_shared_venv = os.environ.get("ONTOLOGY_AGENT_SHARED_VENV")
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
         self.tasks = self.base / "tasks"
@@ -37,6 +40,10 @@ class SandboxPathSecurityTests(unittest.TestCase):
             os.environ.pop("OC_SANDBOX_ROOT", None)
         else:
             os.environ["OC_SANDBOX_ROOT"] = self._old_root
+        if self._old_shared_venv is None:
+            os.environ.pop("ONTOLOGY_AGENT_SHARED_VENV", None)
+        else:
+            os.environ["ONTOLOGY_AGENT_SHARED_VENV"] = self._old_shared_venv
         self.tmp.cleanup()
 
     def boundary(self):
@@ -156,6 +163,22 @@ class SandboxPathSecurityTests(unittest.TestCase):
         result = execute_tool("Read", {"file_path": "/etc/passwd"}, str(self.task))
         self.assertEqual(result, f"Error: {PUBLIC_VIOLATION}")
         self.assertNotIn(str(self.tasks), result)
+
+    @patch("open_claude.sandbox.shutil.which", return_value="/usr/bin/bwrap")
+    @patch("open_claude.sandbox.platform.system", return_value="Linux")
+    def test_isolated_commands_reuse_shared_agent_venv(self, _system, _which):
+        shared = self.base / "shared-venv"
+        (shared / "bin").mkdir(parents=True)
+        (shared / "bin" / "python").write_text("", encoding="utf-8")
+        os.environ["ONTOLOGY_AGENT_SHARED_VENV"] = str(shared)
+        args, env = isolated_argv(["/bin/bash", "-c", "python3 --version"], str(self.task))
+        bind_index = next(index for index, value in enumerate(args)
+                          if value == "--ro-bind" and index + 1 < len(args)
+                          and args[index + 1] == str(shared.resolve()))
+        self.assertEqual(args[bind_index + 1], str(shared.resolve()))
+        self.assertEqual(args[bind_index + 2], str(shared.resolve()))
+        self.assertTrue(env["PATH"].startswith(str(shared.resolve()) + "/bin:"))
+        self.assertEqual(env["VIRTUAL_ENV"], str(shared.resolve()))
 
 
 if __name__ == "__main__":

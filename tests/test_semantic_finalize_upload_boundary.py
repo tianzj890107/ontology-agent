@@ -145,6 +145,46 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
         finally:
             work.cleanup()
 
+    def test_warning_only_final_gate_allows_export(self):
+        state = {
+            "entities": [{"entityId": "LE_CHILD", "role": "DEPENDENT_ENTITY"}],
+            "relationDecisions": [],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            self.assertEqual(result["status"], "PASSED")
+            warning_codes = {issue.code for issue in result["issues"]
+                             if issue.severity == "WARNING"}
+            self.assertIn("MISSING_COMPOSITION_OWNER", warning_codes)
+            report = load_validation_report(Path(root) / "mission-work")
+            self.assertEqual(report["semantic_validation_status"], "PASSED")
+            self.assertTrue(report["warnings"])
+
+    def test_error_still_blocks_export(self):
+        state = {"relationDecisions": [{
+            "relationId": "REL_UNSUPPORTED",
+            "sourceEntity": "LE_A", "targetEntity": "LE_B",
+            "relationType": "REFERENCE", "status": "CONFIRMED",
+            "evidenceTypes": [],
+        }]}
+        with tempfile.TemporaryDirectory() as root:
+            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            self.assertEqual(result["status"], "FAILED")
+            self.assertIn("UNSUPPORTED_CONFIRMED_RELATION",
+                          {issue.code for issue in result["issues"]})
+
+    def test_missing_asset_processing_decision_is_a_real_coverage_error(self):
+        state = {
+            "tables": ["orders", "reference_codes"],
+            "assetDecisions": [{"tableName": "orders", "decision": "MODELED"}],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            self.assertEqual(result["status"], "FAILED")
+            issue = next(item for item in result["issues"]
+                         if item.code == "ASSET_PROCESSING_COVERAGE_MISSING")
+            self.assertEqual(issue.severity, "ERROR")
+
     def test_upload_checks_marker_without_running_semantic_gate(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)

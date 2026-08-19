@@ -10,6 +10,7 @@ already being exported as formal output.
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
@@ -164,6 +165,189 @@ def _unique(rows: Iterable[Mapping[str, Any]], fields: tuple[str, ...]) -> list[
     return duplicates
 
 
+_MAIN_FLAG_KEYS = (
+    "mainflag", "mainFlag", "isMain", "is_main", "mainEntity", "main_entity",
+    "是否主逻辑实体",
+)
+_BUSINESS_OBJECT_KEYS = (
+    "businessObjectCode", "business_object_code", "业务对象编码",
+    "businessObjectId", "business_object_id", "candidateCode", "candidate_code",
+)
+_ENTITY_KEYS = (
+    "logicalEntityCode", "logical_entity_code", "逻辑实体编码",
+    "logicalEntity", "logical_entity", "entityId", "entity_id", "code", "id",
+)
+_ATTRIBUTE_NAME_KEYS = ("业务属性名称", "attributeName", "attribute_name", "name")
+_ATTRIBUTE_DEFINITION_KEYS = (
+    "业务属性定义", "attributeDefinition", "attribute_definition", "definition",
+    "description", "说明",
+)
+
+
+def _nullable_text(value: Any) -> str:
+    """Normalize empty/reference-null cells without changing business names."""
+    value = _text(value)
+    return "" if value.upper() in {"NONE", "NULL", "N/A", "NA", "-"} else value
+
+
+def _row_value(row: Mapping[str, Any], keys: Iterable[str]) -> str:
+    for key in keys:
+        if key in row:
+            value = _nullable_text(row.get(key))
+            if value:
+                return value
+    return ""
+
+
+def _confirmed_business_object_codes(state: Mapping[str, Any] | None) -> set[str]:
+    if not isinstance(state, Mapping):
+        return set()
+    records = _records(state, (
+        "businessObjectDecisions", "business_object_decisions",
+        "businessObjects", "business_objects",
+    ))
+    confirmed = set()
+    for record in records:
+        status = _status(record.get("decision") or record.get("status") or
+                         record.get("businessObjectStatus"))
+        if status != "CONFIRMED":
+            continue
+        code = _row_value(record, ("candidateCode", "candidate_code", "businessObjectCode",
+                                   "business_object_code", "业务对象编码", "code", "id"))
+        if code:
+            confirmed.add(code)
+    return confirmed
+
+
+def logical_entity_main_flag(row: Mapping[str, Any],
+                             state: Mapping[str, Any] | None = None) -> str:
+    """Derive the v0.0.1 main flag without promoting an unresolved entity.
+
+    A logical entity remains in the model even when it has no formal Business
+    Object.  Such an entity is never a main entity.  If a state supplies
+    Business Object decisions, only CONFIRMED objects may retain an explicit
+    ``Y``.  The function is intentionally a normalizer for generation/state
+    producers; it never renames an entity or an attribute.
+    """
+    business_object = _row_value(row, _BUSINESS_OBJECT_KEYS)
+    if not business_object:
+        return "N"
+    confirmed = _confirmed_business_object_codes(state)
+    decision_records = _records(state or {}, ("businessObjectDecisions", "business_object_decisions")) \
+        if isinstance(state, Mapping) else []
+    if decision_records and business_object not in confirmed:
+        return "N"
+    if confirmed and business_object not in confirmed:
+        return "N"
+    assignment = _status(row.get("businessObjectAssignmentStatus") or
+                         row.get("business_object_assignment_status") or
+                         row.get("assignmentStatus") or
+                         row.get("业务对象归属状态"))
+    if assignment and assignment != "ASSIGNED":
+        return "N"
+    for key in _MAIN_FLAG_KEYS:
+        if key in row and _text(row.get(key)):
+            return "Y" if _status(row.get(key)) in {"Y", "YES", "TRUE", "1"} else "N"
+    role = _status(row.get("role") or row.get("entityRole") or row.get("entity_role") or
+                   row.get("type") or row.get("实体角色"))
+    return "Y" if role in {
+        "CANDIDATE_MAIN_ENTITY", "MASTER_DATA_ENTITY", "REFERENCE_DATA_ENTITY",
+        "OBSERVATION_EVENT_ENTITY", "DOCUMENT_CONTENT_ENTITY", "RELATIONSHIP_ENTITY",
+        "MAIN", "MAIN_ENTITY", "OWNER", "OWNER_ENTITY",
+    } else "N"
+
+
+def normalize_logical_entity_main_flags(rows: Iterable[Mapping[str, Any]],
+                                         state: Mapping[str, Any] | None = None
+                                         ) -> list[dict[str, Any]]:
+    """Normalize generated logical-entity records while preserving all rows."""
+    normalized = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        item = dict(row)
+        flag = logical_entity_main_flag(item, state)
+        present = False
+        for key in _MAIN_FLAG_KEYS:
+            if key in item:
+                item[key] = flag
+                present = True
+        if not present:
+            item["mainFlag"] = flag
+        normalized.append(item)
+    return normalized
+
+
+def _attribute_entity(row: Mapping[str, Any]) -> str:
+    return _row_value(row, _ENTITY_KEYS)
+
+
+def _attribute_name(row: Mapping[str, Any]) -> str:
+    return _row_value(row, _ATTRIBUTE_NAME_KEYS)
+
+
+def _attribute_definition(row: Mapping[str, Any]) -> str:
+    return re.sub(r"\s+", "", _row_value(row, _ATTRIBUTE_DEFINITION_KEYS))
+
+
+def _definitions_are_clearly_different(left: str, right: str) -> bool:
+    """Conservatively identify obvious same-name/different-meaning pairs."""
+    if not left or not right or left == right or left in right or right in left:
+        return False
+    ratio = SequenceMatcher(None, left, right).ratio()
+    common = len(set(left) & set(right)) / max(1, min(len(left), len(right)))
+    return ratio < 0.55 and common < 0.65
+
+
+def duplicate_formal_attribute_name_findings(rows: Iterable[Mapping[str, Any]]) -> list[RuleFinding]:
+    """Apply v0.0.1's logical-entity-scoped attribute-name rule."""
+    groups: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        entity = _attribute_entity(row)
+        name = _attribute_name(row)
+        if entity and name:
+            groups.setdefault((entity, name), []).append(row)
+    findings: list[RuleFinding] = []
+    for (entity, name), duplicates in groups.items():
+        if len(duplicates) > 1:
+            findings.append(_finding(
+                "V0001_DUPLICATE_FORMAL_NAME", ERROR,
+                f"逻辑实体 {entity} 内业务属性名称 {name} 重复",
+                39, "BUSINESS_ATTRIBUTE", f"{entity}:{name}",
+                details={"scope": "logical_entity", "logicalEntity": entity,
+                         "attributeName": name, "count": len(duplicates)},
+            ))
+    by_name: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
+    for (entity, name), values in groups.items():
+        by_name.setdefault(name, []).extend((entity, row) for row in values)
+    for name, values in by_name.items():
+        entities = sorted({entity for entity, _ in values})
+        if len(entities) < 2:
+            continue
+        for index, (left_entity, left) in enumerate(values):
+            for right_entity, right in values[index + 1:]:
+                if left_entity == right_entity:
+                    continue
+                left_definition = _attribute_definition(left)
+                right_definition = _attribute_definition(right)
+                if _definitions_are_clearly_different(left_definition, right_definition):
+                    findings.append(_finding(
+                        "V0001_DUPLICATE_FORMAL_NAME", WARNING,
+                        f"不同逻辑实体的业务属性名称 {name} 定义明显不同，需核对同名异义",
+                        39, "BUSINESS_ATTRIBUTE", name,
+                        details={"scope": "cross_entity_semantic_review",
+                                 "logicalEntities": [left_entity, right_entity],
+                                 "attributeName": name},
+                    ))
+                    break
+            else:
+                continue
+            break
+    return findings
+
+
 def validate_audit_registry(state: Mapping[str, Any] | None) -> list[RuleFinding]:
     """Validate decision identity without applying formal-output completeness.
 
@@ -291,6 +475,32 @@ def validate_v0001_state(state: Mapping[str, Any] | None) -> list[RuleFinding]:
                                          "BUSINESS_OBJECT", code))
 
     entity_records = _records(state, ("logicalEntityDecisions", "logical_entity_decisions", "entities"))
+    confirmed_business_objects = _confirmed_business_object_codes(state)
+    business_object_decisions = _records(state, ("businessObjectDecisions", "business_object_decisions"))
+    seen_main_flags: set[tuple[str, str, str]] = set()
+    for row in entity_records:
+        explicit_flag = _row_value(row, _MAIN_FLAG_KEYS).upper()
+        if explicit_flag != "Y":
+            continue
+        entity_id = _row_value(row, _ENTITY_KEYS)
+        business_object = _row_value(row, _BUSINESS_OBJECT_KEYS)
+        marker = (entity_id, business_object, explicit_flag)
+        if marker in seen_main_flags:
+            continue
+        seen_main_flags.add(marker)
+        if not business_object:
+            findings.append(_finding(
+                "V0001_MAIN_FLAG_WITHOUT_BUSINESS_OBJECT", ERROR,
+                f"逻辑实体 {entity_id or '(未命名)'} 未归属业务对象时不能为主逻辑实体",
+                29, "LOGICAL_ENTITY", entity_id,
+            ))
+        elif ((business_object_decisions or confirmed_business_objects)
+              and business_object not in confirmed_business_objects):
+            findings.append(_finding(
+                "V0001_MAIN_FLAG_WITHOUT_CONFIRMED_BUSINESS_OBJECT", ERROR,
+                f"逻辑实体 {entity_id or '(未命名)'} 归属的业务对象 {business_object} 不是 CONFIRMED，不能为主逻辑实体",
+                29, "LOGICAL_ENTITY", entity_id,
+            ))
     formal_entities = [row for row in entity_records if _formal_row(row)]
     for value, _ in _unique(formal_entities, ("logicalEntity", "logical_entity", "entityId", "code", "id")):
         # The identity duplicate is already reported by validate_audit_registry;
@@ -317,6 +527,10 @@ def validate_v0001_state(state: Mapping[str, Any] | None) -> list[RuleFinding]:
                                          "LOGICAL_ENTITY", entity_id))
 
     attributes = _records(state, ("businessAttributes", "business_attributes", "attributeDecisions"))
+    # Business attribute names are unique within their logical entity, not
+    # globally.  Keep this check on the formal/canonical attribute collection;
+    # allAttributes may legitimately contain technical and candidate fields.
+    findings.extend(duplicate_formal_attribute_name_findings(attributes))
     for row in attributes:
         if not _formal_row(row):
             continue
@@ -438,13 +652,39 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
                                      f"正式逻辑实体名称 {value} 重复", 22, "LOGICAL_ENTITY", value))
         groups = {}
         for row in data:
-            key = _text(row.get("业务对象编码")) or _text(row.get("业务对象名称"))
+            key = _nullable_text(row.get("业务对象编码")) or _nullable_text(row.get("业务对象名称"))
             groups.setdefault(key, []).append(row)
         for key, group in groups.items():
             if key and sum(_text(row.get("是否主逻辑实体")).upper() == "Y" for row in group) != 1:
                 findings.append(_finding("V0001_FORMAL_MAIN_ENTITY_COUNT", ERROR,
                                          f"正式业务对象 {key} 必须且只能有一个主逻辑实体", 29,
                                          "LOGICAL_ENTITY", key))
+        confirmed_business_objects = _confirmed_business_object_codes(state)
+        decision_records = _records(state or {}, ("businessObjectDecisions", "business_object_decisions")) \
+            if isinstance(state, Mapping) else []
+        for row in data:
+            entity_id = _row_value(row, ("逻辑实体编码", "logicalEntityCode", "code", "id"))
+            business_object = _nullable_text(row.get("业务对象编码"))
+            main_flag = _row_value(row, _MAIN_FLAG_KEYS).upper()
+            if main_flag != "Y":
+                continue
+            if not business_object:
+                findings.append(_finding(
+                    "V0001_MAIN_FLAG_WITHOUT_BUSINESS_OBJECT", ERROR,
+                    f"逻辑实体 {entity_id or '(未命名)'} 未归属业务对象时不能为主逻辑实体",
+                    29, "LOGICAL_ENTITY", entity_id,
+                    details={"businessObjectCode": "", "mainFlag": "Y"},
+                ))
+            elif ((decision_records or confirmed_business_objects)
+                  and business_object not in confirmed_business_objects):
+                findings.append(_finding(
+                    "V0001_MAIN_FLAG_WITHOUT_CONFIRMED_BUSINESS_OBJECT", ERROR,
+                    f"逻辑实体 {entity_id or '(未命名)'} 归属的业务对象 {business_object} 不是 CONFIRMED，不能保留主逻辑实体标记",
+                    29, "LOGICAL_ENTITY", entity_id,
+                    details={"businessObjectCode": business_object,
+                             "confirmedBusinessObjects": sorted(confirmed_business_objects),
+                             "mainFlag": "Y"},
+                ))
         # A missing key can only be judged when the corresponding formal
         # attribute records are available.  If metadata is absent we leave it
         # unresolved instead of inventing a key or failing the candidate.
@@ -477,10 +717,7 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
                 findings.append(_finding("V0001_ATTRIBUTE_SPECIAL_CHARACTER", ERROR,
                                          f"业务属性 {value} 含有不允许的特殊字符", 42,
                                          "BUSINESS_ATTRIBUTE", value))
-        for value, _ in _unique(data, ("业务属性名称",)):
-            findings.append(_finding("V0001_DUPLICATE_FORMAL_NAME", WARNING,
-                                     f"业务属性名称 {value} 重复，需核对是否同义或同名异义", 39,
-                                     "BUSINESS_ATTRIBUTE", value))
+        findings.extend(duplicate_formal_attribute_name_findings(data))
     elif name in {"entity_relations.csv", "entity_relationships.csv"}:
         for value, _ in _unique(data, ("关系编码",)):
             findings.append(_finding("V0001_DUPLICATE_FORMAL_CODE", ERROR,

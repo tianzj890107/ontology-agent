@@ -21,6 +21,7 @@ from open_claude.modeling_reliability import (  # noqa: E402
     analyze_aggregation,
     business_object_decision_records,
     derive_business_object_decision,
+    infer_business_object_rule_status,
     validate_business_object_decisions,
     business_rule_validation_issues,
     validate_business_rule,
@@ -205,6 +206,33 @@ class ModelingEvidenceGateTests(unittest.TestCase):
         self.assertIn("MISSING_COMPOSITION_OWNER", codes)
         self.assertIn("MAIN_LOGICAL_ENTITY_NEEDS_CONFIRMATION", codes)
         self.assertFalse(any(issue.auto_fixable for issue in issues))
+
+    def test_insufficient_business_object_evidence_is_warning_not_blocking(self):
+        state = {"businessObjectDecisions": [{
+            "candidateCode": "CO_EVIDENCE_GAP",
+            "candidateName": "证据不足对象",
+            "confidence": "90",
+            "r1": {"status": "PASS", "evidence": [{"type": "TABLE_NAME"}]},
+            "r2": {"status": "PASS", "evidence": [{"type": "COLUMN_NAME"}]},
+            "r3": {"status": "UNKNOWN", "evidence": "", "unknownReason": "待确认"},
+            "r4": {"status": "PASS", "evidence": [{"type": "FIELD_SEMANTICS"}]},
+            "r5": {"status": "PASS", "evidence": [{"type": "ROW_COUNT"}]},
+        }]}
+        issues = semantic_validation_issues(state)
+        insufficient = [item for item in issues if item.code.startswith("INSUFFICIENT_")]
+        self.assertTrue(insufficient)
+        self.assertTrue(all(item.severity == "WARNING" for item in insufficient))
+
+    def test_confirmed_relation_without_support_remains_error(self):
+        state = {"relationDecisions": [{
+            "relationId": "REL_UNSUPPORTED",
+            "sourceEntity": "LE_A", "targetEntity": "LE_B",
+            "relationType": "REFERENCE", "status": CONFIRMED,
+            "evidenceTypes": [],
+        }]}
+        issues = semantic_validation_issues(state)
+        issue = next(item for item in issues if item.code == "UNSUPPORTED_CONFIRMED_RELATION")
+        self.assertEqual(issue.severity, "ERROR")
 
 
 class CompositionAggregationTests(unittest.TestCase):
@@ -419,6 +447,59 @@ def business_candidate(code, name, statuses, *, confidence="60",
 
 
 class BusinessObjectDecisionTests(unittest.TestCase):
+    def test_positive_evidence_is_not_defaulted_to_unknown(self):
+        evidence = {
+            "r1": "有明确业务用途与治理责任",
+            "r2": "存在稳定业务编号和唯一业务标识",
+            "r3": "可独立创建、管理、查询和审批",
+            "r4": "存在生命周期和状态字段",
+        }
+        for rule, text in evidence.items():
+            self.assertEqual(infer_business_object_rule_status(rule, text), "PASS")
+
+    def test_explicit_negative_evidence_is_fail(self):
+        self.assertEqual(
+            infer_business_object_rule_status("r3", "依赖父对象存在，不能独立管理"),
+            "FAIL",
+        )
+
+    def test_truly_missing_evidence_remains_unknown(self):
+        self.assertEqual(infer_business_object_rule_status("r1", ""), "UNKNOWN")
+
+    def test_zero_rows_with_complete_structure_can_pass_r5(self):
+        state = {"businessObjectDecisions": [{
+            "candidateCode": "CO_ZERO_READY", "candidateName": "结构完整对象",
+            "confidence": "80", "r5": {
+                "status": "UNKNOWN",
+                "evidence": "当前数据 0 行，但存在稳定业务编号、单据结构、独立生命周期和可重复创建语义",
+            },
+            **{f"r{i}": {"status": "PASS", "evidence": "直接来源证据"}
+               for i in range(1, 5)},
+        }]}
+        record = business_object_decision_records(state)[0]
+        self.assertEqual(record.rules[4].status, "PASS")
+        self.assertEqual(record.decision, CONFIRMED)
+
+    def test_zero_rows_without_structure_remains_unknown(self):
+        state = {"businessObjectDecisions": [{
+            "candidateCode": "CO_ZERO_EMPTY", "candidateName": "无样本对象",
+            "confidence": "40", "r5": {
+                "status": "UNKNOWN", "rowCount": 0,
+                "evidence": "当前数据 0 行，缺少实际实例样本",
+            },
+            **{f"r{i}": {"status": "PASS", "evidence": "直接来源证据"}
+               for i in range(1, 5)},
+        }]}
+        record = business_object_decision_records(state)[0]
+        self.assertEqual(record.rules[4].status, "UNKNOWN")
+        self.assertEqual(record.decision, CANDIDATE)
+
+    def test_static_finite_value_domain_fails_r5(self):
+        self.assertEqual(
+            infer_business_object_rule_status("r5", "固定码表，属于静态有限值域"),
+            "FAIL",
+        )
+
     def test_deterministic_decision_ignores_confidence(self):
         self.assertEqual(derive_business_object_decision("PASS", "PASS", "PASS", "UNKNOWN", "PASS"), CANDIDATE)
         self.assertEqual(derive_business_object_decision("PASS", "PASS", "PASS", "PASS", "PASS"), CONFIRMED)

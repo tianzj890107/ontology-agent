@@ -25,6 +25,8 @@ from typing import Any, Iterable, Mapping
 
 from .modeling_rule_registry import (
     RuleFinding,
+    logical_entity_main_flag,
+    normalize_logical_entity_main_flags,
     validate_formal_rows,
     validate_v0001_state,
 )
@@ -1108,6 +1110,138 @@ def _rule_field(record: Mapping[str, Any], rule: str) -> Any:
     return _first_value(record, aliases)
 
 
+_RULE_EVIDENCE_MARKERS = {
+    "r1": {
+        "positive": ("业务用途", "业务意义", "治理责任", "责任主体", "业务过程",
+                     "业务对象", "业务主数据", "核心单据", "业务场景", "可治理",
+                     "businesspurpose", "governance", "owner"),
+        "negative": ("无业务用途", "无业务意义", "不具备业务意义", "无治理责任",
+                     "不是业务对象", "非业务对象", "仅技术", "技术表", "纯技术", "无业务场景"),
+    },
+    "r2": {
+        "positive": ("稳定业务编号", "稳定编号", "业务编号", "业务编码", "业务主键",
+                     "业务标识", "唯一标识", "唯一编号", "非空且唯一", "稳定可追踪",
+                     "稳定身份", "business key", "businesskey", "business identifier",
+                     "businessidentifier", "stableidentifier", "uniquekey", "identifierfields"),
+        "negative": ("无稳定身份", "无稳定编号", "没有业务主键", "无业务主键",
+                     "无法区分", "无唯一标识", "不唯一且无法", "随机生成且不可追踪"),
+    },
+    "r3": {
+        "positive": ("独立创建", "可独立创建", "独立管理", "可独立管理", "独立查询",
+                     "可独立查询", "独立审批", "独立流转", "独立生命周期", "可创建",
+                     "可管理", "可审批", "independentlifecycle", "independentmanagement"),
+        "negative": ("依赖父对象存在", "依赖父对象", "不能独立管理", "不可独立管理",
+                     "不能独立创建", "不可独立创建", "仅从属", "必须依赖父", "无独立生命周期",
+                     "只能作为明细"),
+    },
+    "r4": {
+        "positive": ("生命周期", "状态字段", "状态变化", "状态流转", "状态机", "审批状态",
+                     "关闭状态", "生效日期", "失效日期", "创建、变更", "创建和变更",
+                     "可变更", "可审批", "可关闭", "lifecyclefields", "statusfields", "transitions"),
+        "negative": ("无生命周期", "没有生命周期", "没有独立生命周期", "静态值域", "固定枚举", "固定值域",
+                     "不会变化", "不可变化", "仅静态", "仅枚举", "纯字典"),
+    },
+    "r5": {
+        "positive": ("可实例化", "可重复创建", "重复创建", "业务实例", "多个实例",
+                     "实例标识", "可区分实例", "单据结构", "主数据结构", "实体结构",
+                     "业务编号", "可产生业务实例", "记录结构", "可新增", "businesskey",
+                     "identifierfields", "documentstructure", "entitystructure", "repeatable",
+                     "instantiable", "instancefields"),
+        "negative": ("固定码表", "固定枚举", "静态有限值域", "有限值域", "固定值域",
+                     "不可产生业务实例", "不能产生业务实例", "仅枚举", "纯字典", "静态参考值"),
+    },
+}
+_ROW_COUNT_KEYS = {"rowcount", "recordcount", "instancecount", "samplecount", "数据行数", "实例数"}
+
+
+def _rule_corpus(record: Mapping[str, Any], rule: str, nested: Mapping[str, Any],
+                 evidence: str, negative: str) -> str:
+    """Collect evidence-bearing values without treating a decision as evidence."""
+    values = [evidence, negative]
+
+    def evidence_value(value: Any) -> str:
+        if isinstance(value, Mapping):
+            selected = _first_value(value, ("evidence", "evidences", "proof", "summary",
+                                             "description", "text", "claim"))
+            return _evidence_summary(selected) if selected not in (None, "") else ""
+        return _evidence_summary(value)
+
+    for source in (nested, record):
+        if not isinstance(source, Mapping):
+            continue
+        for key, value in source.items():
+            key_text = _key(key).lower()
+            if (rule in key_text or any(token in key_text for token in (
+                    "evidence", "proof", "provenance", "meaning", "purpose", "governance",
+                    "owner", "identity", "key", "independence", "lifecycle", "instance",
+                    "structure", "schema", "rowcount", "recordcount", "samplecount", "状态"))):
+                if key_text not in {"status", "decision", "state"}:
+                    values.append(evidence_value(value))
+    return "；".join(value for value in values if value)
+
+
+def _rule_has_zero_rows(record: Mapping[str, Any], nested: Mapping[str, Any]) -> bool:
+    for source in (nested, record):
+        if not isinstance(source, Mapping):
+            continue
+        for key, value in source.items():
+            key_text = _key(key).lower().replace("_", "")
+            if key_text not in _ROW_COUNT_KEYS:
+                continue
+            try:
+                if float(value) == 0:
+                    return True
+            except (TypeError, ValueError):
+                if _text(value) in {"0", "0行", "0条", "0 records", "0 rows"}:
+                    return True
+    for source in (nested, record):
+        if isinstance(source, Mapping):
+            corpus = "；".join(_evidence_summary(value) for value in source.values())
+            if re.search(r"(?:^|[^0-9])0\s*(?:行|条|records?|rows?)", corpus, re.IGNORECASE):
+                return True
+    return False
+
+
+def infer_business_object_rule_status(rule: str, evidence: str, *,
+                                      negative_evidence: str = "",
+                                      record: Mapping[str, Any] | None = None,
+                                      nested: Mapping[str, Any] | None = None) -> str:
+    """Classify an unresolved R1-R5 rule from explicit positive/negative evidence.
+
+    This is intentionally evidence-based and name-agnostic.  In particular,
+    zero observed rows are not negative evidence for R5; they only remove
+    sample support, while structural instantiation evidence can still pass it.
+    """
+    rule = _text(rule).lower()
+    profile = _RULE_EVIDENCE_MARKERS.get(rule)
+    if not profile:
+        return "UNKNOWN"
+    record = record if isinstance(record, Mapping) else {}
+    nested = nested if isinstance(nested, Mapping) else {}
+    corpus = _rule_corpus(record, rule, nested, evidence, negative_evidence).lower()
+    negative = any(marker.lower() in corpus for marker in profile["negative"])
+    positive_corpus = corpus
+    for marker in profile["negative"]:
+        positive_corpus = positive_corpus.replace(marker.lower(), "")
+    positive = any(marker.lower() in positive_corpus for marker in profile["positive"])
+    if rule == "r5" and _rule_has_zero_rows(record, nested):
+        # 0 rows is not a conclusion.  Keep PASS available only when the
+        # corpus also contains structural/instantiation evidence.
+        positive = positive and any(marker.lower() in corpus for marker in (
+            "业务编号", "业务编码", "业务主键", "业务标识", "单据结构", "主数据结构",
+            "实体结构", "可实例化", "可重复创建", "重复创建", "实例标识",
+            "可产生业务实例", "记录结构", "businesskey", "businessidentifier",
+            "stableidentifier", "documentstructure", "entitystructure", "repeatable",
+            "instantiable", "instancefields"))
+    if positive and negative:
+        return "UNKNOWN"
+    if negative:
+        return "FAIL"
+    if positive:
+        return "PASS"
+    return "UNKNOWN"
+
+
 def _rule_decision(record: Mapping[str, Any], rule: str) -> RuleDecision:
     raw = _rule_field(record, rule)
     nested = raw if isinstance(raw, Mapping) else {}
@@ -1136,14 +1270,25 @@ def _rule_decision(record: Mapping[str, Any], rule: str) -> RuleDecision:
         negative = _first_value(record, (
             f"{rule}NegativeEvidence", f"{rule.upper()}NegativeEvidence", f"{rule}反证"))
     evidence_text = _evidence_summary(evidence)
+    if not evidence_text and not nested and _business_rule_status(raw) == "UNKNOWN":
+        raw_text = _text(raw)
+        if raw_text and raw_text.upper() not in {"UNKNOWN", "UNRESOLVED", "PENDING", "未知"}:
+            evidence_text = raw_text
+    negative_text = _evidence_summary(negative)
     if provenance_values:
         evidence_text = (evidence_text + " " if evidence_text else "") + \
                         "[来源:" + "|".join(provenance_values) + "]"
+    if not evidence_text and negative_text:
+        evidence_text = "反证：" + negative_text
+    if status == "UNKNOWN":
+        status = infer_business_object_rule_status(
+            rule, _rule_corpus(record, rule, nested, evidence_text, negative_text),
+            negative_evidence=negative_text, record=record, nested=nested)
     nested_evidence_ids = evidence_ids(nested) if nested else []
     return RuleDecision(status=status, evidence=evidence_text,
                         provenance=provenance_values,
                         unknown_reason=_evidence_summary(unknown_reason),
-                        negative_evidence=_evidence_summary(negative),
+                        negative_evidence=negative_text,
                         evidence_ids=tuple(nested_evidence_ids))
 
 
@@ -1310,17 +1455,17 @@ def validate_business_object_decisions(state: Mapping[str, Any] | None) -> list[
                                      f"业务对象 {record.candidate_code} 的 R{index} 状态非法",
                                      artifact_type="BUSINESS_OBJECT", artifact_id=record.candidate_code))
             if not rule.evidence:
-                issues.append(_issue("MISSING_BUSINESS_OBJECT_EVIDENCE", "ERROR",
-                                     f"业务对象 {record.candidate_code} 的 R{index} 缺少证据",
+                issues.append(_issue("MISSING_BUSINESS_OBJECT_EVIDENCE", "WARNING",
+                                     f"业务对象 {record.candidate_code} 的 R{index} 缺少证据，暂不能提高结论强度",
                                      artifact_type="BUSINESS_OBJECT", artifact_id=record.candidate_code,
                                      details={"rule": f"R{index}"}))
             if rule.status == "UNKNOWN" and not rule.unknown_reason:
-                issues.append(_issue("MISSING_BUSINESS_OBJECT_UNKNOWN_REASON", "ERROR",
+                issues.append(_issue("MISSING_BUSINESS_OBJECT_UNKNOWN_REASON", "WARNING",
                                      f"业务对象 {record.candidate_code} 的 R{index} 为 UNKNOWN 但没有未知原因",
                                      artifact_type="BUSINESS_OBJECT", artifact_id=record.candidate_code))
             if rule.status == "FAIL" and not (rule.negative_evidence or rule.evidence):
-                issues.append(_issue("MISSING_BUSINESS_OBJECT_NEGATIVE_EVIDENCE", "ERROR",
-                                     f"业务对象 {record.candidate_code} 的 R{index} 为 FAIL 但没有反证",
+                issues.append(_issue("MISSING_BUSINESS_OBJECT_NEGATIVE_EVIDENCE", "WARNING",
+                                     f"业务对象 {record.candidate_code} 的 R{index} 为 FAIL 但没有反证，需人工复核",
                                      artifact_type="BUSINESS_OBJECT", artifact_id=record.candidate_code))
         if expected == CANDIDATE and not record.confirmation_question:
             issues.append(_issue("MISSING_BUSINESS_OBJECT_CONFIRMATION_QUESTION", "WARNING",
@@ -1380,8 +1525,8 @@ def validate_business_object_evidence_isolation(state: Mapping[str, Any] | None)
                 raw_status = _business_rule_status(raw) if isinstance(raw, Mapping) else ""
                 if weak_only and raw_status == "PASS":
                     issues.append(_issue("INSUFFICIENT_R5_EVIDENCE" if rule_name == "r5"
-                                         else f"INSUFFICIENT_{rule_name.upper()}_EVIDENCE", "ERROR",
-                                         f"{candidate} 的 {rule_name.upper()} 不能仅凭 {evidence_kind} 通过",
+                                         else f"INSUFFICIENT_{rule_name.upper()}_EVIDENCE", "WARNING",
+                                         f"{candidate} 的 {rule_name.upper()} 目前只有 {evidence_kind}，证据不足但不构成结构错误",
                                          artifact_type="BUSINESS_OBJECT", artifact_id=candidate,
                                          details={"evidenceType": evidence_kind}))
     return issues
@@ -1939,6 +2084,7 @@ def semantic_validation_issues(state: Mapping[str, Any] | None) -> list[Validati
     issues.extend(validate_uncertainty_preservation(state))
     issues.extend(validate_duplicate_mapping_definitions(state))
     issues.extend(validate_fk_coverage(state))
+    issues.extend(validate_asset_processing_coverage(state))
     decisions = relation_decision_index(state)
     for relation_id, decision in decisions.items():
         status = _status(decision.get("status") or decision.get("decision"))
@@ -2295,7 +2441,8 @@ def _assignment_status(entity: Mapping[str, Any]) -> str:
 
 def _logical_entity_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for position, entity in enumerate(_unique_mappings(_iter_entity_records(state))):
+    entities = normalize_logical_entity_main_flags(_unique_mappings(_iter_entity_records(state)), state)
+    for position, entity in enumerate(entities):
         identifier = _entity_id(entity) or f"LE_DECISION_{position:06d}"
         status = _assignment_status(entity)
         code = _text(_first_value(entity, ("businessObjectCode", "business_object_code")))
@@ -2309,6 +2456,7 @@ def _logical_entity_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
             "business_object_assignment_status": status,
             "business_object_code": code if status == "ASSIGNED" else "",
             "decision": decision,
+            "main_flag": logical_entity_main_flag(entity, state),
             "missing_evidence": missing,
         })
     return sorted(rows, key=lambda item: item["logical_entity"])
@@ -2382,16 +2530,50 @@ def _all_attribute_records(state: Mapping[str, Any] | None) -> list[Mapping[str,
     """
     if not isinstance(state, Mapping):
         return []
-    records = _records_for_keys(state, (
-        "allAttributes", "all_attributes", "allAttributeDecisions",
-        "candidateAttributes", "candidate_attributes", "attributes",
-        "attributeCandidates",
-    ))
-    if records:
-        return records
-    # A legacy state that only has businessAttributes is still represented,
-    # but it is not claimed to be a complete physical inventory.
-    return _records_for_keys(state, ("businessAttributes", "business_attributes"))
+    # These collections have different meanings.  Never concatenate them:
+    # candidateAttributes is a filtered decision collection, while
+    # allAttributes is the physical inventory used for PK/FK and subset
+    # validation.  In particular, an empty canonical collection must not
+    # silently fall through to candidates and then be written twice.
+    canonical_keys = ("allAttributes", "all_attributes", "allAttributeDecisions")
+    for key in canonical_keys:
+        if key in state:
+            value = state.get(key)
+            return _dedupe_attribute_records(value if isinstance(value, list) else [])
+    # Legacy producers that have no canonical key are accepted for migration,
+    # but still use exactly one source collection.
+    for key in ("candidateAttributes", "candidate_attributes", "attributes", "attributeCandidates",
+                "businessAttributes", "business_attributes"):
+        if key in state:
+            value = state.get(key)
+            return _dedupe_attribute_records(value if isinstance(value, list) else [])
+    return []
+
+
+def _dedupe_attribute_records(records: Iterable[Any]) -> list[Mapping[str, Any]]:
+    """Deduplicate one attribute collection without merging semantic sources."""
+    result: list[Mapping[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            continue
+        table = _text(_first_value(record, ("sourceTable", "source_table", "table", "来源表")))
+        column = _text(_first_value(record, ("sourceColumn", "source_column", "column", "来源字段")))
+        entity = _text(_first_value(record, ("logicalEntityCode", "logical_entity_code", "逻辑实体编码", "entityId")))
+        code = _text(_first_value(record, ("attributeCode", "attribute_code", "业务属性编码", "code", "id")))
+        if table and column:
+            identity = ("source", table, column)
+        elif entity and code:
+            identity = ("entity-code", entity, code)
+        else:
+            # A malformed row remains auditable, but duplicate copies of the
+            # same malformed record are still collapsed deterministically.
+            identity = ("row", str(index), json.dumps(dict(record), ensure_ascii=False, sort_keys=True, default=str))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(record)
+    return result
 
 
 def _attribute_value(record: Mapping[str, Any], *keys: str) -> str:
@@ -2436,12 +2618,25 @@ def write_all_attributes_csv(work_dir: str | os.PathLike[str],
                             state: Mapping[str, Any] | None) -> str:
     """Persist the complete pre-filter attribute inventory to the work area."""
     target = Path(work_dir) / "all_attributes.csv"
-    _atomic_csv_write(target, ALL_ATTRIBUTES_HEADERS, _all_attribute_rows(state))
+    rows = _all_attribute_rows(state)
+    # A correct Agent-produced inventory is authoritative when the persisted
+    # checkpoint has not materialized allAttributes yet.  Do not replace it
+    # with an empty or candidate-only projection during a retry/finalize pass.
+    if not rows and target.is_file():
+        try:
+            with target.open("r", encoding="utf-8-sig", newline="") as handle:
+                header = next(csv.reader(handle), [])
+                if {"属性编码", "来源表", "来源字段"}.issubset(set(header)):
+                    return str(target)
+        except (OSError, UnicodeError, csv.Error):
+            pass
+    _atomic_csv_write(target, ALL_ATTRIBUTES_HEADERS, rows)
     return str(target)
 
 
 def validate_formal_attribute_inventory(blob: bytes,
-                                        state: Mapping[str, Any] | None) -> list[ValidationIssue]:
+                                        state: Mapping[str, Any] | None,
+                                        work_dir: str | os.PathLike[str] | None = None) -> list[ValidationIssue]:
     """Ensure formal attributes are a filtered subset of the full inventory.
 
     This check never requires technical attributes to appear in the formal
@@ -2453,11 +2648,31 @@ def validate_formal_attribute_inventory(blob: bytes,
     if not isinstance(state, Mapping):
         return []
     inventory = _all_attribute_rows(state)
-    if not inventory:
-        return []
+    # Validate against the durable work artifact when available.  This makes
+    # the formal subset check use the same file that will be handed off and
+    # prevents a stale in-memory state from masking or inventing inventory
+    # rows.  The state remains the fallback for unit callers and first-pass
+    # validation before the work file exists.
+    if work_dir is not None:
+        path = Path(work_dir) / "all_attributes.csv"
+        if path.is_file():
+            try:
+                with path.open("rb") as handle:
+                    persisted = list(csv.DictReader(io.StringIO(handle.read().decode("utf-8-sig"), newline="")))
+                if persisted:
+                    inventory = persisted
+            except (OSError, UnicodeDecodeError, csv.Error):
+                pass
     try:
         rows = list(csv.DictReader(io.StringIO(blob.decode("utf-8-sig"), newline="")))
     except (UnicodeDecodeError, csv.Error):
+        return []
+    if not inventory:
+        # Legacy/partial contexts may not have a physical inventory yet.  The
+        # stage that owns all_attributes reports that incompleteness; this
+        # subset check must not invent a missing-row error for an otherwise
+        # valid partial upload.  Once a canonical inventory exists, every
+        # formal row is checked below.
         return []
     # Attribute codes are only stable inside their owning logical entity.  A
     # global code-only lookup would make two legitimate same-named attributes
@@ -2497,12 +2712,28 @@ def validate_formal_attribute_inventory(blob: bytes,
         physical_key = _key(source.get("是否物理主键")) in {"Y", "YES", "TRUE", "1"}
         key_evidence = _text(source.get("证据"))
         if technical and physical_key and logical_key and not key_evidence:
-            issues.append(_issue("PHYSICAL_KEY_NOT_PROVEN_LOGICAL_KEY", "ERROR",
-                                 f"技术物理主键 {code} 未提供业务/逻辑主键证据，不能自动升级为逻辑主键",
+            issues.append(_issue("PHYSICAL_KEY_NOT_PROVEN_LOGICAL_KEY", "WARNING",
+                                 f"技术物理主键 {code} 未提供业务/逻辑主键证据，保留为待确认，不阻断导出",
                                  artifact_type="BUSINESS_ATTRIBUTE", artifact_id=code,
                                  details={"sourceTable": source.get("来源表"),
                                           "sourceField": source.get("来源字段")}))
     return issues
+
+
+def _normalized_logical_entity_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Persist main-flag generation semantics without deleting any entity."""
+    normalized = dict(state)
+    for key in ("entities", "logicalEntities", "logical_entities", "entityDecisions"):
+        value = state.get(key)
+        if isinstance(value, list):
+            normalized[key] = normalize_logical_entity_main_flags(value, state)
+        elif isinstance(value, Mapping):
+            items = normalize_logical_entity_main_flags(value.values(), state)
+            normalized[key] = {
+                _text(item.get("entityId") or item.get("code") or item.get("id")) or str(index): item
+                for index, item in enumerate(items)
+            }
+    return normalized
 
 
 def write_decision_audits(work_dir: str | os.PathLike[str],
@@ -2511,7 +2742,7 @@ def write_decision_audits(work_dir: str | os.PathLike[str],
     """Materialize every semantic decision before any formal export."""
     target_dir = Path(work_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    state = state if isinstance(state, Mapping) else {}
+    state = _normalized_logical_entity_state(state) if isinstance(state, Mapping) else {}
     paths: dict[str, str] = {}
     paths["all_attributes.csv"] = write_all_attributes_csv(target_dir, state)
     paths["business_object_decisions.csv"] = write_business_object_decisions_csv(target_dir, state)
@@ -2577,11 +2808,11 @@ def validate_logical_entity_assignments(state: Mapping[str, Any] | None) -> list
                                  f"逻辑实体 {row['logical_entity']} 未引用正式 CONFIRMED Business Object",
                                  artifact_type="LOGICAL_ENTITY", artifact_id=row["logical_entity"]))
         if status == "UNASSIGNED" and not row["missing_evidence"]:
-            issues.append(_issue("MISSING_UNASSIGNED_REASON", "ERROR",
+            issues.append(_issue("MISSING_UNASSIGNED_REASON", "WARNING",
                                  f"逻辑实体 {row['logical_entity']} 标为 UNASSIGNED 但没有原因",
                                  artifact_type="LOGICAL_ENTITY", artifact_id=row["logical_entity"]))
         if status == "UNRESOLVED" and not row["missing_evidence"]:
-            issues.append(_issue("MISSING_ASSIGNMENT_EVIDENCE", "ERROR",
+            issues.append(_issue("MISSING_ASSIGNMENT_EVIDENCE", "WARNING",
                                  f"逻辑实体 {row['logical_entity']} 归属未解析但没有缺失证据说明",
                                  artifact_type="LOGICAL_ENTITY", artifact_id=row["logical_entity"]))
     return issues
@@ -2609,8 +2840,8 @@ def validate_indicator_decisions(state: Mapping[str, Any] | None) -> list[Valida
     issues: list[ValidationIssue] = []
     for row in _indicator_rows(state):
         if row["aggregation_semantics"] == "UNKNOWN" and row["status"] == CONFIRMED:
-            issues.append(_issue("METRIC_AGGREGATION_SEMANTICS_UNKNOWN", "ERROR",
-                                 f"指标 {row['indicator_decision_id']} 未确认聚合语义，不能 CONFIRMED",
+            issues.append(_issue("METRIC_AGGREGATION_SEMANTICS_UNKNOWN", "WARNING",
+                                 f"指标 {row['indicator_decision_id']} 未确认聚合语义，保留 UNKNOWN，不阻断其他正式输出",
                                  artifact_type="INDICATOR", artifact_id=row["indicator_decision_id"]))
     return issues
 
@@ -2689,6 +2920,123 @@ def validate_fk_coverage(state: Mapping[str, Any] | None) -> list[ValidationIssu
         return [_issue("FK_COVERAGE_MISSING", "ERROR",
                        "声明 FK 没有进入关系审计、明确排除或待确认集合",
                        artifact_type="FOREIGN_KEY", details=counts)]
+    return []
+
+
+def _asset_record_id(record: Mapping[str, Any], fallback: str = "") -> str:
+    return _text(_first_value(record, (
+        "assetId", "asset_id", "tableName", "table_name", "sourceTable",
+        "source_table", "name", "code", "id", "资产编码", "表名",
+    ))) or fallback
+
+
+def _asset_inventory_records(state: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Read explicit input assets without treating an aggregate count as rows."""
+    records: list[Mapping[str, Any]] = []
+    for key in ("assetInventory", "asset_inventory", "sourceInventory", "source_inventory",
+                "assetDecisions", "asset_decisions", "assetProcessingDecisions",
+                "asset_processing_decisions", "sourceAssets", "source_assets",
+                "inputAssets", "input_assets", "assets"):
+        value = state.get(key)
+        if isinstance(value, list):
+            records.extend(item for item in value if isinstance(item, Mapping))
+        elif isinstance(value, Mapping):
+            nested = next((value.get(name) for name in ("assets", "items", "tables",
+                                                        "businessTables", "business_tables",
+                                                        "selectedTables", "selected_tables",
+                                                        "excludedTables", "excluded_tables")
+                           if isinstance(value.get(name), (list, Mapping))), None)
+            if isinstance(nested, list):
+                records.extend(item for item in nested if isinstance(item, Mapping))
+            elif isinstance(nested, Mapping):
+                records.extend({"tableName": name, **item} if isinstance(item, Mapping)
+                               else {"tableName": name, "value": item}
+                               for name, item in nested.items())
+    tables = state.get("tables")
+    if isinstance(tables, list):
+        records.extend(item if isinstance(item, Mapping) else {"tableName": item}
+                       for item in tables)
+    elif isinstance(tables, Mapping):
+        records.extend({"tableName": name, **item} if isinstance(item, Mapping)
+                       else {"tableName": name, "value": item}
+                       for name, item in tables.items())
+    # A summary inventory such as {totalTables, businessTables, excludedTables}
+    # has no per-asset identity and is intentionally not treated as a complete
+    # inventory here.  Its detailed modeled/excluded lists are handled below.
+    for key in ("businessTables", "business_tables", "selectedTables", "selected_tables",
+                "excludedTables", "excluded_tables"):
+        value = state.get(key)
+        if isinstance(value, list):
+            records.extend({"tableName": item} for item in value if _text(item))
+    return records
+
+
+def validate_asset_processing_coverage(state: Mapping[str, Any] | None) -> list[ValidationIssue]:
+    """Require a disposition for every explicit input asset, not formal inclusion.
+
+    MODELED, EXCLUDED_AS_MIRROR, TECHNICAL, REJECTED and UNKNOWN are all
+    processing decisions.  A missing decision is an actual coverage defect;
+    an UNKNOWN decision is not upgraded to an error and never causes the
+    validator to invent a model or relationship.
+    """
+    if not isinstance(state, Mapping):
+        return []
+    inventory = _asset_inventory_records(state)
+    if not inventory:
+        return []
+    asset_ids = {_asset_record_id(item) for item in inventory}
+    asset_ids.discard("")
+    if not asset_ids:
+        return []
+    decided: set[str] = set()
+    for item in inventory:
+        identifier = _asset_record_id(item)
+        disposition = _first_value(item, ("processingDecision", "processing_decision",
+                                          "disposition", "classification", "decision",
+                                          "status", "处理决策", "处置"))
+        if identifier in asset_ids and _text(disposition):
+            decided.add(identifier)
+    decision_keys = ("assetDecisions", "asset_decisions", "assetProcessingDecisions",
+                     "asset_processing_decisions", "assetDispositionDecisions",
+                     "asset_disposition_decisions")
+    for key in decision_keys:
+        value = state.get(key)
+        values = list(value.values()) if isinstance(value, Mapping) else value
+        if isinstance(values, list):
+            for item in values:
+                if not isinstance(item, Mapping):
+                    continue
+                identifier = _asset_record_id(item)
+                disposition = _first_value(item, ("processingDecision", "processing_decision",
+                                                  "disposition", "classification", "decision",
+                                                  "status", "处理决策", "处置"))
+                if identifier in asset_ids and _text(disposition):
+                    decided.add(identifier)
+    # Existing modeling outputs are valid processing decisions too.  This
+    # keeps the check compatible with the current state schema while still
+    # requiring every source asset to be accounted for.
+    for item in _iter_entity_records(state):
+        identifier = _text(_first_value(item, ("sourceTable", "source_table", "tableName")))
+        if identifier in asset_ids:
+            decided.add(identifier)
+    for key in ("excludedAssets", "excluded_assets", "technicalAssets", "technical_assets"):
+        value = state.get(key)
+        values = list(value.values()) if isinstance(value, Mapping) else value
+        if isinstance(values, list):
+            for item in values:
+                if isinstance(item, Mapping):
+                    identifier = _asset_record_id(item)
+                else:
+                    identifier = _text(item)
+                if identifier in asset_ids:
+                    decided.add(identifier)
+    missing = sorted(asset_ids - decided)
+    if missing:
+        return [_issue("ASSET_PROCESSING_COVERAGE_MISSING", "ERROR",
+                       "输入资产缺少处理决策；正式建模、排除、技术字段或 UNKNOWN 均可计入覆盖",
+                       artifact_type="ASSET_INVENTORY",
+                       details={"assets": sorted(asset_ids), "decided": sorted(decided),
+                                "missing": missing})]
     return []
 
 
@@ -3181,7 +3529,7 @@ def _formal_output_issues(output_dir: Path, work_dir: Path,
         if name == "business_objects.csv":
             issues.extend(validate_formal_business_object_csv(blob, state))
         elif name == "business_attributes.csv":
-            issues.extend(validate_formal_attribute_inventory(blob, state))
+            issues.extend(validate_formal_attribute_inventory(blob, state, work_dir))
         elif name in {"entity_relations.csv", "entity_relationships.csv"}:
             issues.extend(validate_formal_relation_csv(blob, state))
         elif name in {"business_rules.csv", "rules.csv"}:
@@ -3207,6 +3555,7 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
     target_dir = Path(work_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     state = dict(state) if isinstance(state, Mapping) else (load_modeling_state(target_dir) or {})
+    state = _normalized_logical_entity_state(state)
     output_path = Path(output_dir) if output_dir is not None else target_dir.parent / "mission-output"
 
     # Validate the current stage only.  Passed stages are content-addressed;

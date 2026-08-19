@@ -29,6 +29,12 @@ class _FakeConversation:
 
 
 class TaskStateMachineTests(unittest.TestCase):
+    def test_modeling_guard_default_gate_retry_limit_is_ten(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ONTOLOGY_MODELING_MAX_GATE_RETRIES", None)
+            guard = oc_codex_server.ModelingExecutionGuard()
+        self.assertEqual(guard.max_gate_retries, 10)
+
     def test_modeling_guard_default_token_budget_is_one_hundred_million(self):
         with patch.dict(os.environ, {
             "ONTOLOGY_MODELING_MAX_TOKENS": "",

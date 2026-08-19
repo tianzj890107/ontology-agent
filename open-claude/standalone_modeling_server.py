@@ -521,6 +521,9 @@ class ModelingRun:
     lease_expires_at: float = 0.0
     cancel_requested: bool = False
     result_attempt_id: str = ""
+    resume_session_id: str = ""
+    checkpoint_stage: str = ""
+    checkpoint_signature: str = ""
     events: list[dict[str, Any]] = field(default_factory=list)
     state_lock: threading.RLock = field(default_factory=threading.RLock,
                                          repr=False, compare=False)
@@ -552,6 +555,9 @@ class ModelingRun:
             "leaseExpiresAt": self.lease_expires_at or None,
             "cancelRequested": self.cancel_requested,
             "resultAttemptId": self.result_attempt_id or None,
+            "resumeSessionId": self.resume_session_id or None,
+            "checkpointStage": self.checkpoint_stage or None,
+            "checkpointSignature": self.checkpoint_signature or None,
         }
         if include_events:
             result["events"] = self.events
@@ -646,6 +652,9 @@ class RunStore:
             lease_expires_at=float(item.get("leaseExpiresAt") or 0),
             cancel_requested=bool(item.get("cancelRequested", False)),
             result_attempt_id=str(item.get("resultAttemptId") or ""),
+            resume_session_id=str(item.get("resumeSessionId") or ""),
+            checkpoint_stage=str(item.get("checkpointStage") or ""),
+            checkpoint_signature=str(item.get("checkpointSignature") or ""),
             events=[],
         )
         run.events = self._read_event_journal(run, [])
@@ -678,6 +687,9 @@ class RunStore:
                     existing.lease_expires_at = float(item.get("leaseExpiresAt") or 0)
                     existing.cancel_requested = bool(item.get("cancelRequested", False))
                     existing.result_attempt_id = str(item.get("resultAttemptId") or "")
+                    existing.resume_session_id = str(item.get("resumeSessionId") or existing.resume_session_id)
+                    existing.checkpoint_stage = str(item.get("checkpointStage") or existing.checkpoint_stage)
+                    existing.checkpoint_signature = str(item.get("checkpointSignature") or existing.checkpoint_signature)
                     existing.updated_at = float(item.get("updatedAt") or existing.updated_at)
 
     def _append_event_journal(self, run: ModelingRun, event: dict[str, Any]) -> None:
@@ -732,6 +744,9 @@ class RunStore:
                     lease_expires_at=float(item.get("leaseExpiresAt") or 0),
                     cancel_requested=bool(item.get("cancelRequested", False)),
                     result_attempt_id=str(item.get("resultAttemptId") or ""),
+                    resume_session_id=str(item.get("resumeSessionId") or ""),
+                    checkpoint_stage=str(item.get("checkpointStage") or ""),
+                    checkpoint_signature=str(item.get("checkpointSignature") or ""),
                     events=[],
                 )
                 legacy_events = [event for event in (item.get("events") or [])
@@ -919,6 +934,9 @@ class RunStore:
                     run.lease_expires_at = float(snapshot.get("leaseExpiresAt") or 0)
                     run.cancel_requested = bool(snapshot.get("cancelRequested", False))
                     run.result_attempt_id = str(snapshot.get("resultAttemptId") or "")
+                    run.resume_session_id = str(snapshot.get("resumeSessionId") or run.resume_session_id)
+                    run.checkpoint_stage = str(snapshot.get("checkpointStage") or run.checkpoint_stage)
+                    run.checkpoint_signature = str(snapshot.get("checkpointSignature") or run.checkpoint_signature)
                     run.updated_at = float(snapshot.get("updatedAt") or run.updated_at)
             return run
 
@@ -1537,6 +1555,34 @@ class ModelingRunManager:
             with self.scheduler_wakeup:
                 self.scheduler_wakeup.notify_all()
 
+    @staticmethod
+    def _checkpoint_for_run(run: ModelingRun) -> tuple[str, str]:
+        """Return the latest durable validation stage without re-running it."""
+        path = Path(run.root) / "work" / "modeling_state.json"
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return run.checkpoint_stage, run.checkpoint_signature
+        stages = state.get("validationStages") if isinstance(state, dict) else None
+        if not isinstance(stages, dict):
+            return run.checkpoint_stage, run.checkpoint_signature
+        ordered = [str(key) for key in stages]
+        passed = [(key, stages[key]) for key in ordered
+                  if isinstance(stages[key], dict) and stages[key].get("status") == "PASSED"]
+        if not passed:
+            return run.checkpoint_stage, run.checkpoint_signature
+        key, row = passed[-1]
+        return key, str(row.get("signature") or "")
+
+    def _persist_task_checkpoint(self, run: ModelingRun, task: Any) -> None:
+        """Persist provider session and stage checkpoint after every attempt."""
+        stage, signature = self._checkpoint_for_run(run)
+        session_id = str(getattr(task, "session_id", lambda: "")() or "")
+        changes = {"checkpoint_stage": stage, "checkpoint_signature": signature}
+        if session_id:
+            changes["resume_session_id"] = session_id
+        self.store.update(run, **changes)
+
     def _execute(self, run: ModelingRun) -> None:
         conversational, return_status = self.execution_modes.get(
             run.run_id, (False, "INPUT_READY"))
@@ -1549,6 +1595,7 @@ class ModelingRunManager:
             from oc_codex_server import Task
             task = Task(project=run.run_id, cwd=run.root, repository_id="",
                         task_code="", task_type="modeling", mission_context=self._context(run),
+                        resume_session_id=run.resume_session_id or None,
                         task_id=run.run_id, user_id="standalone-modeling")
             if run.model:
                 task.conv.model = run.model
@@ -1569,7 +1616,19 @@ class ModelingRunManager:
             def emit(event: dict[str, Any]) -> None:
                 self.store.append_event(run, event.get("type", "agent_event"), **event)
 
-            task.stream_turn(run.prompt, emit, conversational=conversational)
+            self._persist_task_checkpoint(run, task)
+            if run.resume_session_id or run.attempt_number > 1:
+                resume_prompt = (
+                    "继续当前建模运行，不要从头执行。请读取 work/modeling_state.json、"
+                    "work/validation_report.json（如存在）以及现有 work/output 文件；"
+                    "保留已经 PASS 且产物未变化的阶段，只处理第一个未完成或失败的阶段。"
+                    "不要重复输入盘点、数据库连接验证或 schema 提取；如果当前阶段需要"
+                    "修复，完成修复后继续后续阶段。"
+                )
+            else:
+                resume_prompt = run.prompt
+            task.stream_turn(resume_prompt, emit, conversational=conversational)
+            self._persist_task_checkpoint(run, task)
             if run.cancel_requested:
                 if run.status in {"ANALYZING", "VALIDATING"}:
                     self.store.transition(run, "CANCELLING",

@@ -196,6 +196,10 @@ function StandaloneApp() {
   const runRequestRef = useRef({ generation: 0, controller: null });
   const eventCursorRef = useRef(new Map());
   const eventWindowRef = useRef(new Map());
+  // Keep the last loaded thought-chain window outside the selected-run state.
+  // The history list intentionally omits events, so switching away and back
+  // must not briefly replace a persisted chain with an empty array.
+  const standaloneEventCacheRef = useRef(new Map());
   const olderEventsLoadingRef = useRef(new Set());
   const pollInFlightRef = useRef(false);
   const standaloneFileInputRef = useRef(null);
@@ -291,13 +295,23 @@ function StandaloneApp() {
     );
     if (summary._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
     if (summary.error) { if (showError) setError(summary.error); return null; }
+    const cachedRun = runs.find((item) => item.runId === runId);
+    const visibleRun = run?.runId === runId ? run : cachedRun;
+    const cachedEvents = Array.isArray(visibleRun?.events) && visibleRun.events.length
+      ? visibleRun.events
+      : (standaloneEventCacheRef.current.get(runId)
+        || (Array.isArray(summary.events) ? summary.events : []));
     // Switch the visible session as soon as its lightweight summary arrives.
     // Loading a large historical event journal must never block selecting a
     // different run, and selecting a run is view-only: it does not stop or
     // mutate any server-side execution.
     // File metadata is loaded after the newest thought-chain window. Keep the
     // task header/input shell immediate without rendering a large file tree.
-    const summaryRun = { ...summary, files: [], events: [] };
+    // Preserve any already-rendered history while the event journal request
+    // is in flight. This matters especially for BLOCKED/FAILED runs: they do
+    // not poll after selection, so replacing the chain with [] makes the
+    // conversation look empty until Continue causes another load.
+    const summaryRun = { ...summary, files: visibleRun?.files || [], events: cachedEvents };
     if (summary.model) setStandaloneModel(summary.model);
     setRun(summaryRun);
     updateRunSummary(summary);
@@ -306,13 +320,47 @@ function StandaloneApp() {
       { signal: request.controller.signal },
     );
     if (events._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
-    if (events.error) { if (showError) setError(events.error); return null; }
-    const latestEvents = Array.isArray(events.events) ? events.events : [];
-    const total = Number(events.eventTotal ?? summary.eventsCount) || latestEvents.length;
-    const start = Number(events.eventStart ?? Math.max(0, total - latestEvents.length));
+    let eventPayload = events;
+    let latestEvents = Array.isArray(events.events) ? events.events : [];
+    if (events.error && !cachedEvents.length) {
+      // Keep compatibility with older standalone servers that do not expose
+      // the paged journal route yet; the detail payload is still authoritative
+      // and lets a blocked historical session render its chain.
+      const detail = await standaloneApi(
+        `/api/modeling-runs/${encodedId}?includeEvents=true`, "",
+        { signal: request.controller.signal },
+      );
+      if (detail._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
+      if (!detail.error && Array.isArray(detail.events)) {
+        eventPayload = detail;
+        latestEvents = detail.events;
+      }
+    }
+    if (events.error && !latestEvents.length) {
+      if (showError && !cachedEvents.length) setError(events.error);
+      return cachedEvents.length ? summaryRun : null;
+    }
+    // A run can be restored from an older inline index while its journal is
+    // still being migrated. If the summary says history exists but the tail
+    // endpoint returned no rows, use the canonical detail payload once rather
+    // than leaving a historical session permanently blank.
+    if (!latestEvents.length && !events.error && Number(summary.eventsCount) > 0 && !cachedEvents.length) {
+      const detail = await standaloneApi(
+        `/api/modeling-runs/${encodedId}?includeEvents=true`, "",
+        { signal: request.controller.signal },
+      );
+      if (detail._aborted || !isCurrentRunRequest(runId, request.generation)) return null;
+      if (!detail.error && Array.isArray(detail.events)) {
+        eventPayload = detail;
+        latestEvents = detail.events;
+      }
+    }
+    const total = Number(eventPayload.eventTotal ?? summary.eventsCount) || latestEvents.length;
+    const start = Number(eventPayload.eventStart ?? Math.max(0, total - latestEvents.length));
     eventCursorRef.current.set(runId, Number(summary.eventsCount) || total);
     eventWindowRef.current.set(runId, { start, total });
     const result = { ...summary, files: [], events: latestEvents };
+    standaloneEventCacheRef.current.set(runId, latestEvents);
     if (summary.model) setStandaloneModel(summary.model);
     if (isCurrentRunRequest(runId, request.generation)) setRun(result);
     scheduleIdle(async () => {
@@ -355,6 +403,8 @@ function StandaloneApp() {
           setRun((current) => current?.runId === runId
             ? { ...current, events: [...older, ...(current.events || [])] }
             : current);
+          const cached = standaloneEventCacheRef.current.get(runId) || [];
+          standaloneEventCacheRef.current.set(runId, [...older, ...cached]);
           await waitForNextPaint();
           const renderedFeed = document.querySelector(".standalone-agent-feed");
           if (renderedFeed && beforeHeight) {
@@ -406,15 +456,34 @@ function StandaloneApp() {
       );
       if (events._aborted || !isCurrentRunRequest(runId, request.generation) || events.error) return null;
       const delta = Array.isArray(events.events) ? events.events : [];
+      const visibleEvents = Array.isArray(run?.events) ? run.events : [];
+      const reportedEventCount = Number(summary.eventsCount) || 0;
+      const historyGap = reportedEventCount > visibleEvents.length + delta.length;
+      if (historyGap && !eventWindowRef.current.has(runId)) {
+        // The first status poll can race the initial detail load. Retry the
+        // historical window instead of committing an incomplete chain and
+        // waiting for the user to press Continue before it is fetched again.
+        void loadRun(runId, false);
+        return summary;
+      }
       // Advance by the number actually received. New events produced after
       // the summary request remain for the next poll instead of being skipped
       // or appended twice.
       eventCursorRef.current.set(runId, cursor + delta.length);
       const window = eventWindowRef.current.get(runId);
       if (window) eventWindowRef.current.set(runId, { ...window, total: window.total + delta.length });
-      setRun((current) => current?.runId === runId
-        ? { ...summary, files: current.files || [], events: [...(current.events || []), ...delta] }
-        : current);
+      setRun((current) => {
+        if (current?.runId !== runId) return current;
+        const currentEvents = Array.isArray(current.events) ? current.events : [];
+        // A status refresh must never erase a journal that is still loading.
+        // If the server reports history but this poll has no delta, retain the
+        // visible chain and let the detail loader finish it.
+        const nextEvents = delta.length || !summary.eventsCount
+          ? [...currentEvents, ...delta]
+          : currentEvents;
+        standaloneEventCacheRef.current.set(runId, nextEvents);
+        return { ...summary, files: current.files || [], events: nextEvents };
+      });
       updateRunSummary(summary);
       return summary;
     } finally {
@@ -626,16 +695,22 @@ function StandaloneApp() {
       <div className={`standalone-layout ${run ? "standalone-layout-running" : ""}`}>
         <aside className="standalone-history"><Button type="primary" block className="standalone-new-task" onClick={startNewTask}>＋ 新任务</Button><div className="standalone-section-title">历史运行</div>{runs.length ? <List size="small" dataSource={runs} renderItem={(item) => <List.Item role="button" tabIndex={0} className={run?.runId === item.runId ? "standalone-run-active" : "standalone-run"} onClick={() => selectRun(item.runId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRun(item.runId); } }}><div><strong>{standaloneRunTitle(item)}</strong><small>{formatRunCreatedAt(item.createdAt)} · {item.status}</small></div></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行记录" />}</aside>
         <main className="standalone-main">
-          {!run && sourceMode === "DATABASE" && <div className="standalone-schema-picker"><Divider orientation="left">选择 Schema（可多选）</Divider><Select mode="multiple" allowClear className="standalone-database-select" value={selectedSchemas} onChange={(value) => { setSelectedSchemas(value); setSelectedTables([]); }} placeholder="请选择一个或多个 Schema" loading={!databaseSchemas.length && !!databaseSourceId} options={databaseSchemas.map((schema) => ({ value: schema, label: schema }))} notFoundContent="暂无可用 Schema" /></div>}
           {!run && <div className="standalone-title"><div><h1>独立智能建模</h1><p>上传输入资料或连接已有数据库，完成建模并查看可追溯产物。</p></div></div>}
           {error && <Alert type="error" showIcon closable onClose={() => setError("")} message={error} />}
-          {!run ? <div className="standalone-card"><h2>建模输入</h2><div className="standalone-form-row"><Select size="large" value={sourceMode} onChange={setSourceMode} options={[{ value: "DATABASE", label: "数据库建模" }, { value: "DOCUMENT", label: "文档建模" }, { value: "NATURAL_LANGUAGE", label: "自然语言建模" }]} /><Input size="large" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="建模要求可选；不填写时直接使用四份 v0.0.1 规范/模板建模" /></div><div className="standalone-upload"><input type="file" multiple onChange={(event) => setInputFiles(Array.from(event.target.files || []))} /><span>{inputFiles.length ? inputFiles.map((file) => file.name).join("、") : "可上传 schema、文档或其他输入文件"}</span></div>{sourceMode === "DATABASE" && <><Divider orientation="left">选择数据源</Divider><Select className="standalone-database-select" value={databaseSourceId || undefined} onChange={(value) => { setDatabaseSourceId(value); setSelectedTables([]); }} placeholder="请选择数据库" loading={!databaseSources.length} options={databaseSources.map((item) => ({ value: item.id, label: item.name }))} notFoundContent="暂无可用数据库" /><Divider orientation="left">选择数据表</Divider><div className="standalone-table-toolbar"><span>Schema：{databaseSchema || "-"}</span><Checkbox checked={databaseTables.length > 0 && selectedTables.length === databaseTables.length} indeterminate={selectedTables.length > 0 && selectedTables.length < databaseTables.length} disabled={tablesLoading || !databaseTables.length} onChange={(event) => setSelectedTables(event.target.checked ? databaseTables : [])}>全选</Checkbox></div>{tablesLoading ? <div className="standalone-table-loading">正在读取数据表…</div> : <Checkbox.Group className="standalone-table-list" value={selectedTables} onChange={setSelectedTables} options={databaseTables.map((item) => ({ value: item, label: item }))} />}<div className="standalone-selected-count">已选 {selectedTables.length} 张表</div></>}<Divider orientation="left">解析要素</Divider><Checkbox.Group value={selectedArtifacts} onChange={setSelectedArtifacts} options={STANDALONE_ARTIFACTS.map((item) => ({ value: item, label: STANDALONE_ARTIFACT_LABELS[item] }))} /><Button type="primary" size="large" loading={busy} disabled={busy} onClick={startModeling} className="standalone-start">开始建模</Button></div> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} filesLoading={runFilesLoading} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || run.model || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}
+          {!run ? <StandaloneInputCard sourceMode={sourceMode} setSourceMode={setSourceMode} prompt={prompt} setPrompt={setPrompt} inputFiles={inputFiles} setInputFiles={setInputFiles} databaseSourceId={databaseSourceId} setDatabaseSourceId={setDatabaseSourceId} databaseSources={databaseSources} databaseSchemas={databaseSchemas} selectedSchemas={selectedSchemas} setSelectedSchemas={setSelectedSchemas} databaseSchema={databaseSchema} tablesLoading={tablesLoading} databaseTables={databaseTables} selectedTables={selectedTables} setSelectedTables={setSelectedTables} selectedArtifacts={selectedArtifacts} setSelectedArtifacts={setSelectedArtifacts} busy={busy} startModeling={startModeling} /> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} filesLoading={runFilesLoading} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || run.model || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}
         </main>
       </div>
       <input ref={standaloneFileInputRef} type="file" multiple hidden onChange={onStandaloneFilesSelected} />
       {preview && <Modal open title={preview.path} footer={null} width="82vw" onCancel={() => setPreview(null)}>{preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
     </div>
   </ConfigProvider>;
+}
+
+function StandaloneInputCard({ sourceMode, setSourceMode, prompt, setPrompt, inputFiles, setInputFiles,
+  databaseSourceId, setDatabaseSourceId, databaseSources, databaseSchemas, selectedSchemas,
+  setSelectedSchemas, databaseSchema, tablesLoading, databaseTables, selectedTables, setSelectedTables,
+  selectedArtifacts, setSelectedArtifacts, busy, startModeling }) {
+  return <div className="standalone-card"><h2>建模输入</h2><div className="standalone-form-row"><Select size="large" value={sourceMode} onChange={setSourceMode} options={[{ value: "DATABASE", label: "数据库建模" }, { value: "DOCUMENT", label: "文档建模" }, { value: "NATURAL_LANGUAGE", label: "自然语言建模" }]} /><Input size="large" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="建模要求可选；不填写时直接使用四份 v0.0.1 规范/模板建模" /></div><div className="standalone-upload"><input type="file" multiple onChange={(event) => setInputFiles(Array.from(event.target.files || []))} /><span>{inputFiles.length ? inputFiles.map((file) => file.name).join("、") : "可上传 schema、文档或其他输入文件"}</span></div>{sourceMode === "DATABASE" && <><Divider orientation="left">选择数据源</Divider><div className="standalone-database-row"><Select className="standalone-database-select" value={databaseSourceId || undefined} onChange={(value) => { setDatabaseSourceId(value); setSelectedSchemas([]); setSelectedTables([]); }} placeholder="请选择数据库" loading={!databaseSources.length} options={databaseSources.map((item) => ({ value: item.id, label: item.name }))} notFoundContent="暂无可用数据库" /><Select mode="multiple" allowClear className="standalone-database-select" value={selectedSchemas} onChange={(value) => { setSelectedSchemas(value); setSelectedTables([]); }} placeholder="选择 Schema（可多选）" loading={!databaseSchemas.length && !!databaseSourceId} options={databaseSchemas.map((schema) => ({ value: schema, label: schema }))} notFoundContent="暂无可用 Schema" /></div><Divider orientation="left">选择数据表</Divider><div className="standalone-table-toolbar"><span>Schema：{databaseSchema || "-"}</span><Checkbox checked={databaseTables.length > 0 && selectedTables.length === databaseTables.length} indeterminate={selectedTables.length > 0 && selectedTables.length < databaseTables.length} disabled={tablesLoading || !databaseTables.length} onChange={(event) => setSelectedTables(event.target.checked ? databaseTables : [])}>全选</Checkbox></div>{tablesLoading ? <div className="standalone-table-loading">正在读取数据表…</div> : <Checkbox.Group className="standalone-table-list" value={selectedTables} onChange={setSelectedTables} options={databaseTables.map((item) => ({ value: item, label: item }))} />}<div className="standalone-selected-count">已选 {selectedTables.length} 张表</div></>}<Divider orientation="left">解析要素</Divider><Checkbox.Group value={selectedArtifacts} onChange={setSelectedArtifacts} options={STANDALONE_ARTIFACTS.map((item) => ({ value: item, label: STANDALONE_ARTIFACT_LABELS[item] }))} /><Button type="primary" size="large" loading={busy} disabled={busy} onClick={startModeling} className="standalone-start">开始建模</Button></div>;
 }
 
 function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {

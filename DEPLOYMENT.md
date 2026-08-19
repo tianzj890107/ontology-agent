@@ -63,3 +63,5 @@ nohup bash scripts/run_standalone_modeling.sh > ontology-agent-47314.log 2>&1 &
 `scripts/deploy_server.sh`。
 
 初始化与更新都保留 Git 忽略的服务器配置和运行数据。部署前不得删除 `.env`、`.venv` 或 `open-claude/sandbox/`。
+
+47313 和 47314 共用仓库根目录的 `.venv`。`scripts/ensure_agent_venv.sh` 在服务启动/部署时一次性创建并安装依赖，随后 Sandbox 以只读方式挂载该环境并将其放入 `PATH`；单个 Agent run 不得创建新的 venv 或执行 pip 安装，任务目录只保存本任务文件。

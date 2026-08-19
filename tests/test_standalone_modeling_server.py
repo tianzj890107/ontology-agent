@@ -234,6 +234,41 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertIn("query_finished", [event["type"] for event in run.events])
         self.assertNotIn("validation_finished", [event["type"] for event in run.events])
 
+    def test_retry_reuses_session_and_sends_checkpoint_resume_prompt(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "从当前阶段继续建模")
+        run.resume_session_id = "session-before-retry"
+        run.attempt_number = 2
+        self.store.transition(run, "ANALYZING")
+        manager.execution_modes[run.run_id] = (False, "FAILED")
+        captured = {}
+
+        class FakeTask:
+            status = "blocked"
+            modeling_block_reason = "CHECKPOINT_REQUIRED"
+
+            def __init__(self, *args, **kwargs):
+                captured["kwargs"] = kwargs
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def session_id(self):
+                return "session-after-retry"
+
+            def stream_turn(self, text, emit, conversational=False):
+                captured["prompt"] = text
+
+        with patch("oc_codex_server.Task", FakeTask):
+            manager._execute(run)
+
+        self.assertEqual(captured["kwargs"]["resume_session_id"], "session-before-retry")
+        self.assertIn("不要从头执行", captured["prompt"])
+        self.assertEqual(run.resume_session_id, "session-after-retry")
+        self.assertEqual(run.status, "BLOCKED")
+
     def test_input_api_cannot_write_runtime_namespaces(self):
         run = self.store.create("DATABASE", "input boundary")
         bad_paths = [

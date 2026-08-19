@@ -20,14 +20,14 @@ fi
 git fetch origin "$deploy_branch"
 git pull --ff-only origin "$deploy_branch"
 
-if [ ! -x .venv/bin/python ]; then
-  echo "缺少服务器虚拟环境 .venv/bin/python，拒绝覆盖服务器环境。" >&2
-  exit 1
-fi
+shared_venv="${ONTOLOGY_AGENT_SHARED_VENV:-$deploy_root/.venv}"
+ONTOLOGY_AGENT_ROOT="$deploy_root" ONTOLOGY_AGENT_SHARED_VENV="$shared_venv" \
+  "$deploy_root/scripts/ensure_agent_venv.sh" >/dev/null
+export ONTOLOGY_AGENT_SHARED_VENV="$shared_venv"
+python_bin="$shared_venv/bin/python"
 
-.venv/bin/python -m pip install -e open-claude >/dev/null
-.venv/bin/python -m unittest tests.test_ontology_knowledge tests.test_frontend_contract
-.venv/bin/python -m py_compile open-claude/oc_codex_server.py
+"$python_bin" -m unittest tests.test_ontology_knowledge tests.test_frontend_contract
+"$python_bin" -m py_compile open-claude/oc_codex_server.py
 
 mapfile -t old_pids < <(pgrep -f "[o]c_codex_server.py.*--port ${deploy_port}" || true)
 if [ "${#old_pids[@]}" -gt 0 ]; then
@@ -40,7 +40,7 @@ if [ "${#old_pids[@]}" -gt 0 ]; then
   done
 fi
 
-nohup .venv/bin/python open-claude/oc_codex_server.py \
+nohup "$python_bin" open-claude/oc_codex_server.py \
   --host 0.0.0.0 --port "$deploy_port" \
   >"ontology-agent-${deploy_port}.log" 2>&1 </dev/null &
 new_pid=$!

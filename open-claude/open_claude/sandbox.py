@@ -15,6 +15,7 @@ import logging
 import os
 import platform
 import shutil
+from pathlib import Path
 from typing import Iterable, Sequence
 
 
@@ -222,6 +223,16 @@ def _ro_bind_if_present(args: list[str], source: str, target: str | None = None)
         args.extend(("--ro-bind", source, target or source))
 
 
+def _shared_agent_venv() -> str:
+    """Return the process-wide venv that sandboxed commands may reuse."""
+    configured = os.environ.get("ONTOLOGY_AGENT_SHARED_VENV", "").strip()
+    candidate = configured or str(Path(__file__).resolve().parents[2] / ".venv")
+    resolved = os.path.realpath(candidate)
+    if os.path.isfile(os.path.join(resolved, "bin", "python")):
+        return resolved
+    return ""
+
+
 def isolated_argv(argv: Sequence[str], cwd: str) -> tuple[list[str], dict[str, str]]:
     """Return an argv/env pair that runs inside the current task filesystem."""
     boundary = boundary_for(cwd)
@@ -255,6 +266,10 @@ def isolated_argv(argv: Sequence[str], cwd: str) -> tuple[list[str], dict[str, s
         if os.path.isdir(source):
             args.extend(("--dir", target))
         _ro_bind_if_present(args, source, target)
+    shared_venv = _shared_agent_venv()
+    if shared_venv and not _is_within(shared_venv, root):
+        _add_parent_dirs(args, shared_venv)
+        args.extend(("--ro-bind", shared_venv, shared_venv))
     _add_parent_dirs(args, root)
     args.extend(("--bind", root, root, "--dir", "/tmp/agent-home",
                  "--chdir", root, "--"))
@@ -268,6 +283,13 @@ def isolated_argv(argv: Sequence[str], cwd: str) -> tuple[list[str], dict[str, s
         "OLDPWD": root,
         "OC_SANDBOX_ROOT": root,
     })
+    if shared_venv:
+        env.update({
+            "ONTOLOGY_AGENT_SHARED_VENV": shared_venv,
+            "VIRTUAL_ENV": shared_venv,
+            "PATH": shared_venv + "/bin:" + env.get("PATH", ""),
+            "PYTHONNOUSERSITE": "1",
+        })
     return args, env
 
 

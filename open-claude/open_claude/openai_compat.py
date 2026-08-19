@@ -137,7 +137,7 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]]) -> li
 
         if role == "assistant":
             text_parts = []
-            reasoning_parts = [top_level_reasoning] if top_level_reasoning else []
+            block_reasoning_parts = []
             tool_calls = []
             for blk in content:
                 if not isinstance(blk, dict):
@@ -145,7 +145,7 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]]) -> li
                 if blk.get("type") == "text":
                     text_parts.append(str(blk.get("text") or ""))
                 elif blk.get("type") in ("thinking", "reasoning"):
-                    reasoning_parts.append(str(
+                    block_reasoning_parts.append(str(
                         blk.get("thinking") or blk.get("reasoning_content") or blk.get("text") or ""
                     ))
                 elif blk.get("type") in ("tool_use", "tool_call"):
@@ -164,6 +164,10 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]]) -> li
                                                       ensure_ascii=False),
                         },
                     })
+            # A restored session may contain both the normalized top-level
+            # field and the original thinking block.  Prefer the block in
+            # that case so reasoning is not sent twice to the provider.
+            reasoning_parts = block_reasoning_parts or ([top_level_reasoning] if top_level_reasoning else [])
             if tool_calls:
                 assistant_message: dict[str, Any] = {
                     "role": "assistant", "content": "".join(text_parts) or None,

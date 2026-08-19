@@ -13,21 +13,22 @@ key_file="${MODELING_SERVER_KEY_FILE:-$repo_root/.standalone-modeling-api-key}"
 
 cd "$repo_root"
 
-if [ ! -x .venv/bin/python ]; then
-  echo "缺少 .venv/bin/python，无法启动独立建模服务。" >&2
-  exit 1
-fi
+shared_venv="${ONTOLOGY_AGENT_SHARED_VENV:-$repo_root/.venv}"
+ONTOLOGY_AGENT_ROOT="$repo_root" ONTOLOGY_AGENT_SHARED_VENV="$shared_venv" \
+  "$repo_root/scripts/ensure_agent_venv.sh" >/dev/null
+export ONTOLOGY_AGENT_SHARED_VENV="$shared_venv"
+python_bin="$shared_venv/bin/python"
 
 if [ ! -s "$key_file" ]; then
   umask 077
-  .venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(48))' > "$key_file"
+  "$python_bin" -c 'import secrets; print(secrets.token_urlsafe(48))' > "$key_file"
   chmod 600 "$key_file"
 fi
 
 export ONTOLOGY_STANDALONE_API_KEY="$(tr -d '\r\n' < "$key_file")"
 mkdir -p "$run_root"
 
-exec .venv/bin/python open-claude/standalone_modeling_server.py \
+exec "$python_bin" open-claude/standalone_modeling_server.py \
   --host "$host" --port "$port" --root "$run_root" \
   --max-active-runs "$max_active_runs" \
   --max-active-per-user "$max_active_per_user" \
