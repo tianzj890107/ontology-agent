@@ -142,8 +142,54 @@ class PipelineDecisionAuditTests(unittest.TestCase):
         state = {"ruleDecisions": [{"ruleId": "R_OBS", "ruleType": "INTEGRITY_CONSTRAINT",
                                     "sampleCount": 100, "violationCount": 0}]}
         blob = "规则编码,规则名称\nR_OBS,唯一性\n".encode()
-        self.assertIn("OBSERVED_ONLY_RULE_IN_FORMAL_OUTPUT",
+        self.assertIn("UNCONFIRMED_RULE_IN_FORMAL_OUTPUT",
                       {issue.code for issue in validate_formal_business_rule_csv(blob, state)})
+
+    def test_observed_pattern_confirmed_unknown_enforcement_is_formal(self):
+        state = {"ruleDecisions": [{
+            "ruleId": "R_PATTERN", "ruleType": "INTEGRITY_CONSTRAINT",
+            "decision": CONFIRMED, "enforcement": "UNKNOWN",
+            "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"],
+            "sampleCount": 1000, "violationCount": 0,
+        }]}
+        blob = "规则编码,规则名称\nR_PATTERN,唯一性模式\n".encode()
+        self.assertEqual(validate_formal_business_rule_csv(blob, state), [])
+
+    def test_confirmed_requires_some_existence_evidence(self):
+        state = {"ruleDecisions": [{
+            "ruleId": "R_NO_EVIDENCE", "ruleType": "INTEGRITY_CONSTRAINT",
+            "decision": CONFIRMED, "enforcement": "ENFORCED",
+        }]}
+        blob = "规则编码,规则名称\nR_NO_EVIDENCE,无证据规则\n".encode()
+        issues = validate_formal_business_rule_csv(blob, state)
+        self.assertIn("UNCONFIRMED_RULE_IN_FORMAL_OUTPUT",
+                      {issue.code for issue in issues})
+
+    def test_claimed_enforced_without_evidence_is_downgraded(self):
+        state = {"ruleDecisions": [{
+            "ruleId": "R_CLAIMED", "ruleType": "INTEGRITY_CONSTRAINT",
+            "decision": CONFIRMED, "enforcement": "ENFORCED",
+            "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"],
+            "sampleCount": 100, "violationCount": 0,
+        }]}
+        with tempfile.TemporaryDirectory() as directory:
+            write_decision_audits(directory, state)
+            rows = read_rows(Path(directory) / "rule_decisions.csv")
+        self.assertEqual(rows[0]["存在状态"], "OBSERVED_ONLY")
+        self.assertIn(rows[0]["强制状态"], {"UNKNOWN", "NOT_ENFORCED"})
+        self.assertNotEqual(rows[0]["强制状态"], "ENFORCED")
+
+    def test_explicit_not_enforced_is_preserved_in_audit(self):
+        state = {"ruleDecisions": [{
+            "ruleId": "R_NE", "ruleType": "INTEGRITY_CONSTRAINT",
+            "decision": CONFIRMED, "enforcement": "NOT_ENFORCED",
+            "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"],
+            "sampleCount": 100, "violationCount": 0,
+        }]}
+        with tempfile.TemporaryDirectory() as directory:
+            write_decision_audits(directory, state)
+            rows = read_rows(Path(directory) / "rule_decisions.csv")
+        self.assertEqual(rows[0]["强制状态"], "NOT_ENFORCED")
 
     def test_alert_hit_rate_does_not_mean_effectiveness(self):
         state = {"ruleDecisions": [{"ruleId": "R_ALERT", "ruleType": "ALERT_DETECTION_RULE",

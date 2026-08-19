@@ -1335,7 +1335,7 @@ Agent 必须依次执行：
 
 ## Business Rule 类型化验证最终优先级
 
-业务规则必须先按语义类型选择验证策略：完整性约束使用 violation 统计；告警/检测规则使用 hit/match 统计，条件命中不是 violation，命中率不能自动驳回；计算规则比较 expected 与 actual；状态流转需要历史；资格/决策规则需要 outcome/action。无法可靠分类时保留 UNKNOWN/NEEDS_CLASSIFICATION，不能默认按完整性约束验证。规则类型与 enforcement 分离，样本中 0 violation 不能证明 ENFORCED。
+业务规则必须先按语义类型选择验证策略：完整性约束使用 violation 统计；告警/检测规则使用 hit/match 统计，条件命中不是 violation，命中率不能自动驳回；计算规则比较 expected 与 actual；状态流转需要历史；资格/决策规则需要 outcome/action。无法可靠分类时保留 UNKNOWN/NEEDS_CLASSIFICATION，不能默认按完整性约束验证。规则类型与 enforcement 分离，样本中 0 violation 不能证明 ENFORCED。规则决策与存在、验证、强制状态互相独立：CONFIRMED 只需要规则存在证据（声明、实现、OBSERVED_PATTERN 数据模式或验证证据），即可进入正式规则目录；OBSERVED_PATTERN + CONFIRMED + 强制状态=UNKNOWN/NOT_ENFORCED 是合法正式规则，缺强制证据只降低强制状态、缺验证证据只降低验证状态，只有连存在证据都没有时才降为 CANDIDATE，不得把强制状态标成 ENFORCED。
 
 ## Decision Audit 与不确定性最终优先级
 
@@ -1345,6 +1345,6 @@ Schema 必填字段、CSV 模板完整性、Validator ERROR/WARNING、孤岛检�
 
 VIEW JOIN 只证明查询关联，不证明派生血缘；使用 `VIEW_JOIN_EVIDENCE`、`VIEW_DERIVATION_LINEAGE`、`VIEW_CALCULATION_LOGIC`、`VIEW_FILTER_LOGIC` 区分语义。显式 FK 通常只能确认 REFERENCE，不能单独确认 COMPOSITION 或 TRANSFORMATION；声明 FK 与运行时 enforced 必须分开记录。关系用稳定的 `relation_decision_id` 唯一标识，同一端点可存在多种关系。
 
-规则必须分离 Discovery/Existence、Validation、Enforcement、Effectiveness；0 violation 只能是 OBSERVED_ONLY，不能证明规则存在或已强制执行。ALERT 的 hit 不等于 violation，也不等于 effectiveness；没有 action 证据时 action 保持 UNKNOWN。物理字段不是业务指标，指标必须保留 grain、scope、unit、formula_status 和 aggregation_semantics；没有聚合证据时比例不得自动 AVG。
+规则必须分离 Discovery/Existence、Validation、Enforcement、Effectiveness；0 violation 只能是 OBSERVED_ONLY，不能证明规则存在或已强制执行。规则决策（CONFIRMED/CANDIDATE/REJECTED）与强制状态独立：CONFIRMED 规则允许强制状态=UNKNOWN/NOT_ENFORCED，并可正常正式输出；只有连存在证据都没有时才降为 CANDIDATE。ALERT 的 hit 不等于 violation，也不等于 effectiveness；没有 action 证据时 action 保持 UNKNOWN。物理字段不是业务指标，指标必须保留 grain、scope、unit、formula_status 和 aggregation_semantics；没有聚合证据时比例不得自动 AVG。
 
 任何 UNKNOWN/UNRESOLVED → CONFIRMED 都必须记录新的独立 evidence IDs；没有新证据的状态升级必须报错。正式输出只消费已通过门禁的 Decision Layer，Generator 不得自行修改语义状态。

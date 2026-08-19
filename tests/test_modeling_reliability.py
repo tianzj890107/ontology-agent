@@ -684,6 +684,50 @@ class BusinessRuleTypeValidationTests(unittest.TestCase):
         self.assertEqual(transition.validation_status, "INSUFFICIENT_EVIDENCE")
         self.assertEqual(eligibility.validation_status, "INSUFFICIENT_EVIDENCE")
 
+    def test_confirmed_observed_pattern_unknown_enforcement_is_legal(self):
+        state = {"ruleDecisions": [{
+            "ruleId": "R_PATTERN", "ruleType": "INTEGRITY_CONSTRAINT",
+            "decision": CONFIRMED, "enforcement": "UNKNOWN",
+            "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"],
+            "sampleCount": 1000, "violationCount": 0,
+        }]}
+        issues = business_rule_validation_issues(state)
+        self.assertEqual([issue.code for issue in issues if issue.severity == "ERROR"], [])
+        self.assertNotIn("INSUFFICIENT_RULE_EVIDENCE", {issue.code for issue in issues})
+
+    def test_enforced_claim_without_enforcement_evidence_is_error(self):
+        state = {"ruleDecisions": [{
+            "ruleId": "R_CLAIMED", "ruleType": "INTEGRITY_CONSTRAINT",
+            "decision": CONFIRMED, "enforcement": "ENFORCED",
+            "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"],
+            "sampleCount": 100, "violationCount": 0,
+        }]}
+        issues = business_rule_validation_issues(state)
+        self.assertIn("ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE",
+                      {issue.code for issue in issues if issue.severity == "ERROR"})
+
+    def test_validated_claim_without_validation_evidence_is_error(self):
+        state = {"ruleDecisions": [{
+            "ruleId": "R_CLAIMED_VALIDATED", "ruleType": "INTEGRITY_CONSTRAINT",
+            "decision": CONFIRMED, "enforcement": "UNKNOWN",
+            "validationStatus": "VALIDATED",
+            "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"],
+        }]}
+        issues = business_rule_validation_issues(state)
+        self.assertIn("VALIDATED_WITHOUT_VALIDATION_EVIDENCE",
+                      {issue.code for issue in issues if issue.severity == "ERROR"})
+        self.assertIn("INSUFFICIENT_RULE_EVIDENCE",
+                      {issue.code for issue in issues if issue.severity == "WARNING"})
+
+    def test_declared_constraint_with_source_can_be_enforced(self):
+        state = {"ruleDecisions": [{
+            "ruleId": "R_DECL", "ruleType": "INTEGRITY_CONSTRAINT",
+            "decision": CONFIRMED, "enforcement": "ENFORCED",
+            "evidenceTypes": ["DECLARED_CONSTRAINT"], "provenance": ["ddl.sql"],
+            "sampleCount": 100, "violationCount": 0,
+        }]}
+        self.assertEqual([issue.code for issue in business_rule_validation_issues(state)], [])
+
 
 class V0001DuplicateNameGateTests(unittest.TestCase):
     """Full-chain acceptance for the entity-scoped attribute-name rule."""

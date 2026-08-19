@@ -24,3 +24,11 @@
   - 新增 `VALIDATION_CACHE_VERSION` 并混入 stage signature：部署新校验逻辑后，旧版本写入的 PASSED/FAILED checkpoint 自动失效并重算，避免旧版全局判重产生的 FAILED 缓存继续阻断重跑（覆盖“全部链路”的陈旧报告/缓存路径）。
   - 核查并确认汇总层不升级 WARNING：`validate_modeling_stages` 与 `finalize_semantic_model` 仅在存在 ERROR 时判 FAILED，WARNING-only 不触发 repair/retry/run_blocked；web 47313 与 standalone 47314 均调用同一实体作用域检测器（`validate_formal_rows` / `validate_v0001_state`）。
   - 新增回归测试：同 LE 同名 ERROR、跨 LE 同名同义 PASS、跨 LE 同名异义 WARNING 且整体 PASS、BO/LE 名称重复使用独立编码、旧版 stage cache 在版本变更后失效重算；完整测试集 218 通过（skipped=3）。已部署两个服务（commit `494cb45`，web 47313 与 standalone 47314 均已重启，健康检查 200，部署前确认无活跃运行）。
+- 修复业务规则证据与正式输出逻辑（规则证据独立专项）：
+  - `CONFIRMED` 与 `ENFORCED` 彻底分离：`RuleEnforcement` 新增 `NOT_ENFORCED`；没有 DB constraint、trigger、procedure、workflow/config、代码校验等可追溯强制证据时，`强制状态` 推导为 `UNKNOWN`/`NOT_ENFORCED`，即使 Agent 声称 `ENFORCED` 也不再采信（`_rule_enforcement`/`_inferred_rule_enforcement` 按证据重算，不再无条件信任 raw 值）。
+  - 修复矛盾状态组合：存在状态不再允许“只凭 `OBSERVED_PATTERN` 却标 `DECLARED/ENFORCED/IMPLEMENTED`”——类型化证据与声明状态冲突时按证据降为 `OBSERVED_ONLY`/`INFERRED`；自由文本证据（无已知证据类型）不降级显式声明。
+  - 新增规则决策状态 `_rule_decision_status`（CONFIRMED/CANDIDATE/REJECTED/UNRESOLVED）：CONFIRMED 只需规则存在证据（声明、实现、`OBSERVED_PATTERN` 或验证证据）；完全无存在证据时即使声称 CONFIRMED 也降为 CANDIDATE；`action_status=UNKNOWN` 不视为决策降级。
+  - 正式规则输出门禁改为决策状态门禁：`business_rules.csv` 只接受 CONFIRMED 规则；CANDIDATE/REJECTED 仅保留决策审计；正式规则允许 `强制状态=UNKNOWN/NOT_ENFORCED`；`OBSERVED_PATTERN + CONFIRMED + UNKNOWN/NOT_ENFORCED` 可正常正式输出（`validate_formal_business_rule_csv`，`OBSERVED_ONLY_RULE_IN_FORMAL_OUTPUT` 更名 `UNCONFIRMED_RULE_IN_FORMAL_OUTPUT`）。
+  - `INSUFFICIENT_RULE_EVIDENCE` 门禁修复：声称 `ENFORCED` 但无强制证据 → ERROR（`ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE`）；声称 `VALIDATED/SUPPORTED` 但无验证证据 → ERROR（`VALIDATED_WITHOUT_VALIDATION_EVIDENCE`）；缺少验证证据只保留 WARNING，缺少强制证据不再阻断正式输出；`RULE_EXISTENCE_NOT_PROVEN` 仅在完全无存在证据（UNVERIFIED）时发出。
+  - 同步 Agent 知识（`agent_knowledge/业务规则v0.0.1.md`、`modeling/basev0.0.1.md`、`modeling/all_sourcesv0.0.1.md` 与 `scripts/build_agent_knowledge.py` 覆盖文案）和 web 服务 prompt（`oc_codex_server.py`），明确决策/存在/验证/强制状态互相独立；`VALIDATION_CACHE_VERSION` 升级使旧阶段缓存自动失效重算。
+  - 新增 8 个回归测试：OBSERVED_PATTERN+CONFIRMED+UNKNOWN 正式输出通过、无存在证据 CONFIRMED 降 CANDIDATE、声称 ENFORCED 无证据降级且审计不再显示 ENFORCED、NOT_ENFORCED 保留、ENFORCED 无证据 ERROR、VALIDATED 无证据 ERROR、声明约束+来源可 ENFORCED、合法组合不产生 INSUFFICIENT_RULE_EVIDENCE；完整测试集 226 通过（skipped=3）。

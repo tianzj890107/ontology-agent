@@ -90,6 +90,40 @@ RULE_EXISTENCE_STATUSES = frozenset({
     "DECLARED", "ENFORCED", "IMPLEMENTED", "OBSERVED_ONLY", "INFERRED", "UNVERIFIED",
 })
 RULE_EFFECTIVENESS_STATUSES = frozenset({"PASS", "FAIL", "UNKNOWN", "UNRESOLVED"})
+# Evidence that proves a rule is enforced at write time (a guard, trigger or
+# policy that blocks invalid writes).  A declared schema or a zero-violation
+# profile only proves the rule exists or is observed; it never proves that the
+# system enforces it.  Existence, validation, enforcement and the current data
+# profile are independent dimensions and must stay independently recorded.
+RULE_ENFORCEMENT_EVIDENCE = frozenset({
+    "DECLARED_CONSTRAINT", "CHECK_CONSTRAINT", "TRIGGER",
+    "ENFORCEMENT_CONFIG", "ENFORCEMENT_CODE",
+})
+_RULE_DECLARED_EVIDENCE = frozenset({
+    "DECLARED_CONSTRAINT", "CHECK_CONSTRAINT", "CHECK",
+    "UNIQUE_CONSTRAINT", "UNIQUE", "NOT_NULL_CONSTRAINT",
+    "NOT_NULL", "FOREIGN_KEY", "REFERENTIAL_CONSTRAINT",
+    "TRIGGER", "ENFORCEMENT_CONFIG", "DATA_CONTRACT",
+    "BUSINESS_DOCUMENT", "RULE_TABLE", "POLICY",
+})
+_RULE_IMPLEMENTED_EVIDENCE = frozenset({
+    "VIEW_DERIVATION_LINEAGE", "VIEW_CALCULATION_LOGIC",
+    "VIEW_FILTER_LOGIC", "ETL_SQL_LINEAGE", "CODE_REFERENCE",
+    "APPLICATION_CODE", "EXPLICIT_CONFIG", "WORKFLOW_DEFINITION",
+    "CONFIGURATION",
+})
+_RULE_OBSERVED_EVIDENCE = frozenset({
+    "OBSERVED_PATTERN", "DATA_PATTERN", "DATA_PROFILE",
+    "STATISTICAL_PATTERN", "PROFILE", "SAMPLE_OBSERVATION",
+})
+_RULE_INFERRED_EVIDENCE = frozenset({"LLM_SEMANTIC_INFERENCE", "BUSINESS_COMMON_SENSE"})
+_KNOWN_RULE_EVIDENCE = (_RULE_DECLARED_EVIDENCE | _RULE_IMPLEMENTED_EVIDENCE
+                        | _RULE_OBSERVED_EVIDENCE | _RULE_INFERRED_EVIDENCE)
+# A claimed status may never outrank traceable evidence.  Proven existence
+# (declared/implemented/enforced) ranks above an observed pattern, which ranks
+# above pure inference, which ranks above no evidence at all.
+_RULE_EXISTENCE_RANK = {"ENFORCED": 3, "DECLARED": 3, "IMPLEMENTED": 3,
+                        "OBSERVED_ONLY": 2, "INFERRED": 1, "UNVERIFIED": 0}
 METRIC_AGGREGATION_SEMANTICS = frozenset({
     "ADDITIVE", "SEMI_ADDITIVE", "NON_ADDITIVE", "RATIO_OF_SUMS",
     "WEIGHTED_AVERAGE", "SNAPSHOT", "UNKNOWN",
@@ -141,6 +175,7 @@ class RuleEnforcement(str, Enum):
     OBSERVED = "OBSERVED"
     INFERRED = "INFERRED"
     UNKNOWN = "UNKNOWN"
+    NOT_ENFORCED = "NOT_ENFORCED"
 
 
 class RuleValidationStatus(str, Enum):
@@ -1724,18 +1759,31 @@ class RuleValidationResult:
 def _rule_enforcement(rule: Mapping[str, Any]) -> str:
     raw = _key(_rule_value(rule, "enforcement", "enforcementStatus", "enforcement_status"))
     if raw in {item.value for item in RuleEnforcement}:
+        if raw == RuleEnforcement.ENFORCED.value and not _has_enforcement_evidence(rule):
+            # A claimed ENFORCED status cannot outrank the traceable evidence.
+            # Without a constraint/trigger/config/code guard the honest status
+            # is UNKNOWN or NOT_ENFORCED, never ENFORCED.
+            return _inferred_rule_enforcement(rule)
         return raw
+    return _inferred_rule_enforcement(rule)
+
+
+def _has_enforcement_evidence(rule: Mapping[str, Any]) -> bool:
+    """A rule is enforced only when a source explicitly guards invalid writes."""
     types = evidence_types(rule)
-    # A generic CODE_REFERENCE or EXPLICIT_CONFIG can prove implementation or
-    # existence, but not enforcement unless the source explicitly describes a
-    # guard/trigger/policy that blocks invalid writes.
-    if types & {"DECLARED_CONSTRAINT", "CHECK_CONSTRAINT", "TRIGGER",
-                "ENFORCEMENT_CONFIG", "ENFORCEMENT_CODE"} and _provenance_refs(rule):
+    return bool(types & RULE_ENFORCEMENT_EVIDENCE) and bool(_provenance_refs(rule))
+
+
+def _inferred_rule_enforcement(rule: Mapping[str, Any]) -> str:
+    """Derive the honest enforcement status from the available evidence.
+
+    Without a constraint/trigger/config/code guard the honest status is
+    UNKNOWN or NOT_ENFORCED, never ENFORCED and never a guessed intermediate
+    label: observation evidence describes how the rule was found, not whether
+    the system enforces it.
+    """
+    if _has_enforcement_evidence(rule):
         return RuleEnforcement.ENFORCED.value
-    if types or _rule_value(rule, "observed", "observedPattern") is not None:
-        return RuleEnforcement.OBSERVED.value
-    if _rule_value(rule, "inference", "inferred") is not None:
-        return RuleEnforcement.INFERRED.value
     return RuleEnforcement.UNKNOWN.value
 
 
@@ -1919,23 +1967,49 @@ def business_rule_validation_issues(state: Mapping[str, Any] | None) -> list[Val
     issues: list[ValidationIssue] = []
     for rule in _iter_business_rule_records(state):
         result = validate_business_rule(rule, rule.get("data"))
+        identifier = _rule_id(rule) or "(未命名)"
         if result.rule_type == BusinessRuleType.UNKNOWN.value:
             issues.append(_issue("UNKNOWN_RULE_TYPE", "WARNING",
-                                 f"业务规则 {_rule_id(rule) or '(未命名)'} 无法可靠分类，不能默认按完整性约束验证",
-                                 artifact_type="BUSINESS_RULE", artifact_id=_rule_id(rule),
+                                 f"业务规则 {identifier} 无法可靠分类，不能默认按完整性约束验证",
+                                 artifact_type="BUSINESS_RULE", artifact_id=identifier,
                                  details=result.as_dict()))
-        elif result.validation_status in {RuleValidationStatus.INSUFFICIENT_EVIDENCE.value,
-                                          RuleValidationStatus.NEEDS_CLASSIFICATION.value}:
+            continue
+        claimed_enforcement = _key(_rule_value(rule, "enforcement", "enforcementStatus",
+                                               "enforcement_status"))
+        if (claimed_enforcement == RuleEnforcement.ENFORCED.value
+                and not _has_enforcement_evidence(rule)
+                and (not evidence_types(rule) or evidence_types(rule) & _KNOWN_RULE_EVIDENCE)):
+            issues.append(_issue("ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE", "ERROR",
+                                 f"业务规则 {identifier} 声称 ENFORCED，但没有约束/触发器/强制配置/代码等可追溯强制证据；"
+                                 f"强制状态必须为 UNKNOWN 或 NOT_ENFORCED",
+                                 artifact_type="BUSINESS_RULE", artifact_id=identifier,
+                                 details=result.as_dict()))
+        claimed_validation = _key(_rule_value(rule, "validationStatus", "validation_status"))
+        if (claimed_validation in {"VALIDATED", "SUPPORTED"}
+                and result.validation_status == RuleValidationStatus.INSUFFICIENT_EVIDENCE.value):
+            issues.append(_issue("VALIDATED_WITHOUT_VALIDATION_EVIDENCE", "ERROR",
+                                 f"业务规则 {identifier} 声称 {claimed_validation}，但没有适合其类型的可复核验证证据",
+                                 artifact_type="BUSINESS_RULE", artifact_id=identifier,
+                                 details=result.as_dict()))
+        if result.validation_status in {RuleValidationStatus.INSUFFICIENT_EVIDENCE.value,
+                                        RuleValidationStatus.NEEDS_CLASSIFICATION.value}:
             issues.append(_issue("INSUFFICIENT_RULE_EVIDENCE", "WARNING",
-                                 f"业务规则 {_rule_id(rule) or '(未命名)'} 缺少适合其类型的验证证据",
-                                 artifact_type="BUSINESS_RULE", artifact_id=_rule_id(rule),
+                                 f"业务规则 {identifier} 缺少适合其类型的验证证据；"
+                                 f"存在状态与强制状态独立记录，不因此阻断正式规则输出",
+                                 artifact_type="BUSINESS_RULE", artifact_id=identifier,
                                  details=result.as_dict()))
     return issues
 
 
 def validate_formal_business_rule_csv(blob: bytes,
                                       state: Mapping[str, Any] | None) -> list[ValidationIssue]:
-    """Formal rules must have proven existence, not only a zero-violation profile."""
+    """Only rules with a CONFIRMED decision may enter the formal rule CSV.
+
+    The decision (CONFIRMED/CANDIDATE/REJECTED/UNRESOLVED) is independent of
+    enforcement and validation: a CONFIRMED rule backed by an observed data
+    pattern may be formally exported with 强制状态=UNKNOWN/NOT_ENFORCED, while
+    a CANDIDATE/REJECTED rule may only stay in the decision audit.
+    """
     try:
         header, rows = _csv_rows(blob)
     except (TypeError, UnicodeDecodeError, csv.Error):
@@ -1956,16 +2030,18 @@ def validate_formal_business_rule_csv(blob: bytes,
                                  f"正式业务规则 {identifier} 没有对应决策记录",
                                  artifact_type="BUSINESS_RULE", artifact_id=identifier))
             continue
-        if decision["existence_status"] not in {"DECLARED", "ENFORCED", "IMPLEMENTED"}:
-            issues.append(_issue("OBSERVED_ONLY_RULE_IN_FORMAL_OUTPUT", "ERROR",
-                                 f"正式业务规则 {identifier} 只有观察/推断证据，不能进入正式目录",
+        if decision["decision_status"] != CONFIRMED:
+            issues.append(_issue("UNCONFIRMED_RULE_IN_FORMAL_OUTPUT", "ERROR",
+                                 f"正式业务规则 {identifier} 决策状态为 {decision['decision_status']}，"
+                                 f"只有 CONFIRMED 规则可以进入正式规则目录；强制状态未知不影响正式输出",
                                  artifact_type="BUSINESS_RULE", artifact_id=identifier,
-                                 details={"existenceStatus": decision["existence_status"]}))
+                                 details={"decisionStatus": decision["decision_status"],
+                                          "existenceStatus": decision["existence_status"],
+                                          "enforcementStatus": decision["enforcement_status"]}))
     for identifier, decision in decisions.items():
-        if decision["existence_status"] in {"DECLARED", "ENFORCED", "IMPLEMENTED"} \
-                and identifier not in formal_ids:
+        if decision["decision_status"] == CONFIRMED and identifier not in formal_ids:
             issues.append(_issue("RULE_DECISION_MISSING_FROM_FORMAL_OUTPUT", "ERROR",
-                                 f"正式存在的业务规则 {identifier} 未出现在业务规则 CSV",
+                                 f"CONFIRMED 业务规则 {identifier} 未出现在业务规则 CSV",
                                  artifact_type="BUSINESS_RULE", artifact_id=identifier))
     return issues
 
@@ -2244,7 +2320,7 @@ def _localized_audit_rows(filename: str, rows: Iterable[Mapping[str, Any]]) -> l
     for row in rows:
         output: dict[str, Any] = {}
         for key, value in row.items():
-            if key in {"evidence_ids", "missing_evidence"} \
+            if key in {"evidence_ids", "missing_evidence", "decision_status"} \
                     or (filename == "indicator_decisions.csv" and key == "grain"):
                 continue
             output_key = mapping.get(key, key)
@@ -2312,21 +2388,30 @@ def _rule_existence_status(rule: Mapping[str, Any]) -> str:
     explicit = _key(_rule_value(rule, "existenceStatus", "existence_status", "evidenceStatus",
                                 "ruleEvidenceStatus"))
     if explicit in RULE_EXISTENCE_STATUSES:
+        types = evidence_types(rule)
+        derived = _derived_rule_existence_status(rule)
+        # A claimed status may not outrank traceable evidence.  When the typed
+        # evidence only shows an observed pattern or pure inference, the rule
+        # is OBSERVED_ONLY/INFERRED even if the agent also wrote DECLARED,
+        # ENFORCED or IMPLEMENTED.  Free-text evidence (no known evidence type)
+        # is not strong enough to contradict an explicit claim.
+        if (types & _KNOWN_RULE_EVIDENCE
+                and _RULE_EXISTENCE_RANK[derived] < _RULE_EXISTENCE_RANK[explicit]):
+            return derived
         return explicit
+    return _derived_rule_existence_status(rule)
+
+
+def _derived_rule_existence_status(rule: Mapping[str, Any]) -> str:
     types = evidence_types(rule)
-    if types & {"DECLARED_CONSTRAINT", "CHECK_CONSTRAINT", "CHECK",
-                "UNIQUE_CONSTRAINT", "UNIQUE", "NOT_NULL_CONSTRAINT",
-                "NOT_NULL", "FOREIGN_KEY", "REFERENTIAL_CONSTRAINT",
-                "TRIGGER", "ENFORCEMENT_CONFIG", "DATA_CONTRACT",
-                "BUSINESS_DOCUMENT", "RULE_TABLE", "POLICY"}:
+    if types & _RULE_DECLARED_EVIDENCE:
         return "DECLARED"
-    if types & {"VIEW_DERIVATION_LINEAGE", "VIEW_CALCULATION_LOGIC",
-                "VIEW_FILTER_LOGIC", "ETL_SQL_LINEAGE", "CODE_REFERENCE",
-                "APPLICATION_CODE", "EXPLICIT_CONFIG", "WORKFLOW_DEFINITION",
-                "CONFIGURATION"}:
+    if types & _RULE_IMPLEMENTED_EVIDENCE:
         return "IMPLEMENTED"
-    if types & {"LLM_SEMANTIC_INFERENCE", "BUSINESS_COMMON_SENSE"}:
+    if types & _RULE_INFERRED_EVIDENCE:
         return "INFERRED"
+    if types & _RULE_OBSERVED_EVIDENCE:
+        return "OBSERVED_ONLY"
     if any(_rule_value(rule, key) is not None for key in
            ("violationCount", "hitCount", "matchCount", "sampleCount", "profile")):
         return "OBSERVED_ONLY"
@@ -2366,6 +2451,41 @@ def _rule_action_status(rule: Mapping[str, Any]) -> str:
     return "CONFIRMED" if action not in (None, "") else "UNKNOWN"
 
 
+_RULE_DECISION_ALIASES = {
+    "KNOWN": CONFIRMED, "PASS": CONFIRMED,
+    "PROPOSED": CANDIDATE, "INFERRED": CANDIDATE,
+    "PENDING": UNRESOLVED, "UNKNOWN": UNRESOLVED,
+    "REJECT": REJECTED,
+}
+
+
+def _rule_decision_status(rule: Mapping[str, Any]) -> str:
+    """Rule decision status, independent of enforcement and validation status.
+
+    CONFIRMED only requires evidence that the rule exists (declared schema,
+    implementation, an observed data pattern or validation evidence).  A rule
+    with no traceable existence evidence at all stays CANDIDATE even when an
+    agent claims CONFIRMED; enforcement and validation are recorded separately.
+    An UNKNOWN/UNRESOLVED action (处置) is not a decision claim and does not
+    demote a rule whose existence evidence already justifies CONFIRMED.
+    """
+    claimed = _key(_rule_value(rule, "decision", "decisionStatus", "decision_status",
+                               "ruleStatus", "rule_status", "actionStatus", "action_status"))
+    if claimed in {"", "UNKNOWN", "UNRESOLVED", "PENDING"}:
+        claimed = ""
+    decision = _RULE_DECISION_ALIASES.get(claimed, claimed)
+    if decision == CONFIRMED and _rule_existence_status(rule) == "UNVERIFIED":
+        return CANDIDATE
+    if decision in DECISION_STATES:
+        return decision
+    existence = _rule_existence_status(rule)
+    if existence in {"DECLARED", "ENFORCED", "IMPLEMENTED"}:
+        return CONFIRMED
+    if existence in {"OBSERVED_ONLY", "INFERRED"}:
+        return CANDIDATE
+    return UNRESOLVED
+
+
 def _rule_audit_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for position, rule in enumerate(_records_for_keys(
@@ -2389,6 +2509,7 @@ def _rule_audit_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
             "rule_name": _text(_rule_value(rule, "ruleName", "name", "rule_code", "ruleCode")),
             "rule_type": result.rule_type,
             "rule_origin": _rule_origin(rule),
+            "decision_status": _rule_decision_status(rule),
             "existence_status": _rule_existence_status(rule),
             "validation_status": result.validation_status,
             "enforcement_status": _rule_enforcement(rule),
@@ -2398,6 +2519,7 @@ def _rule_audit_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
             "total_count": result.sample_count or result.evaluated_count,
             "rate": rate,
             "action_status": _rule_action_status(rule),
+            "missing_evidence": missing,
         })
     return sorted(rows, key=lambda item: item["rule_decision_id"])
 
@@ -2498,7 +2620,7 @@ def _pending_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
                          "question": "请补充关系的直接来源、语义或归属证据。",
                          "missing_evidence": relation["missing_evidence"]})
     for rule in _rule_audit_rows(state):
-        if rule["action_status"] == "UNKNOWN" or rule["existence_status"] in {"UNVERIFIED", "OBSERVED_ONLY", "INFERRED"}:
+        if rule["decision_status"] != CONFIRMED:
             rows.append({"pending_id": rule["rule_decision_id"], "artifact_type": "BUSINESS_RULE",
                          "artifact_id": rule["rule_decision_id"],
                          "question": "请确认规则的正式来源、处置动作或强制执行方式。",
@@ -2870,9 +2992,10 @@ def validate_rule_decisions(state: Mapping[str, Any] | None) -> list[ValidationI
             issues.append(_issue("UNKNOWN_RULE_TYPE", "WARNING",
                                  f"业务规则 {row['rule_decision_id']} 无法可靠分类",
                                  artifact_type="BUSINESS_RULE", artifact_id=row["rule_decision_id"]))
-        if row["existence_status"] in {"OBSERVED_ONLY", "INFERRED", "UNVERIFIED"}:
+        if row["existence_status"] == "UNVERIFIED":
             issues.append(_issue("RULE_EXISTENCE_NOT_PROVEN", "WARNING",
-                                 f"业务规则 {row['rule_decision_id']} 只有观察/推断证据，不能作为正式规则",
+                                 f"业务规则 {row['rule_decision_id']} 没有任何可追溯的存在证据，"
+                                 f"不能确认正式规则；强制状态或验证状态未知不影响存在判定",
                                  artifact_type="BUSINESS_RULE", artifact_id=row["rule_decision_id"]))
     return issues
 
@@ -3281,7 +3404,7 @@ _FORMAL_ARTIFACT_REQUIRED_HEADERS = {
 # into every stage signature so stale PASSED/FAILED checkpoints written by an
 # older validator (for example the pre-entity-scope duplicate-name rule) are
 # invalidated and re-validated with the current code instead of being reused.
-VALIDATION_CACHE_VERSION = "2026-08-19-v0001-entity-scope"
+VALIDATION_CACHE_VERSION = "2026-08-19-rule-evidence-independent"
 
 MODEL_VALIDATION_STAGES = (
     ("INPUT_CONTEXT", "输入契约"),
