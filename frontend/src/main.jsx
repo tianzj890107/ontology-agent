@@ -656,7 +656,7 @@ function StandaloneApp() {
   const sendStandaloneMessage = async () => {
     if (!run || busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)) return;
     const nextPrompt = standaloneComposerText.trim();
-    if (run.status === "READY_FOR_EXPORT") {
+    if (run.status === "SUCCEEDED") {
       setError("该会话已经完成，如需重新建模请点击“新任务”");
       return;
     }
@@ -716,7 +716,7 @@ function StandaloneApp() {
       URL.revokeObjectURL(link.href);
     }
   };
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", READY_FOR_EXPORT: "success", FAILED: "error", BLOCKED: "error" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "error" }[run?.status] || "default";
   return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
     {contextHolder}
     <div className="standalone-shell">
@@ -743,7 +743,7 @@ function StandaloneInputCard({ sourceMode, setSourceMode, prompt, setPrompt, inp
 }
 
 function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", READY_FOR_EXPORT: "success", FAILED: "error", BLOCKED: "error" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "error" }[run?.status] || "default";
   const files = run?.files || [];
   // The standalone API persists every streamed thinking token. Reuse the
   // shared workbench normalization so one continuous reasoning block renders

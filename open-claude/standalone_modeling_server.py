@@ -311,7 +311,7 @@ def _table_count_answer(run: "ModelingRun") -> str:
             "本轮按你的要求只回答数量，不启动建模。")
 RUN_STATES = {
     "CREATED", "INPUT_READY", "QUEUED", "CLAIMED", "ANALYZING", "VALIDATING",
-    "READY_FOR_EXPORT", "SUCCEEDED", "CANCELLING", "CANCELLED", "FAILED", "BLOCKED",
+    "SUCCEEDED", "CANCELLING", "CANCELLED", "FAILED", "BLOCKED",
 }
 RUN_TRANSITIONS = {
     "CREATED": {"INPUT_READY", "QUEUED", "ANALYZING", "VALIDATING", "FAILED", "BLOCKED"},
@@ -320,9 +320,8 @@ RUN_TRANSITIONS = {
     "CLAIMED": {"ANALYZING", "CANCELLING", "FAILED"},
     # VALIDATING is an internal completion step; the public validate endpoint
     # still rejects ANALYZING through ModelingRunManager.validate().
-    "ANALYZING": {"VALIDATING", "READY_FOR_EXPORT", "SUCCEEDED", "CANCELLING", "FAILED", "BLOCKED"},
-    "VALIDATING": {"READY_FOR_EXPORT", "SUCCEEDED", "CANCELLING", "FAILED", "BLOCKED"},
-    "READY_FOR_EXPORT": {"SUCCEEDED"},
+    "ANALYZING": {"VALIDATING", "SUCCEEDED", "CANCELLING", "FAILED", "BLOCKED"},
+    "VALIDATING": {"SUCCEEDED", "CANCELLING", "FAILED", "BLOCKED"},
     "SUCCEEDED": set(),
     "CANCELLING": {"CANCELLED", "FAILED"},
     "CANCELLED": {"QUEUED", "FAILED"},
@@ -1650,7 +1649,7 @@ class ModelingRunManager:
                 self.store.append_event(run, "query_finished", status=run.status)
             else:
                 report = self.validate(run, internal=True)
-                self.store.append_event(run, "run_ready" if run.status == "READY_FOR_EXPORT"
+                self.store.append_event(run, "run_ready" if run.status == "SUCCEEDED"
                                         else "run_failed",
                                         semanticValidationStatus=report.get("semantic_validation_status", ""),
                                         error=run.error)
@@ -1683,7 +1682,7 @@ class ModelingRunManager:
             if result.get("status") == "FAILED" or status == "FAILED":
                 self.store.transition(run, "FAILED", error="semantic validation failed")
             else:
-                self.store.transition(run, "READY_FOR_EXPORT", error="")
+                self.store.transition(run, "SUCCEEDED", error="")
             self.store.append_event(run, "validation_finished", report=report)
             return report
         except Exception as exc:  # noqa: BLE001 - preserve structured failure state.

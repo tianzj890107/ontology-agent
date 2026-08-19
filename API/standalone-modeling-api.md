@@ -19,12 +19,12 @@
 ## 状态
 
 ```text
-CREATED/INPUT_READY → QUEUED → CLAIMED → ANALYZING → VALIDATING → READY_FOR_EXPORT → SUCCEEDED
+CREATED/INPUT_READY → QUEUED → CLAIMED → ANALYZING → VALIDATING → SUCCEEDED
                          │          └────→ CANCELLING → CANCELLED
                          └──────────────────────────────────────────────→ FAILED
 ```
 
-外部调用在 `QUEUED`、`CLAIMED`、`ANALYZING`、`VALIDATING`、`CANCELLING` 和 `READY_FOR_EXPORT` 状态不能上传输入、重复执行或重复校验；外部 `validate` 不允许借用 execute 的内部 `ANALYZING → VALIDATING` 转换。状态来源检查和转换在同一个 run 锁及 Repository 条件写入内原子完成；服务重启时已 claim/处理中状态会恢复为 `FAILED` 并记录中断原因，尚未 claim 的 `QUEUED` run 保留并由新 scheduler 接续。
+外部调用在 `QUEUED`、`CLAIMED`、`ANALYZING`、`VALIDATING`、`CANCELLING` 和 `SUCCEEDED` 状态不能上传输入、重复执行或重复校验；外部 `validate` 不允许借用 execute 的内部 `ANALYZING → VALIDATING` 转换。状态来源检查和转换在同一个 run 锁及 Repository 条件写入内原子完成；服务重启时已 claim/处理中状态会恢复为 `FAILED` 并记录中断原因，尚未 claim 的 `QUEUED` run 保留并由新 scheduler 接续。
 
 显式调用 `validate` 会执行现有语义 finalize、决策审计和正式输出一致性校验。审计文件落在 `work/`，正式 CSV 落在 `output/`。
 

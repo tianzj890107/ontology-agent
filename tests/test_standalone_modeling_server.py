@@ -309,7 +309,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             self._write_valid_business_objects(only_requested)
             report = manager.validate(only_requested)
             self.assertEqual(report["semantic_validation_status"], "PASSED")
-            self.assertEqual(only_requested.status, "READY_FOR_EXPORT")
+            self.assertEqual(only_requested.status, "SUCCEEDED")
 
             invalid_schema = self.store.create("DATABASE", "invalid schema", ["business_objects.csv"])
             Path(invalid_schema.root, "work", "modeling_state.json").write_text(
@@ -402,7 +402,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             self.store.transition(run, "ANALYZING")
             report = manager.validate(run, internal=True)
             self.assertEqual(report["semantic_validation_status"], "PASSED")
-            self.assertEqual(run.status, "READY_FOR_EXPORT")
+            self.assertEqual(run.status, "SUCCEEDED")
         finally:
             import oc_codex_server as web
             web.configure_task_persistence(True)
@@ -523,7 +523,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             ready = self.store.create("DATABASE", "ready", ["business_objects.csv"])
             self._write_valid_business_objects(ready)
             manager.validate(ready)
-            self.assertEqual(ready.status, "READY_FOR_EXPORT")
+            self.assertEqual(ready.status, "SUCCEEDED")
             with self.assertRaises(StateTransitionError):
                 self.store.put_files(ready, [{"name": "input/new.json", "content": "blocked"}])
         finally:
