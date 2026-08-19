@@ -23,4 +23,4 @@
   - `V0001_DUPLICATE_FORMAL_NAME` 统一为业务属性名称规则（规则 39）专属：同一逻辑实体内业务属性名称重复为 ERROR 阻断；不同逻辑实体同名允许；跨实体同名且定义明显不同仅 WARNING 记录、不阻断。业务对象名称重复改用 `V0001_DUPLICATE_BUSINESS_OBJECT_NAME`（规则 13），逻辑实体名称重复改用 `V0001_DUPLICATE_LOGICAL_ENTITY_NAME`（规则 22），消除同一编码复用三种规则的旧实现歧义；校验器不改属性名、不加实体前缀、不强行统一语义。
   - 新增 `VALIDATION_CACHE_VERSION` 并混入 stage signature：部署新校验逻辑后，旧版本写入的 PASSED/FAILED checkpoint 自动失效并重算，避免旧版全局判重产生的 FAILED 缓存继续阻断重跑（覆盖“全部链路”的陈旧报告/缓存路径）。
   - 核查并确认汇总层不升级 WARNING：`validate_modeling_stages` 与 `finalize_semantic_model` 仅在存在 ERROR 时判 FAILED，WARNING-only 不触发 repair/retry/run_blocked；web 47313 与 standalone 47314 均调用同一实体作用域检测器（`validate_formal_rows` / `validate_v0001_state`）。
-  - 新增回归测试：同 LE 同名 ERROR、跨 LE 同名同义 PASS、跨 LE 同名异义 WARNING 且整体 PASS、BO/LE 名称重复使用独立编码、旧版 stage cache 在版本变更后失效重算；完整测试集 218 通过（skipped=3）。本次未部署。
+  - 新增回归测试：同 LE 同名 ERROR、跨 LE 同名同义 PASS、跨 LE 同名异义 WARNING 且整体 PASS、BO/LE 名称重复使用独立编码、旧版 stage cache 在版本变更后失效重算；完整测试集 218 通过（skipped=3）。已部署两个服务（commit `494cb45`，web 47313 与 standalone 47314 均已重启，健康检查 200，部署前确认无活跃运行）。
