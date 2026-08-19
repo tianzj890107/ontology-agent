@@ -72,6 +72,18 @@ class TaskStateMachineTests(unittest.TestCase):
             self.assertEqual(guard.record_usage({"input_tokens": 10}),
                              "MODEL_TOOL_CALL_LIMIT")
 
+    def test_read_only_probe_does_not_consume_mutating_guard_budget(self):
+        with patch.dict(os.environ, {"ONTOLOGY_MODELING_MAX_TOOL_CALLS": "1"}, clear=False):
+            guard = oc_codex_server.ModelingExecutionGuard()
+            self.assertEqual(guard.record_tool_call("Read", {"file_path": "schema.json"}), "")
+            self.assertEqual(guard.record_tool_call("Bash", {"command": "rg -n tables schema.json"}), "")
+            self.assertEqual(guard.read_only_tool_calls, 2)
+            self.assertEqual(guard.mutating_tool_calls, 0)
+            self.assertEqual(guard.record_tool_call("Write", {"file_path": "out.csv"}),
+                             "MODEL_TOOL_CALL_LIMIT")
+            self.assertEqual(guard.record_tool_call("Write", {"file_path": "out2.csv"}),
+                             "MODEL_TOOL_CALL_LIMIT")
+
     def test_same_gate_without_new_evidence_blocks_and_preserves_result(self):
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / "mission-work").mkdir()

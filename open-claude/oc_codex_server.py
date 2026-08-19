@@ -206,6 +206,8 @@ class ModelingExecutionGuard:
                                                         DEFAULT_MODEL_MAX_GATE_RETRIES,
                                                         minimum=0))
         self.tool_calls = 0
+        self.mutating_tool_calls = 0
+        self.read_only_tool_calls = 0
         self.tokens = 0
         self.gate_retries = 0
         self.last_gate_signature = ""
@@ -215,14 +217,34 @@ class ModelingExecutionGuard:
     def check(self) -> str:
         if time.monotonic() - self.started_at >= self.max_seconds:
             return "MODEL_EXECUTION_TIMEOUT"
-        if self.tool_calls >= self.max_tool_calls:
+        if self.mutating_tool_calls >= self.max_tool_calls:
             return "MODEL_TOOL_CALL_LIMIT"
         if self.tokens >= self.max_tokens:
             return "MODEL_TOKEN_BUDGET_EXCEEDED"
         return ""
 
-    def record_tool_call(self) -> str:
+    @staticmethod
+    def _is_read_only_tool(tool_name: str, tool_input: dict | None = None) -> bool:
+        name = str(tool_name or "").strip().lower()
+        if name in {"read", "glob", "grep", "ls", "listfiles", "view", "catfile"}:
+            return True
+        if name not in {"bash", "shell", "execute", "run_command"}:
+            return False
+        value = tool_input if isinstance(tool_input, dict) else {}
+        command = str(value.get("command") or value.get("cmd") or "").strip().lower()
+        # Only classify explicit inspection commands as read-only.  Unknown
+        # shell input remains guarded and therefore cannot bypass the limit.
+        return bool(re.match(
+            r"^(pwd|ls|find|rg|grep|head|tail|stat|file|wc|git\s+(status|diff|log|show)|"
+            r"python(?:3)?\s+-c\s+.*(?:read|exists|version|--version))(?:\s|$)",
+            command))
+
+    def record_tool_call(self, tool_name: str = "", tool_input: dict | None = None) -> str:
         self.tool_calls += 1
+        if self._is_read_only_tool(tool_name, tool_input):
+            self.read_only_tool_calls += 1
+        else:
+            self.mutating_tool_calls += 1
         return self.check()
 
     def record_usage(self, usage: dict) -> str:
@@ -4262,7 +4284,7 @@ class Task:
                 emit(thinking_event)
             elif t == "tool_use_end":
                 if guard is not None:
-                    guard.record_tool_call()
+                    guard.record_tool_call(ev.get("name", ""), ev.get("input"))
                 tool_uses.append({"type": "tool_use", "id": ev["id"],
                                   "name": ev["name"], "input": ev["input"]})
                 flush_text()
