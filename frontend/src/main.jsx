@@ -125,7 +125,7 @@ function formatRunCreatedAt(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-async function standaloneApi(path, apiKey, options = {}) {
+async function standaloneApi(path, apiKey, options = {}, retrySession = true) {
   let response;
   try {
     response = await fetch(path, {
@@ -136,6 +136,19 @@ async function standaloneApi(path, apiKey, options = {}) {
   } catch (error) {
     if (error?.name === "AbortError") return { _aborted: true };
     return { error: `网络连接失败: ${error?.message || "无法连接服务"}` };
+  }
+  // The standalone server keeps browser-session ownership in memory. A
+  // restart can invalidate the old cookie while the already-rendered history
+  // list still contains valid run IDs. Refresh the root once to obtain a new
+  // browser session, then retry the original request so BLOCKED/FAILED runs
+  // remain viewable without requiring Continue or a manual page reload.
+  if (response.status === 401 && retrySession && typeof window !== "undefined") {
+    try {
+      const refreshed = await fetch("/", { credentials: "same-origin", cache: "no-store" });
+      if (refreshed.ok) return standaloneApi(path, apiKey, options, false);
+    } catch (error) {
+      if (error?.name === "AbortError") return { _aborted: true };
+    }
   }
   let body;
   try { body = await response.json(); } catch { body = {}; }
