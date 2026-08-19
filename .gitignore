@@ -22,6 +22,7 @@ open-claude/sandbox/
 # ---- 本项目临时 / 输出目录 ----
 output/
 tmp/
+ontology-agent-*.log
 
 # ---- 本地配置 / 密钥 ----
 .claude/
