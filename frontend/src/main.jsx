@@ -716,7 +716,7 @@ function StandaloneApp() {
       URL.revokeObjectURL(link.href);
     }
   };
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "error" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "default" }[run?.status] || "default";
   return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
     {contextHolder}
     <div className="standalone-shell">
@@ -743,7 +743,7 @@ function StandaloneInputCard({ sourceMode, setSourceMode, prompt, setPrompt, inp
 }
 
 function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "error" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "default" }[run?.status] || "default";
   const files = run?.files || [];
   // The standalone API persists every streamed thinking token. Reuse the
   // shared workbench normalization so one continuous reasoning block renders

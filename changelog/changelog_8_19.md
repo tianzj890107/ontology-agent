@@ -11,3 +11,4 @@
 - 新增输入资产处理覆盖校验：要求每个输入资产都有 MODELED、EXCLUDED、TECHNICAL、REJECTED 或 UNKNOWN 等处理决策；未处理资产才是 coverage ERROR，不要求所有资产都进入正式本体。新增相关门禁与最终 gate 回归测试，本次未部署。
 - 新增 DeepSeek 思考模式可恢复错误自动重试：模型网关返回 “reasoning_content … must be passed back” 类 400 时，OpenAI 兼容适配器自动以原请求重试一次、再以去除 reasoning 的出站历史重试一次，成功后任务自动继续执行并在审计中记录 `provider_retry` 事件，不再直接标记 FAILED；重试仍失败时才进入失败状态。涉及 `open_claude/openai_compat.py` 与 `oc_codex_server.py`，并补充适配器与任务层回归测试。已部署两个服务（commit `e083041`，web 47313 与 standalone 47314 均已重启，健康检查 200，部署前确认两服务无活跃任务）。
 - 独立建模服务(47314)取消 `READY_FOR_EXPORT` 中间状态：语义校验通过后 run 直接进入 `SUCCEEDED`，不再停在"待导出"等待状态（前端仅提供下载、无导出按钮）。同步更新状态机、`run_ready` 事件判定、standalone 前端状态展示/已完成提示、API 文档与相关回归测试，并重新构建 `frontend/dist`。已部署两个服务（commit `5142ffc`，web 47313 与 standalone 47314 均已重启，健康检查 200，部署前确认两服务无活跃任务）。
+- standalone 前端将 `BLOCKED` 状态标签由红色(error)改为灰色边框与灰色字体(default)，与红色 `FAILED` 区分；仅前端展示调整，重新构建 `frontend/dist`。
