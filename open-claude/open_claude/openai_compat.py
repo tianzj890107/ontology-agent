@@ -15,7 +15,8 @@ only use Anthropic models never need it.
 
 import json
 import os
-from typing import Any, Generator, Optional
+import threading
+from typing import Any, Callable, Generator, Iterable, Mapping, Optional
 
 from .config import PROVIDERS, get_api_key_for, get_provider_base_url
 
@@ -65,25 +66,108 @@ def _is_recoverable_provider_error(error: Exception) -> bool:
     reasoning stripped, so the task can continue instead of failing.
     """
     text = str(error or "").lower()
-    return ("must be passed back" in text
-            and ("reasoning_content" in text or "thinking mode" in text))
+    markers = (
+        "insufficient tool messages following tool_calls message",
+        "insufficient tool messages",
+        "tool_call_id",
+        "tool messages",
+        "role tool",
+        "must be passed back",
+    )
+    return any(marker in text for marker in markers)
 
 
 # ---------------------------------------------------------------------------
-# Format conversion: Anthropic blocks <-> OpenAI messages
+# Tool-call chain sanitization
+#
+# Every outgoing request must satisfy the OpenAI protocol invariant: each
+# assistant ``tool_calls`` id is followed by exactly one ``role=tool`` result,
+# with no orphan results and no duplicate ids.  Broken chains arise when a run
+# crashes between the assistant turn and its tool results, when compaction or
+# session restore trims a pair, or when a provider rejects the previous turn.
+# ``sanitize_messages`` repairs the chain before conversion; missing results
+# are recovered from the persisted tool-result store and, when no real result
+# exists, the conversation is truncated to the last consistent checkpoint so
+# the current LLM step is re-issued instead of failing the whole run.
 # ---------------------------------------------------------------------------
 
-def _tool_result_text(content: Any) -> str:
-    """Convert an Anthropic tool result to the string OpenAI expects."""
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, dict):
-                parts.append(str(item.get("text") or json.dumps(item, ensure_ascii=False)))
-            else:
-                parts.append(str(item))
-        return "\n".join(parts)
-    return str(content or "")
+_tool_result_store: dict[str, dict[str, Any]] = {}
+_tool_result_store_lock = threading.Lock()
+_TOOL_RESULT_STORE_CAP = 2000
+
+
+def remember_tool_result(tool_call_id: str, content: Any, *,
+                         is_error: bool = False) -> None:
+    """Register one real tool execution result for later recovery."""
+    tid = str(tool_call_id or "")
+    if not tid:
+        return
+    with _tool_result_store_lock:
+        _tool_result_store[tid] = {"content": content, "is_error": bool(is_error)}
+        if len(_tool_result_store) > _TOOL_RESULT_STORE_CAP:
+            # Bound process memory; tool ids are unique per turn so evicting
+            # the oldest completed turns is safe.
+            for stale in list(_tool_result_store)[:len(_tool_result_store) - _TOOL_RESULT_STORE_CAP]:
+                _tool_result_store.pop(stale, None)
+
+
+def clear_tool_results() -> None:
+    """Drop every remembered tool result (test isolation / run teardown)."""
+    with _tool_result_store_lock:
+        _tool_result_store.clear()
+
+
+def seed_tool_results(records: Iterable[Mapping[str, Any]]) -> None:
+    """Register persisted ``tool_result`` events (event journal / task log)."""
+    for record in records or ():
+        if not isinstance(record, Mapping):
+            continue
+        tid = str(record.get("tool_use_id") or record.get("tool_call_id") or "")
+        if tid:
+            remember_tool_result(tid, record.get("content", ""),
+                                 is_error=bool(record.get("is_error")))
+
+
+def seed_tool_results_from_messages(messages: Iterable[Mapping[str, Any]]) -> None:
+    """Scan a restored transcript and register every real tool result.
+
+    This is the session-restore counterpart of ``_execute_pending_tools``:
+    after a process restart the in-memory store is empty, so the sanitizer
+    must be able to recover tool results from the persisted transcript itself.
+    """
+    for message in messages or ():
+        if not isinstance(message, Mapping):
+            continue
+        if message.get("role") == "tool":
+            tid = str(message.get("tool_call_id") or message.get("tool_use_id") or "")
+            if tid:
+                remember_tool_result(tid, message.get("content", ""),
+                                     is_error=bool(message.get("is_error")))
+            continue
+        content = message.get("content")
+        if message.get("role") == "user" and isinstance(content, list):
+            for block in content:
+                if (isinstance(block, Mapping)
+                        and block.get("type") == "tool_result"
+                        and (block.get("tool_use_id") or block.get("tool_call_id"))):
+                    remember_tool_result(
+                        str(block.get("tool_use_id") or block.get("tool_call_id")),
+                        block.get("content", ""),
+                        is_error=bool(block.get("is_error")))
+
+
+def _lookup_persisted_tool_result(tool_call_id: str) -> dict[str, Any] | None:
+    with _tool_result_store_lock:
+        return _tool_result_store.get(str(tool_call_id or ""))
+
+
+def _is_tool_use_block(block: Any) -> bool:
+    return (isinstance(block, dict)
+            and block.get("type") in ("tool_use", "tool_call"))
+
+
+def _is_tool_result_block(block: Any) -> bool:
+    return isinstance(block, dict) and block.get("type") == "tool_result"
 
 
 def _orphan_tool_result_text(tool_id: str, content: Any) -> str:
@@ -100,6 +184,165 @@ def _orphan_tool_result_text(tool_id: str, content: Any) -> str:
     return f"{label}：\n{_tool_result_text(content)}"
 
 
+def _tool_result_text(content: Any) -> str:
+    """Convert an Anthropic tool result to the string OpenAI expects."""
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or json.dumps(item, ensure_ascii=False)))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def sanitize_messages(messages: list[dict[str, Any]], *,
+                      restore: Callable[[str], dict[str, Any] | None] | None = None,
+                      truncate: bool = True) -> list[dict[str, Any]]:
+    """Repair an internal (Anthropic-style) message chain in place.
+
+    Guaranteed invariant on the returned list: every assistant ``tool_use`` id
+    has exactly one matching ``tool_result`` in the following user message; no
+    orphan tool result survives; no duplicate result survives.  When a tool
+    result is missing it is first recovered from ``restore`` (defaults to the
+    persisted tool-result store, which producers populate from real executions
+    and servers seed from event journals).  A missing result with no real
+    source is never fabricated: the assistant message that requested it and
+    everything after it is truncated, so the current LLM step re-issues from
+    the last consistent checkpoint instead of failing the run.
+    """
+    if not isinstance(messages, list):
+        return messages
+    resolver = restore if callable(restore) else _lookup_persisted_tool_result
+
+    result: list[dict[str, Any]] = []
+    # (index in result, original tool ids, remaining tool ids) for every
+    # assistant tool_use turn.
+    pending_turns: list[tuple[int, list[str], list[str]]] = []
+    active_window: dict[str, bool] = {}
+
+    def consume(tool_id: str) -> None:
+        for _, _, remaining in reversed(pending_turns):
+            if tool_id in remaining:
+                remaining.remove(tool_id)
+                return
+
+    for message in messages:
+        if not isinstance(message, dict):
+            result.append(message)
+            continue
+        role = message.get("role")
+        content = message.get("content")
+
+        if role == "assistant" and isinstance(content, list):
+            rebuilt: list[Any] = []
+            tool_ids: list[str] = []
+            for block in content:
+                if _is_tool_use_block(block):
+                    raw_id = str(block.get("id") or "")
+                    if not raw_id:
+                        raw_id = f"call_{len(tool_ids)}"
+                    normalized = dict(block)
+                    normalized["id"] = raw_id
+                    rebuilt.append(normalized)
+                    tool_ids.append(raw_id)
+                else:
+                    rebuilt.append(block)
+            if tool_ids:
+                pending_turns.append((len(result), list(tool_ids), list(tool_ids)))
+                active_window = {tid: True for tid in tool_ids}
+                result.append({**message, "content": rebuilt})
+                continue
+            active_window = {}
+            result.append(message)
+            continue
+
+        if role == "user" and isinstance(content, list):
+            results = [block for block in content if _is_tool_result_block(block)]
+            if results:
+                seen: set[str] = set()
+                kept: list[dict[str, Any]] = []
+                orphan_blocks: list[dict[str, Any]] = []
+                other = [block for block in content if not _is_tool_result_block(block)]
+                for block in results:
+                    tid = str(block.get("tool_use_id") or block.get("tool_call_id") or "")
+                    if not tid and len(active_window) == 1:
+                        tid = next(iter(active_window))
+                    if tid in active_window and tid not in seen:
+                        seen.add(tid)
+                        normalized = dict(block)
+                        normalized["tool_use_id"] = tid
+                        kept.append(normalized)
+                        consume(tid)
+                        active_window.pop(tid, None)
+                    elif tid in seen:
+                        # duplicate result for an already-consumed call: the
+                        # duplicate is dropped entirely, only one result stays.
+                        continue
+                    else:
+                        # orphan (no pending assistant call): preserved so the
+                        # converter can keep the content as plain user text;
+                        # it will never be emitted as a role=tool message.
+                        orphan_blocks.append(block)
+                if kept or other or orphan_blocks:
+                    result.append({**message, "content": other + kept + orphan_blocks})
+                if other:
+                    # Plain user content closes the pending tool window.
+                    active_window = {}
+                continue
+            active_window = {}
+            result.append(message)
+            continue
+
+        active_window = {}
+        result.append(message)
+
+    if truncate:
+        # Process newest unpaired turn first so inserts for later turns never
+        # shift the assistant indices of earlier turns.  Inserting a repair
+        # after the turn's existing result messages keeps the original order.
+        for index, original_ids, remaining in reversed(pending_turns):
+            if not remaining:
+                continue
+            resolved = {tid: resolver(tid) for tid in remaining}
+            resolved = {tid: value for tid, value in resolved.items()
+                        if isinstance(value, Mapping)}
+            if len(resolved) == len(remaining):
+                pos = index + 1
+                while pos < len(result):
+                    msg = result[pos]
+                    content = msg.get("content")
+                    if (msg.get("role") == "user" and isinstance(content, list)
+                            and any(
+                                _is_tool_result_block(block)
+                                and str(block.get("tool_use_id") or block.get("tool_call_id") or "")
+                                in original_ids
+                                for block in content)):
+                        pos += 1
+                    else:
+                        break
+                repair = [{"type": "tool_result", "tool_use_id": tid,
+                           "content": resolved[tid].get("content", ""),
+                           "is_error": bool(resolved[tid].get("is_error"))}
+                          for tid in remaining]
+                result.insert(pos, {"role": "user", "content": repair})
+                continue
+            # No real result exists for at least one id: never fabricate a
+            # success.  Truncate to the last consistent checkpoint so the
+            # current step re-issues without the unpaired tool call.
+            del result[index:]
+            break
+
+    messages[:] = result
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Format conversion: Anthropic blocks <-> OpenAI messages
+# ---------------------------------------------------------------------------
+
+
 def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]],
                        strip_reasoning: bool = False) -> list[dict[str, Any]]:
     """Convert internal Anthropic-style history to a valid OpenAI message list.
@@ -109,12 +352,19 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]],
     assistant tool call; forwarding that record makes DeepSeek/LiteLLM return a
     400 before it can answer the next user message.
 
+    The history is sanitized first: every assistant ``tool_use`` id is paired
+    with exactly one ``tool_result`` (recovered from the persisted result store
+    or truncated to the last consistent checkpoint), orphans and duplicates are
+    removed, and missing tool ids are filled deterministically.  This keeps the
+    converted OpenAI message list valid for every provider.
+
     ``strip_reasoning`` drops every assistant reasoning block (and the
     provider-native ``reasoning_content`` field) from the outgoing history.
     DeepSeek thinking-mode gateways return a recoverable 400 when a reasoning
     turn is not passed back verbatim; resending the same conversation without
     reasoning keeps the request self-consistent so execution can continue.
     """
+    sanitize_messages(messages)
     out: list[dict[str, Any]] = []
     if system_prompt:
         out.append({"role": "system", "content": system_prompt})
@@ -390,11 +640,15 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
         yield {"type": "message_end", "stop_reason": stop_reason, "usage": usage}
 
     except Exception as e:
-        # DeepSeek thinking-mode 400s are recoverable: retry the same request
-        # once as-is, then once with reasoning stripped from the outgoing
-        # history.  A successful retry yields a visible notice followed by the
-        # recovered stream so the turn continues instead of failing.
+        # Tool-chain / thinking-mode 400s are recoverable.  Sanitize the
+        # history again (a missing tool result may now be restorable from the
+        # persisted store, or the chain is truncated to the last consistent
+        # checkpoint), then retry the same request once as-is, and once with
+        # reasoning stripped from the outgoing history.  Only the current LLM
+        # step is retried: checkpoints, stages and the run state are untouched,
+        # so a successful retry continues instead of restarting the run.
         if _allow_fallback and _is_recoverable_provider_error(e):
+            sanitize_messages(messages)
             for attempt, retry_strip in ((1, False), (2, True)):
                 retry_events = list(stream(provider, model, messages, system_prompt,
                                            tools, max_tokens, temperature,
@@ -408,7 +662,7 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
                     "attempt": attempt,
                     "text": ("模型网关返回可恢复错误，已自动重试并继续执行"
                              if not retry_strip else
-                             "模型网关思考模式校验失败，已清理 reasoning 后自动重试并继续执行"),
+                             "模型网关消息链/思考模式校验失败，已修复消息链并清理 reasoning 后自动重试并继续执行"),
                 }
                 yield from retry_events
                 return
@@ -437,24 +691,16 @@ def send(provider: str, model: str, messages: list[dict[str, Any]], system_promp
          tools: Optional[list[dict[str, Any]]], max_tokens: Optional[int],
          temperature: Optional[float], api_key: str | None = None) -> dict[str, Any]:
     """Return {"content": [normalized blocks], "stop_reason", "usage"}."""
-    client = _client(provider, api_key)
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": to_openai_messages(system_prompt, messages),
-    }
-    oai_tools = to_openai_tools(tools)
-    if oai_tools:
-        kwargs["tools"] = oai_tools
-    if max_tokens:
-        kwargs["max_tokens"] = max_tokens
-    if temperature is not None:
-        kwargs["temperature"] = temperature
-    if provider == "qwen":
-        thinking = os.environ.get("QWEN_ENABLE_THINKING", "").strip().lower()
-        if thinking:
-            kwargs["extra_body"] = {"enable_thinking": thinking in ("1", "true", "yes", "on")}
-
-    resp = client.chat.completions.create(**kwargs)
+    try:
+        resp = _send_once(provider, model, messages, system_prompt, tools,
+                          max_tokens, temperature, api_key)
+    except Exception as e:
+        if not _is_recoverable_provider_error(e):
+            raise
+        # Sanitize (recover/truncate the tool chain) and retry only this call.
+        sanitize_messages(messages)
+        resp = _send_once(provider, model, messages, system_prompt, tools,
+                          max_tokens, temperature, api_key)
     msg = resp.choices[0].message
 
     content: list[dict[str, Any]] = []
@@ -481,3 +727,27 @@ def send(provider: str, model: str, messages: list[dict[str, Any]], system_promp
                  {"input_tokens": 0, "output_tokens": 0,
                   "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
     }
+
+
+def _send_once(provider: str, model: str, messages: list[dict[str, Any]],
+               system_prompt: str, tools: Optional[list[dict[str, Any]]],
+               max_tokens: Optional[int], temperature: Optional[float],
+               api_key: str | None = None) -> Any:
+    """Perform one non-streaming OpenAI-compatible completion request."""
+    client = _client(provider, api_key)
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": to_openai_messages(system_prompt, messages),
+    }
+    oai_tools = to_openai_tools(tools)
+    if oai_tools:
+        kwargs["tools"] = oai_tools
+    if max_tokens:
+        kwargs["max_tokens"] = max_tokens
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    if provider == "qwen":
+        thinking = os.environ.get("QWEN_ENABLE_THINKING", "").strip().lower()
+        if thinking:
+            kwargs["extra_body"] = {"enable_thinking": thinking in ("1", "true", "yes", "on")}
+    return client.chat.completions.create(**kwargs)

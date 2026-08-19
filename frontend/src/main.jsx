@@ -1441,7 +1441,7 @@ function App() {
   const [text, setText] = useState("");
   const [pendingFiles, setPendingFiles] = useState([]);
   const [files, setFiles] = useState([]);
-  const [filesOpen, setFilesOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(true);
   const [filesLoading, setFilesLoading] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [focusFile, setFocusFile] = useState("");
@@ -1643,8 +1643,10 @@ function App() {
       const historyHasMore = await loadOlderTaskEvents(current, 0, 10);
       const loadedFiles = await loadFiles(current);
       if (activeTaskIdRef.current === current.id) {
-        // Reopening a session with generated results should expose the result
-        // workspace, but loading its contents must not block the conversation.
+        // The file panel is open by default; reopening a session with
+        // generated results only ever opens it (never auto-closes a panel the
+        // user kept open), while loading contents must not block the
+        // conversation.
         const shouldOpenFiles = hasMissionOutputFiles(loadedFiles);
         const feed = feedRef.current;
         if (feed && shouldOpenFiles !== filesOpen) {
@@ -1654,7 +1656,7 @@ function App() {
             epoch: feedScrollEpochRef.current,
           };
         }
-        setFilesOpen(shouldOpenFiles);
+        if (shouldOpenFiles) setFilesOpen(true);
       }
       if (historyHasMore) await loadOlderTaskEvents(current);
     });

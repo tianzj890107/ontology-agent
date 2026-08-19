@@ -117,6 +117,12 @@ def stream_message(
     model = model or get_model()
     max_tokens = max_tokens or get_max_tokens()
     tools = tools if tools is not None else get_tool_schemas()
+    # Every request passes the unified tool-chain sanitizer first so a broken
+    # tool_use/tool_result pair from a crash, compaction or session restore
+    # is repaired (or truncated to the last consistent checkpoint) before any
+    # provider sees it.  Idempotent: the OpenAI-compatible adapter also
+    # sanitizes again right before conversion and on recoverable retries.
+    openai_compat.sanitize_messages(messages)
 
     # Route non-Anthropic models through the OpenAI-compatible adapter.
     provider = get_model_provider(model)
@@ -273,6 +279,7 @@ def complete(
     model = model or get_model()
     max_tokens = max_tokens or get_max_tokens()
     provider = get_model_provider(model)
+    openai_compat.sanitize_messages(messages)
 
     if provider != "anthropic":
         return openai_compat.send(

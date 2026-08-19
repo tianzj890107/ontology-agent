@@ -275,7 +275,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('workspaceFolders resetKey={run.runId}', source)
         self.assertIn('function hasMissionOutputFiles(files = [])', source)
         self.assertIn('const shouldOpenFiles = hasMissionOutputFiles(loadedFiles);', source)
-        self.assertIn('setFilesOpen(shouldOpenFiles);', source)
+        self.assertIn('if (shouldOpenFiles) setFilesOpen(true);', source)
         self.assertIn('startsWith("mission-output/")', source)
         self.assertIn('!files.length && !mission && !workspaceFolders ? <Empty description="暂无文件" />', source)
         self.assertIn('className="file-group-empty">暂无文件', source)

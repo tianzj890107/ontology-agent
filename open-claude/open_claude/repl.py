@@ -31,6 +31,7 @@ from .profile import (
     save_profile,
 )
 from .prompt import build_system_prompt
+from .openai_compat import remember_tool_result, seed_tool_results_from_messages
 from .sessions import SessionStore, latest_session_id, list_sessions, load_session
 from .settings import (
     Settings,
@@ -296,6 +297,7 @@ class Conversation:
             loaded = load_session(cwd, resume_session_id)
             if loaded is not None:
                 self.messages = loaded
+                seed_tool_results_from_messages(loaded)
                 self.session = SessionStore(cwd, resume_session_id)
             else:
                 console.print(f"[yellow]Session {resume_session_id} not found; starting fresh.[/yellow]")
@@ -640,6 +642,10 @@ class Conversation:
             })
 
         if tool_results:
+            for block in tool_results:
+                if isinstance(block, dict) and block.get("tool_use_id"):
+                    remember_tool_result(block["tool_use_id"], block.get("content", ""),
+                                         is_error=bool(block.get("is_error")))
             msg = {"role": "user", "content": tool_results}
             self.messages.append(msg)
             self.session.append_message(msg)
