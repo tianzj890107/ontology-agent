@@ -235,6 +235,11 @@ class TaskStateMachineTests(unittest.TestCase):
                              "MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE")
             self.assertEqual(stream.call_count, 1)
             self.assertTrue((Path(directory) / "mission-work").exists())
+            guard_events = [event for event in task.log
+                            if event.get("type") == "execution_guard"]
+            self.assertTrue(guard_events)
+            self.assertEqual(guard_events[-1].get("status"), "blocked")
+            self.assertIn("MISSING_EVIDENCE", guard_events[-1].get("message", ""))
 
     def test_new_evidence_allows_one_gate_repair_window(self):
         with tempfile.TemporaryDirectory() as directory:

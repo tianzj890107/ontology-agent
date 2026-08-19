@@ -2660,17 +2660,26 @@ def modeling_gate_retry_message(checkpoint: dict) -> str:
     receives actionable blockers without being allowed to invent a success
     state.
     """
-    blockers = []
-    for issue in (checkpoint.get("issues", []) if isinstance(checkpoint, dict) else [])[:12]:
-        code = str(getattr(issue, "code", "") or "VALIDATION_ERROR")
-        message = str(getattr(issue, "message", "") or code)
-        blockers.append(f"{code}: {message}")
-    detail = "；".join(blockers) or "正式输出或语义校验尚未完成"
+    detail = _gate_blocker_detail(checkpoint) or "正式输出或语义校验尚未完成"
     return (
         "[服务端执行门禁] 当前建模回合不能结束。请继续使用工具完成所有 "
         "execution-context.expectedFiles 指定的正式输出、mission-work 审计和语义校验，"
         "不要只回复说明，也不要把未完成状态当作成功。当前未通过项：" + detail
     )
+
+
+def _gate_blocker_detail(checkpoint: dict) -> str:
+    """Render the concrete validator blockers for an incomplete checkpoint.
+
+    Used both in the repair-window instruction and in the hard-block event so
+    the user always sees the real gate items instead of a generic stop text.
+    """
+    blockers = []
+    for issue in (checkpoint.get("issues", []) if isinstance(checkpoint, dict) else [])[:12]:
+        code = str(getattr(issue, "code", "") or "VALIDATION_ERROR")
+        message = str(getattr(issue, "message", "") or code)
+        blockers.append(f"{code}: {message}")
+    return "；".join(blockers)
 
 
 def invalidate_mission_results_for_input_change(task):
@@ -4115,18 +4124,21 @@ class Task:
                     self.modeling_block_reason = str(reason or "MODEL_EXECUTION_BLOCKED")
                     self.status = "blocked"
                     errors = [self.modeling_block_reason]
+                    blocker_detail = ""
                     if isinstance(checkpoint, dict):
                         errors.extend(
                             str(getattr(issue, "code", "") or "VALIDATION_ERROR")
                             for issue in checkpoint.get("issues", [])
                             if getattr(issue, "severity", "") == "ERROR")
+                        blocker_detail = _gate_blocker_detail(checkpoint)
                     set_task_run_result(self, "BLOCKED", errors=errors)
                     rec({
                         "type": "execution_guard",
                         "status": "blocked",
                         "recoverable": False,
                         "code": self.modeling_block_reason,
-                        "message": "建模已停止，保留当前 work/output 供人工处理",
+                        "message": "建模已停止，保留当前 work/output 供人工处理。"
+                                   "未通过的门禁校验项：" + (blocker_detail or "无"),
                     })
 
                 def pause_modeling(reason: str):

@@ -764,7 +764,9 @@ function blockedAdviceText(run) {
       break;
     }
     if (event?.type === "execution_guard" && event.message) {
-      blockers = String(event.message || "").trim();
+      const marker = "未通过的门禁校验项：";
+      const start = String(event.message).indexOf(marker);
+      blockers = (start >= 0 ? String(event.message).slice(start + marker.length) : String(event.message)).trim();
       break;
     }
   }
