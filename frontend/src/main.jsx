@@ -156,6 +156,10 @@ async function standaloneApi(path, apiKey, options = {}, retrySession = true) {
   return { ...body, _status: response.status };
 }
 
+function standaloneRequestFailed(result) {
+  return Boolean(result?.error && (!Number.isFinite(Number(result?._status)) || Number(result._status) >= 400));
+}
+
 function scheduleIdle(callback) {
   if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
     return window.requestIdleCallback(callback, { timeout: 1200 });
@@ -307,7 +311,10 @@ function StandaloneApp() {
       { signal: request.controller.signal },
     );
     if (summary._aborted || selectedRunIdRef.current !== runId) return null;
-    if (summary.error) { if (showError) setError(summary.error); return null; }
+    // A successful run-detail response legitimately contains `error` for
+    // BLOCKED/FAILED runs (for example MODEL_GATE_RETRY_LIMIT). Only treat it
+    // as a transport/API failure when the HTTP request itself failed.
+    if (standaloneRequestFailed(summary)) { if (showError) setError(summary.error); return null; }
     const cachedRun = runs.find((item) => item.runId === runId);
     const visibleRun = run?.runId === runId ? run : cachedRun;
     const cachedEvents = Array.isArray(visibleRun?.events) && visibleRun.events.length
@@ -466,7 +473,8 @@ function StandaloneApp() {
         `/api/modeling-runs/${encodedId}?includeEvents=false`, "",
         { signal: request.controller.signal },
       );
-      if (summary._aborted || !isCurrentRunRequest(runId, request.generation) || summary.error) return null;
+      if (summary._aborted || !isCurrentRunRequest(runId, request.generation)
+          || standaloneRequestFailed(summary)) return null;
       const cursor = eventCursorRef.current.get(runId) || 0;
       const events = await standaloneApi(
         `/api/modeling-runs/${encodedId}/events?since=${cursor}`, "",
