@@ -742,16 +742,63 @@ function StandaloneInputCard({ sourceMode, setSourceMode, prompt, setPrompt, inp
   return <div className="standalone-card"><h2>建模输入</h2><div className="standalone-form-row"><Select size="large" value={sourceMode} onChange={setSourceMode} options={[{ value: "DATABASE", label: "数据库建模" }, { value: "DOCUMENT", label: "文档建模" }, { value: "NATURAL_LANGUAGE", label: "自然语言建模" }]} /><Input size="large" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="建模要求可选；不填写时直接使用四份 v0.0.1 规范/模板建模" /></div><div className="standalone-upload"><input type="file" multiple onChange={(event) => setInputFiles(Array.from(event.target.files || []))} /><span>{inputFiles.length ? inputFiles.map((file) => file.name).join("、") : "可上传 schema、文档或其他输入文件"}</span></div>{sourceMode === "DATABASE" && <><Divider orientation="left">选择数据源</Divider><div className="standalone-database-row"><Select className="standalone-database-select" value={databaseSourceId || undefined} onChange={(value) => { setDatabaseSourceId(value); setSelectedSchemas([]); setSelectedTables([]); }} placeholder="请选择数据库" loading={!databaseSources.length} options={databaseSources.map((item) => ({ value: item.id, label: item.name }))} notFoundContent="暂无可用数据库" /><Select mode="multiple" allowClear className="standalone-database-select" value={selectedSchemas} onChange={(value) => { setSelectedSchemas(value); setSelectedTables([]); }} placeholder="选择 Schema（可多选）" loading={!databaseSchemas.length && !!databaseSourceId} options={databaseSchemas.map((schema) => ({ value: schema, label: schema }))} notFoundContent="暂无可用 Schema" /></div><Divider orientation="left">选择数据表</Divider><div className="standalone-table-toolbar"><span>Schema：{databaseSchema || "-"}</span><Checkbox checked={databaseTables.length > 0 && selectedTables.length === databaseTables.length} indeterminate={selectedTables.length > 0 && selectedTables.length < databaseTables.length} disabled={tablesLoading || !databaseTables.length} onChange={(event) => setSelectedTables(event.target.checked ? databaseTables : [])}>全选</Checkbox></div>{tablesLoading ? <div className="standalone-table-loading">正在读取数据表…</div> : <Checkbox.Group className="standalone-table-list" value={selectedTables} onChange={setSelectedTables} options={databaseTables.map((item) => ({ value: item, label: item }))} />}<div className="standalone-selected-count">已选 {selectedTables.length} 张表</div></>}<Divider orientation="left">解析要素</Divider><Checkbox.Group value={selectedArtifacts} onChange={setSelectedArtifacts} options={STANDALONE_ARTIFACTS.map((item) => ({ value: item, label: STANDALONE_ARTIFACT_LABELS[item] }))} /><Button type="primary" size="large" loading={busy} disabled={busy} onClick={startModeling} className="standalone-start">开始建模</Button></div>;
 }
 
+const BLOCKED_REASON_TEXT = {
+  MODEL_GATE_RETRY_LIMIT: "模型反复尝试修复仍未通过门禁校验，已达到自动修复次数上限（10 次），系统为避免无限消耗已自动暂停",
+  MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE: "模型重复提交了相同的门禁错误且没有带来新的证据，触发安全阀已自动暂停",
+};
+
+function blockedAdviceText(run) {
+  const reason = String(run?.error || "").trim() || "MODEL_GATE";
+  const reasonText = BLOCKED_REASON_TEXT[reason] || `建模门禁校验未通过（${reason}）`;
+  const journal = Array.isArray(run?.events) ? run.events : [];
+  let blockers = "";
+  for (let index = journal.length - 1; index >= 0; index -= 1) {
+    const event = journal[index];
+    if (event?.type === "execution_gate" && event.message) {
+      const marker = "当前未通过项：";
+      const start = String(event.message).indexOf(marker);
+      blockers = (start >= 0 ? String(event.message).slice(start + marker.length) : String(event.message)).trim();
+      break;
+    }
+    if (event?.type === "execution_guard" && event.message) {
+      blockers = String(event.message || "").trim();
+      break;
+    }
+  }
+  if (blockers.length > 500) blockers = `${blockers.slice(0, 500)}…`;
+  const blockerLine = blockers
+    ? `未通过的门禁校验项：${blockers}`
+    : "具体未通过的门禁校验项请查看下方执行审计或文件面板中的校验报告。";
+  return [
+    "【建模已暂停】",
+    "",
+    "当前产物其实已经基本完成：模型已生成 work/output 中的建模结果文件，这些结果现在就可以下载使用。",
+    "",
+    `暂停原因：${reasonText}。`,
+    blockerLine,
+    "",
+    "你可以这样处理：",
+    "1. 点击上方“继续运行”，让模型基于当前产物继续修复并重新校验；",
+    "2. 或者直接使用当前产物，在“文件”面板中下载已生成的结果文件。",
+  ].join("\n");
+}
+
 function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
   const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "default" }[run?.status] || "default";
   const files = run?.files || [];
   // The standalone API persists every streamed thinking token. Reuse the
   // shared workbench normalization so one continuous reasoning block renders
   // as one node instead of dozens of token-sized "思考中" nodes.
-  const events = useMemo(() => [
-    { type: "user", text: run.prompt || "开始智能建模" },
-    ...normalizeEvents({ events: run.events || [] }),
-  ], [run.events, run.prompt]);
+  const events = useMemo(() => {
+    const base = [
+      { type: "user", text: run.prompt || "开始智能建模" },
+      ...normalizeEvents({ events: run.events || [] }),
+    ];
+    if (run?.status === "BLOCKED") {
+      base.push({ type: "assistant", text: blockedAdviceText(run) });
+    }
+    return base;
+  }, [run.events, run.prompt, run.status]);
   return <section className="task-view standalone-agent-task-view">
     <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{run.status}</Tag>{["FAILED", "BLOCKED"].includes(run.status) && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
     <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
