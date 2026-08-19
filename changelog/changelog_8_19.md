@@ -39,3 +39,10 @@
   - 入口统一：`open_claude/api.py` 的 `stream_message`/`complete` 请求前先过 sanitizer，`openai_compat.stream`/`send`/`to_openai_messages` 转换前与重试前再次执行（幂等）；`repl.py` 工具执行写入结果时登记、会话恢复时从已持久化消息回填结果存储，存储设 2000 条上限。
   - 新增 12 个回归测试：单/多 tool 正常、缺 1 个 result 从持久化恢复、会话恢复回填后恢复、缺结果无来源截断到 checkpoint、孤立 tool、重复 result、tool_call_id 错配（可恢复/不可恢复两分支）、DeepSeek reasoning 保留、400 后仅重试当前 step 且不重放已完成内容；`tests/test_openai_compat.py` 全绿，其余模块测试全绿，py_compile 与 git diff --check 通过（完整集并跑时 `test_standalone_modeling_server` 存在两个与本次改动无关的既有并发时序偶发用例，单独运行均通过）。 已部署两个服务（commit `a77ce0b`，web 47313 与 standalone 47314 均已重启，健康检查 200，部署前确认两服务无活跃运行）。
   - 工作台页面右侧“文件”面板默认展开：打开页面/任务即显示文件栏，无需先点“文件”按钮；打开任务时仅会确保面板打开，不再因任务无 mission-output 文件而自动收起（用户手动折叠仍生效）。`frontend/src/main.jsx` 调整并重新构建 `frontend/dist`，前端契约测试同步更新。 随 `a77ce0b` 一并部署两个服务（47313/47314 已重启，健康检查 200）。
+- 降低业务规则与指标门禁强度（规则指标弱证据专项）：
+  - 业务规则仅保留结构性 ERROR（CSV 无法解析/缺必要列、正式输出为空或不可读、编码重复、审计与正式文件结构性不一致）；证据类问题一律 WARNING：`ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE`、`VALIDATED_WITHOUT_VALIDATION_EVIDENCE` 由 ERROR 降为 WARNING，`INSUFFICIENT_RULE_EVIDENCE`、`RULE_EXISTENCE_NOT_PROVEN`、`UNKNOWN_RULE_TYPE` 保持 WARNING；`UNCONFIRMED_RULE_IN_FORMAL_OUTPUT`（CANDIDATE 规则进入正式 CSV）由 ERROR 降为 WARNING，`UNKNOWN/NOT_ENFORCED/INSUFFICIENT_EVIDENCE` 规则均可正式输出。
+  - 指标同步放宽：正式指标决策非 CONFIRMED 或聚合语义 UNKNOWN 由 ERROR 降为 WARNING，只要核心字段、来源与基本口径存在即可输出；`METRIC_AGGREGATION_SEMANTICS_UNKNOWN` 保持 WARNING。
+  - WARNING 不触发阶段 FAILED、不进入 retry/run_blocked/safety valve：`validate_modeling_stages` 仅按 ERROR 判 FAILED；`_gate_blocker_detail` 现在只渲染 ERROR 级问题，规则/指标 WARNING 不再出现在阻断建议与 hard-block 事件中；`set_task_run_result` 的 errors 只取 ERROR 级，WARNING 仅进 warnings。
+  - `VALIDATION_CACHE_VERSION` 升级为 `2026-08-19-rule-indicator-gate-relaxed`，旧版本写入的 FAILED 阶段缓存自动失效重算，避免继续阻断重跑。
+  - 同步 `agent_knowledge/业务规则v0.0.1.md`：明确 CANDIDATE/弱证据规则可写入正式 CSV、仅 WARNING，禁止为升级 CONFIRMED 伪造证据或为消除 WARNING 反复返工；web 服务 prompt 已对齐（无额外改动）。
+  - 新增回归测试：弱规则证据全部 WARNING 且无 ERROR、弱规则/指标证据下 `validate_modeling_stages` 全部阶段 PASSED、弱指标正式输出仅 WARNING、`_gate_blocker_detail` 忽略规则/指标 WARNING；并更新既有 ENFORCED/VALIDATED/UNCONFIRMED 断言为 WARNING。

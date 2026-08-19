@@ -138,12 +138,14 @@ class PipelineDecisionAuditTests(unittest.TestCase):
         self.assertIn("TRANSFORMATION_EVIDENCE_GATE",
                       {issue.code for issue in semantic_validation_issues(state)})
 
-    def test_observed_zero_violation_is_not_formal_rule(self):
+    def test_observed_zero_violation_rule_is_output_with_warning(self):
         state = {"ruleDecisions": [{"ruleId": "R_OBS", "ruleType": "INTEGRITY_CONSTRAINT",
                                     "sampleCount": 100, "violationCount": 0}]}
         blob = "规则编码,规则名称\nR_OBS,唯一性\n".encode()
+        issues = validate_formal_business_rule_csv(blob, state)
         self.assertIn("UNCONFIRMED_RULE_IN_FORMAL_OUTPUT",
-                      {issue.code for issue in validate_formal_business_rule_csv(blob, state)})
+                      {issue.code for issue in issues if issue.severity == "WARNING"})
+        self.assertEqual([issue.code for issue in issues if issue.severity == "ERROR"], [])
 
     def test_observed_pattern_confirmed_unknown_enforcement_is_formal(self):
         state = {"ruleDecisions": [{
@@ -155,7 +157,7 @@ class PipelineDecisionAuditTests(unittest.TestCase):
         blob = "规则编码,规则名称\nR_PATTERN,唯一性模式\n".encode()
         self.assertEqual(validate_formal_business_rule_csv(blob, state), [])
 
-    def test_confirmed_requires_some_existence_evidence(self):
+    def test_confirmed_without_existence_evidence_is_warning_not_blocked(self):
         state = {"ruleDecisions": [{
             "ruleId": "R_NO_EVIDENCE", "ruleType": "INTEGRITY_CONSTRAINT",
             "decision": CONFIRMED, "enforcement": "ENFORCED",
@@ -163,7 +165,38 @@ class PipelineDecisionAuditTests(unittest.TestCase):
         blob = "规则编码,规则名称\nR_NO_EVIDENCE,无证据规则\n".encode()
         issues = validate_formal_business_rule_csv(blob, state)
         self.assertIn("UNCONFIRMED_RULE_IN_FORMAL_OUTPUT",
-                      {issue.code for issue in issues})
+                      {issue.code for issue in issues if issue.severity == "WARNING"})
+        self.assertEqual([issue.code for issue in issues if issue.severity == "ERROR"], [])
+
+    def test_weak_rule_evidence_does_not_trigger_blocking_issues(self):
+        state = {"ruleDecisions": [
+            {"ruleId": "R_SOFT_1", "ruleType": "INTEGRITY_CONSTRAINT",
+             "decision": CONFIRMED, "enforcement": "ENFORCED",
+             "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"],
+             "sampleCount": 100, "violationCount": 0},
+            {"ruleId": "R_SOFT_2", "ruleType": "CALCULATION_RULE",
+             "decision": CONFIRMED, "enforcement": "UNKNOWN",
+             "validationStatus": "VALIDATED",
+             "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"]},
+        ]}
+        issues = semantic_validation_issues(state)
+        blocking = [issue for issue in issues if issue.severity == "ERROR"
+                    and issue.artifact_type == "BUSINESS_RULE"]
+        self.assertEqual(blocking, [])
+
+    def test_weak_indicator_evidence_is_output_with_warning_only(self):
+        from open_claude.modeling_reliability import validate_formal_indicator_csv
+        state = {"indicatorDecisions": [
+            {"indicatorId": "M_SOFT", "name": "转化率", "status": CANDIDATE,
+             "aggregationSemantics": "UNKNOWN"},
+            {"indicatorId": "M_OK", "name": "金额", "status": CONFIRMED,
+             "aggregationSemantics": "SUM"},
+        ]}
+        blob = "指标编码,指标名称\nM_SOFT,转化率\nM_OK,金额\n".encode()
+        issues = validate_formal_indicator_csv(blob, state)
+        self.assertEqual([issue.code for issue in issues if issue.severity == "ERROR"], [])
+        self.assertIn("UNSUPPORTED_FORMAL_INDICATOR",
+                      {issue.code for issue in issues if issue.severity == "WARNING"})
 
     def test_claimed_enforced_without_evidence_is_downgraded(self):
         state = {"ruleDecisions": [{

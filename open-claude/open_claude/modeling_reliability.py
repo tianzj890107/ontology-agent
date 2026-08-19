@@ -1979,16 +1979,17 @@ def business_rule_validation_issues(state: Mapping[str, Any] | None) -> list[Val
         if (claimed_enforcement == RuleEnforcement.ENFORCED.value
                 and not _has_enforcement_evidence(rule)
                 and (not evidence_types(rule) or evidence_types(rule) & _KNOWN_RULE_EVIDENCE)):
-            issues.append(_issue("ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE", "ERROR",
+            issues.append(_issue("ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE", "WARNING",
                                  f"业务规则 {identifier} 声称 ENFORCED，但没有约束/触发器/强制配置/代码等可追溯强制证据；"
-                                 f"强制状态必须为 UNKNOWN 或 NOT_ENFORCED",
+                                 f"强制状态按证据记录为 UNKNOWN 或 NOT_ENFORCED，不阻断正式规则输出",
                                  artifact_type="BUSINESS_RULE", artifact_id=identifier,
                                  details=result.as_dict()))
         claimed_validation = _key(_rule_value(rule, "validationStatus", "validation_status"))
         if (claimed_validation in {"VALIDATED", "SUPPORTED"}
                 and result.validation_status == RuleValidationStatus.INSUFFICIENT_EVIDENCE.value):
-            issues.append(_issue("VALIDATED_WITHOUT_VALIDATION_EVIDENCE", "ERROR",
-                                 f"业务规则 {identifier} 声称 {claimed_validation}，但没有适合其类型的可复核验证证据",
+            issues.append(_issue("VALIDATED_WITHOUT_VALIDATION_EVIDENCE", "WARNING",
+                                 f"业务规则 {identifier} 声称 {claimed_validation}，但没有适合其类型的可复核验证证据；"
+                                 f"仅提示，不阻断正式规则输出",
                                  artifact_type="BUSINESS_RULE", artifact_id=identifier,
                                  details=result.as_dict()))
         if result.validation_status in {RuleValidationStatus.INSUFFICIENT_EVIDENCE.value,
@@ -2031,9 +2032,9 @@ def validate_formal_business_rule_csv(blob: bytes,
                                  artifact_type="BUSINESS_RULE", artifact_id=identifier))
             continue
         if decision["decision_status"] != CONFIRMED:
-            issues.append(_issue("UNCONFIRMED_RULE_IN_FORMAL_OUTPUT", "ERROR",
+            issues.append(_issue("UNCONFIRMED_RULE_IN_FORMAL_OUTPUT", "WARNING",
                                  f"正式业务规则 {identifier} 决策状态为 {decision['decision_status']}，"
-                                 f"只有 CONFIRMED 规则可以进入正式规则目录；强制状态未知不影响正式输出",
+                                 f"仅提示规则存在性证据不足，不阻断正式输出；强制/验证状态未知不影响输出",
                                  artifact_type="BUSINESS_RULE", artifact_id=identifier,
                                  details={"decisionStatus": decision["decision_status"],
                                           "existenceStatus": decision["existence_status"],
@@ -2070,8 +2071,9 @@ def validate_formal_indicator_csv(blob: bytes,
                                  artifact_type="INDICATOR", artifact_id=identifier))
             continue
         if decision["status"] != CONFIRMED or decision["aggregation_semantics"] == "UNKNOWN":
-            issues.append(_issue("UNSUPPORTED_FORMAL_INDICATOR", "ERROR",
-                                 f"正式指标 {identifier} 未通过指标决策门禁",
+            issues.append(_issue("UNSUPPORTED_FORMAL_INDICATOR", "WARNING",
+                                 f"正式指标 {identifier} 决策状态为 {decision['status']}、"
+                                 f"聚合语义为 {decision['aggregation_semantics']}；仅提示，不阻断正式输出",
                                  artifact_type="INDICATOR", artifact_id=identifier,
                                  details={"status": decision["status"],
                                           "aggregationSemantics": decision["aggregation_semantics"]}))
@@ -3404,7 +3406,7 @@ _FORMAL_ARTIFACT_REQUIRED_HEADERS = {
 # into every stage signature so stale PASSED/FAILED checkpoints written by an
 # older validator (for example the pre-entity-scope duplicate-name rule) are
 # invalidated and re-validated with the current code instead of being reused.
-VALIDATION_CACHE_VERSION = "2026-08-19-rule-evidence-independent"
+VALIDATION_CACHE_VERSION = "2026-08-19-rule-indicator-gate-relaxed"
 
 MODEL_VALIDATION_STAGES = (
     ("INPUT_CONTEXT", "输入契约"),

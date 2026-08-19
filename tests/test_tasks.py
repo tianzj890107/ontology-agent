@@ -77,6 +77,23 @@ class TaskStateMachineTests(unittest.TestCase):
             guard = oc_codex_server.ModelingExecutionGuard()
         self.assertEqual(guard.max_tokens, 100_000_000)
 
+    def test_gate_blocker_detail_ignores_rule_indicator_warnings(self):
+        checkpoint = {"issues": [
+            SimpleNamespace(code="INSUFFICIENT_RULE_EVIDENCE", severity="WARNING",
+                            message="规则证据不足"),
+            SimpleNamespace(code="ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE", severity="WARNING",
+                            message="强制证据缺失"),
+            SimpleNamespace(code="UNSUPPORTED_FORMAL_INDICATOR", severity="WARNING",
+                            message="指标口径未确认"),
+            SimpleNamespace(code="FORMAL_OUTPUT_EMPTY", severity="ERROR",
+                            message="正式输出为空"),
+        ]}
+        detail = oc_codex_server._gate_blocker_detail(checkpoint)
+        self.assertNotIn("INSUFFICIENT_RULE_EVIDENCE", detail)
+        self.assertNotIn("ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE", detail)
+        self.assertNotIn("UNSUPPORTED_FORMAL_INDICATOR", detail)
+        self.assertIn("FORMAL_OUTPUT_EMPTY", detail)
+
     @staticmethod
     def _modeling_task(directory, project, expected_files=None):
         task = oc_codex_server.Task(

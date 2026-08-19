@@ -2673,9 +2673,13 @@ def _gate_blocker_detail(checkpoint: dict) -> str:
 
     Used both in the repair-window instruction and in the hard-block event so
     the user always sees the real gate items instead of a generic stop text.
+    Only ERROR-severity issues are real blockers; rule/indicator evidence
+    WARNINGs are recorded in the audit and never force repair or block.
     """
     blockers = []
     for issue in (checkpoint.get("issues", []) if isinstance(checkpoint, dict) else [])[:12]:
+        if str(getattr(issue, "severity", "") or "") != "ERROR":
+            continue
         code = str(getattr(issue, "code", "") or "VALIDATION_ERROR")
         message = str(getattr(issue, "message", "") or code)
         blockers.append(f"{code}: {message}")

@@ -695,7 +695,7 @@ class BusinessRuleTypeValidationTests(unittest.TestCase):
         self.assertEqual([issue.code for issue in issues if issue.severity == "ERROR"], [])
         self.assertNotIn("INSUFFICIENT_RULE_EVIDENCE", {issue.code for issue in issues})
 
-    def test_enforced_claim_without_enforcement_evidence_is_error(self):
+    def test_enforced_claim_without_enforcement_evidence_is_warning(self):
         state = {"ruleDecisions": [{
             "ruleId": "R_CLAIMED", "ruleType": "INTEGRITY_CONSTRAINT",
             "decision": CONFIRMED, "enforcement": "ENFORCED",
@@ -704,9 +704,10 @@ class BusinessRuleTypeValidationTests(unittest.TestCase):
         }]}
         issues = business_rule_validation_issues(state)
         self.assertIn("ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE",
-                      {issue.code for issue in issues if issue.severity == "ERROR"})
+                      {issue.code for issue in issues if issue.severity == "WARNING"})
+        self.assertEqual([issue.code for issue in issues if issue.severity == "ERROR"], [])
 
-    def test_validated_claim_without_validation_evidence_is_error(self):
+    def test_validated_claim_without_validation_evidence_is_warning(self):
         state = {"ruleDecisions": [{
             "ruleId": "R_CLAIMED_VALIDATED", "ruleType": "INTEGRITY_CONSTRAINT",
             "decision": CONFIRMED, "enforcement": "UNKNOWN",
@@ -715,9 +716,64 @@ class BusinessRuleTypeValidationTests(unittest.TestCase):
         }]}
         issues = business_rule_validation_issues(state)
         self.assertIn("VALIDATED_WITHOUT_VALIDATION_EVIDENCE",
-                      {issue.code for issue in issues if issue.severity == "ERROR"})
+                      {issue.code for issue in issues if issue.severity == "WARNING"})
         self.assertIn("INSUFFICIENT_RULE_EVIDENCE",
                       {issue.code for issue in issues if issue.severity == "WARNING"})
+        self.assertEqual([issue.code for issue in issues if issue.severity == "ERROR"], [])
+
+    def test_weak_rule_evidence_never_fails_stage_or_blocks_run(self):
+        """INSUFFICIENT/ENFORCED/VALIDATED evidence gaps stay WARNING so the
+        modeling stage passes and no retry/blocked/safety-valve can fire."""
+        state = {"ruleDecisions": [
+            {"ruleId": "R_WEAK_1", "ruleType": "INTEGRITY_CONSTRAINT",
+             "decision": CONFIRMED, "enforcement": "ENFORCED",
+             "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"],
+             "sampleCount": 100, "violationCount": 0},
+            {"ruleId": "R_WEAK_2", "ruleType": "CALCULATION_RULE",
+             "decision": CONFIRMED, "enforcement": "UNKNOWN",
+             "validationStatus": "VALIDATED",
+             "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"]},
+        ]}
+        issues = semantic_validation_issues(state)
+        self.assertEqual([issue.code for issue in issues if issue.severity == "ERROR"], [])
+        self.assertTrue(any(issue.code == "INSUFFICIENT_RULE_EVIDENCE"
+                            for issue in issues if issue.severity == "WARNING"))
+        self.assertTrue(any(issue.code == "ENFORCED_WITHOUT_ENFORCEMENT_EVIDENCE"
+                            for issue in issues if issue.severity == "WARNING"))
+
+    def test_weak_rule_and_indicator_evidence_pass_modeling_stages(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory) / "work"
+            output = Path(directory) / "output"
+            work.mkdir()
+            output.mkdir()
+            state = {
+                "ruleDecisions": [
+                    {"ruleId": "R_SOFT", "ruleType": "INTEGRITY_CONSTRAINT",
+                     "decision": CANDIDATE, "enforcement": "NOT_ENFORCED",
+                     "evidenceTypes": ["OBSERVED_PATTERN"], "provenance": ["profile.sql"],
+                     "sampleCount": 100, "violationCount": 0},
+                ],
+                "indicatorDecisions": [
+                    {"indicatorId": "M_SOFT", "name": "转化率", "status": CANDIDATE,
+                     "aggregationSemantics": "UNKNOWN"},
+                ],
+            }
+            (work / "modeling_state.json").write_text(
+                json.dumps(state, ensure_ascii=False), encoding="utf-8")
+            (output / "business_rules.csv").write_text(
+                "规则编码,规则名称\nR_SOFT,软证据规则\n", encoding="utf-8")
+            (output / "metrics.csv").write_text(
+                "指标编码,指标名称\nM_SOFT,转化率\n", encoding="utf-8")
+            result = validate_modeling_stages(
+                work, output, state,
+                ["business_rules.csv", "metrics.csv"])
+            failed_stages = [row for row in result["stages"]
+                             if row.get("status") == "FAILED"]
+            self.assertEqual(failed_stages, [],
+                             f"weak rule/indicator evidence must not fail a stage: "
+                             f"{[(row.get('stage'), row.get('issueCodes')) for row in result['stages']]}")
 
     def test_declared_constraint_with_source_can_be_enforced(self):
         state = {"ruleDecisions": [{
