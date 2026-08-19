@@ -9,3 +9,4 @@
 - 修复 Business Object R1–R5 证据归类：UNKNOWN 不再作为有充分证据时的默认状态；增加正向证据、明确反证、证据冲突、0 行实例化结构和静态有限值域的确定性判断，并补充回归测试。本次未部署。
 - 修复本体建模门禁严重度：证据不足、UNKNOWN、未确认归属、技术物理键缺少逻辑键证据、指标聚合语义未确认等改为 WARNING；WARNING 不触发阶段失败、最终导出阻断或 Agent 重试。确认关系缺少支持证据、非法结构、冲突关系和审计/CSV schema 错误继续保持 ERROR。
 - 新增输入资产处理覆盖校验：要求每个输入资产都有 MODELED、EXCLUDED、TECHNICAL、REJECTED 或 UNKNOWN 等处理决策；未处理资产才是 coverage ERROR，不要求所有资产都进入正式本体。新增相关门禁与最终 gate 回归测试，本次未部署。
+- 新增 DeepSeek 思考模式可恢复错误自动重试：模型网关返回 “reasoning_content … must be passed back” 类 400 时，OpenAI 兼容适配器自动以原请求重试一次、再以去除 reasoning 的出站历史重试一次，成功后任务自动继续执行并在审计中记录 `provider_retry` 事件，不再直接标记 FAILED；重试仍失败时才进入失败状态。涉及 `open_claude/openai_compat.py` 与 `oc_codex_server.py`，并补充适配器与任务层回归测试。本次未部署。

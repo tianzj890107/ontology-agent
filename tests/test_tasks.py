@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -15,11 +16,22 @@ import oc_codex_server  # noqa: E402
 
 class _FakeConversation:
     def __init__(self):
-        self.profile = type("Profile", (), {"max_iterations": 1})()
+        self.client = None
+        self.profile = type("Profile", (), {
+            "max_iterations": 1,
+            "max_tokens": 4096,
+            "temperature": 0.3,
+            "thinking": False,
+            "thinking_budget": 0,
+        })()
         self.messages = []
+        self.tool_schemas = []
         self.system_prompt = ""
         self.model = "test-model"
-        self.cost_tracker = type("Cost", (), {"total_cost_usd": 0.0})()
+        self.cost_tracker = type("Cost", (), {
+            "total_cost_usd": 0.0,
+            "add_usage": lambda *args, **kwargs: None,
+        })()
 
     def add_user_message(self, text):
         self.messages.append({"role": "user", "content": text})
@@ -29,6 +41,28 @@ class _FakeConversation:
 
 
 class TaskStateMachineTests(unittest.TestCase):
+    def test_provider_retry_notice_is_recorded_and_turn_continues(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._modeling_task(directory, "retry-notice", [])
+            task.conv.profile.max_iterations = 5
+            task.user_id = ""
+
+            def fake_stream_message(client, messages, system_prompt, **kwargs):
+                yield {"type": "provider_retry", "attempt": 2,
+                       "text": "模型网关思考模式校验失败，已自动重试并继续执行"}
+                yield {"type": "message_end", "stop_reason": "end_turn", "usage": {}}
+
+            fake_runtime = SimpleNamespace(stream_message=fake_stream_message)
+            with patch.object(oc_codex_server.AGENT_RUNTIME, "get",
+                              return_value=fake_runtime), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("继续", lambda _event: None, conversational=True)
+
+            self.assertEqual(task.status, "idle")
+            self.assertTrue(any(
+                event.get("type") == "provider_retry" for event in task.log))
+
     def test_modeling_guard_default_gate_retry_limit_is_ten(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ONTOLOGY_MODELING_MAX_GATE_RETRIES", None)

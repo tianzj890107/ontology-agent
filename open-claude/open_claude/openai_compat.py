@@ -55,6 +55,20 @@ def _is_quota_error(error: Exception) -> bool:
     return any(x in msg for x in markers)
 
 
+def _is_recoverable_provider_error(error: Exception) -> bool:
+    """Whether a provider 400 is recoverable by resending the same turn.
+
+    DeepSeek thinking-mode gateways require ``reasoning_content`` to be passed
+    back verbatim for every reasoning turn; when a tool turn is retried without
+    it they answer with a 400 that only means the conversation history is not
+    self-consistent.  The request itself is safe to resend, optionally with
+    reasoning stripped, so the task can continue instead of failing.
+    """
+    text = str(error or "").lower()
+    return ("must be passed back" in text
+            and ("reasoning_content" in text or "thinking mode" in text))
+
+
 # ---------------------------------------------------------------------------
 # Format conversion: Anthropic blocks <-> OpenAI messages
 # ---------------------------------------------------------------------------
@@ -86,13 +100,20 @@ def _orphan_tool_result_text(tool_id: str, content: Any) -> str:
     return f"{label}：\n{_tool_result_text(content)}"
 
 
-def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]],
+                       strip_reasoning: bool = False) -> list[dict[str, Any]]:
     """Convert internal Anthropic-style history to a valid OpenAI message list.
 
     In particular, never emit an orphan ``role=tool`` message.  A compacted or
     partially persisted session may contain a tool result without its preceding
     assistant tool call; forwarding that record makes DeepSeek/LiteLLM return a
     400 before it can answer the next user message.
+
+    ``strip_reasoning`` drops every assistant reasoning block (and the
+    provider-native ``reasoning_content`` field) from the outgoing history.
+    DeepSeek thinking-mode gateways return a recoverable 400 when a reasoning
+    turn is not passed back verbatim; resending the same conversation without
+    reasoning keeps the request self-consistent so execution can continue.
     """
     out: list[dict[str, Any]] = []
     if system_prompt:
@@ -108,7 +129,8 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]]) -> li
             continue
         role = msg.get("role")
         content = msg.get("content")
-        top_level_reasoning = str(msg.get("reasoning_content") or msg.get("reasoning") or "")
+        top_level_reasoning = "" if strip_reasoning else str(
+            msg.get("reasoning_content") or msg.get("reasoning") or "")
 
         if isinstance(content, str):
             if role == "tool":
@@ -145,9 +167,10 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]]) -> li
                 if blk.get("type") == "text":
                     text_parts.append(str(blk.get("text") or ""))
                 elif blk.get("type") in ("thinking", "reasoning"):
-                    block_reasoning_parts.append(str(
-                        blk.get("thinking") or blk.get("reasoning_content") or blk.get("text") or ""
-                    ))
+                    if not strip_reasoning:
+                        block_reasoning_parts.append(str(
+                            blk.get("thinking") or blk.get("reasoning_content") or blk.get("text") or ""
+                        ))
                 elif blk.get("type") in ("tool_use", "tool_call"):
                     tool_id = str(blk.get("id") or "")
                     # A stable id is required by the OpenAI protocol.  The
@@ -279,13 +302,15 @@ def _usage_dict(u) -> dict[str, int]:
 def stream(provider: str, model: str, messages: list[dict[str, Any]], system_prompt: str,
            tools: Optional[list[dict[str, Any]]], max_tokens: Optional[int],
            temperature: Optional[float], _allow_fallback: bool = True,
-           api_key: str | None = None) -> Generator[dict[str, Any], None, None]:
+           api_key: str | None = None,
+           strip_reasoning: bool = False) -> Generator[dict[str, Any], None, None]:
     """Yield the same normalized events as api.stream_message, for OpenAI-style APIs."""
     try:
         client = _client(provider, api_key)
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": to_openai_messages(system_prompt, messages),
+            "messages": to_openai_messages(system_prompt, messages,
+                                           strip_reasoning=strip_reasoning),
             "stream": True,
             "stream_options": {"include_usage": True},
         }
@@ -365,13 +390,35 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
         yield {"type": "message_end", "stop_reason": stop_reason, "usage": usage}
 
     except Exception as e:
+        # DeepSeek thinking-mode 400s are recoverable: retry the same request
+        # once as-is, then once with reasoning stripped from the outgoing
+        # history.  A successful retry yields a visible notice followed by the
+        # recovered stream so the turn continues instead of failing.
+        if _allow_fallback and _is_recoverable_provider_error(e):
+            for attempt, retry_strip in ((1, False), (2, True)):
+                retry_events = list(stream(provider, model, messages, system_prompt,
+                                           tools, max_tokens, temperature,
+                                           _allow_fallback=False, api_key=api_key,
+                                           strip_reasoning=retry_strip))
+                failed = next((x for x in retry_events if x.get("type") == "error"), None)
+                if failed and not any(x.get("type") == "message_end" for x in retry_events):
+                    continue
+                yield {
+                    "type": "provider_retry",
+                    "attempt": attempt,
+                    "text": ("模型网关返回可恢复错误，已自动重试并继续执行"
+                             if not retry_strip else
+                             "模型网关思考模式校验失败，已清理 reasoning 后自动重试并继续执行"),
+                }
+                yield from retry_events
+                return
         # Qwen 配额/限流错误时，在同一能力类别中自动换模型。
         # fallback 调用只收集单次结果用于判断失败，成功后再按统一事件格式输出。
         if _allow_fallback and provider == "qwen" and _is_quota_error(e):
             for fallback in _qwen_fallback_models(model):
                 events = list(stream(provider, fallback, messages, system_prompt, tools,
                                      max_tokens, temperature, _allow_fallback=False,
-                                     api_key=api_key))
+                                     api_key=api_key, strip_reasoning=strip_reasoning))
                 failed = next((x for x in events if x.get("type") == "error"), None)
                 if failed and not any(x.get("type") == "message_end" for x in events):
                     continue

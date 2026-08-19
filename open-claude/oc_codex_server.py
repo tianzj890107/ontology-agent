@@ -4314,6 +4314,12 @@ class Task:
                 conv.model = ev.get("to") or conv.model
                 model_switch_event = self._record_event(ev)
                 emit(model_switch_event)
+            elif t == "provider_retry":
+                # A recoverable gateway 400 was retried automatically inside
+                # the OpenAI-compatible adapter.  Record the notice so the
+                # browser shows that execution continued instead of failing.
+                retry_event = self._record_event(ev)
+                emit(retry_event)
             elif t == "error":
                 flush_text()
                 error_event = self._record_event({"type": "error", "error": ev["error"]})
