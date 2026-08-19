@@ -2550,6 +2550,27 @@ def _all_attribute_records(state: Mapping[str, Any] | None) -> list[Mapping[str,
     return []
 
 
+def _attribute_identity(record: Mapping[str, Any], index: int = 0) -> tuple[str, ...]:
+    """Stable dedupe identity for one attribute record.
+
+    Physical rows are identified by their source table+column; rows without a
+    physical source fall back to logical entity+attribute code.  The identity
+    never mixes two semantic collections, so an allAttributes/candidates merge
+    can never double rows.
+    """
+    table = _text(_first_value(record, ("sourceTable", "source_table", "table", "来源表")))
+    column = _text(_first_value(record, ("sourceColumn", "source_column", "column", "来源字段")))
+    entity = _text(_first_value(record, ("logicalEntityCode", "logical_entity_code", "逻辑实体编码", "entityId")))
+    code = _text(_first_value(record, ("attributeCode", "attribute_code", "业务属性编码", "属性编码", "code", "id")))
+    if table and column:
+        return ("source", table, column)
+    if entity and code:
+        return ("entity-code", entity, code)
+    # A malformed row remains auditable, but duplicate copies of the same
+    # malformed record are still collapsed deterministically.
+    return ("row", str(index), json.dumps(dict(record), ensure_ascii=False, sort_keys=True, default=str))
+
+
 def _dedupe_attribute_records(records: Iterable[Any]) -> list[Mapping[str, Any]]:
     """Deduplicate one attribute collection without merging semantic sources."""
     result: list[Mapping[str, Any]] = []
@@ -2557,18 +2578,7 @@ def _dedupe_attribute_records(records: Iterable[Any]) -> list[Mapping[str, Any]]
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
             continue
-        table = _text(_first_value(record, ("sourceTable", "source_table", "table", "来源表")))
-        column = _text(_first_value(record, ("sourceColumn", "source_column", "column", "来源字段")))
-        entity = _text(_first_value(record, ("logicalEntityCode", "logical_entity_code", "逻辑实体编码", "entityId")))
-        code = _text(_first_value(record, ("attributeCode", "attribute_code", "业务属性编码", "code", "id")))
-        if table and column:
-            identity = ("source", table, column)
-        elif entity and code:
-            identity = ("entity-code", entity, code)
-        else:
-            # A malformed row remains auditable, but duplicate copies of the
-            # same malformed record are still collapsed deterministically.
-            identity = ("row", str(index), json.dumps(dict(record), ensure_ascii=False, sort_keys=True, default=str))
+        identity = _attribute_identity(record, index)
         if identity in seen:
             continue
         seen.add(identity)
@@ -2591,10 +2601,10 @@ def _all_attribute_rows(state: Mapping[str, Any] | None) -> list[dict[str, str]]
         rows.append({
             "逻辑实体编码": _attribute_value(record, "logicalEntityCode", "logical_entity_code", "逻辑实体编码", "entityId"),
             "逻辑实体名称": _attribute_value(record, "logicalEntityName", "logical_entity_name", "逻辑实体名称", "entityName"),
-            "属性编码": _attribute_value(record, "attributeCode", "attribute_code", "businessAttributeId", "业务属性编码", "code", "id"),
-            "属性名称": _attribute_value(record, "attributeName", "attribute_name", "业务属性名称", "name"),
-            "属性英文名称": _attribute_value(record, "attributeEnglishName", "attribute_english_name", "业务属性英文名称", "englishName"),
-            "属性定义": _attribute_value(record, "definition", "description", "业务属性定义"),
+            "属性编码": _attribute_value(record, "attributeCode", "attribute_code", "businessAttributeId", "业务属性编码", "属性编码", "code", "id"),
+            "属性名称": _attribute_value(record, "attributeName", "attribute_name", "业务属性名称", "属性名称", "name"),
+            "属性英文名称": _attribute_value(record, "attributeEnglishName", "attribute_english_name", "业务属性英文名称", "属性英文名称", "englishName"),
+            "属性定义": _attribute_value(record, "definition", "description", "业务属性定义", "属性定义"),
             "来源表": _attribute_value(record, "sourceTable", "source_table", "table", "tableName", "来源表"),
             "来源字段": _attribute_value(record, "sourceColumn", "source_column", "column", "columnName", "来源字段"),
             "数据类型": _attribute_value(record, "dataType", "data_type", "数据类型", "type"),
@@ -2607,29 +2617,62 @@ def _all_attribute_rows(state: Mapping[str, Any] | None) -> list[dict[str, str]]
             "是否非空": _attribute_value(record, "isNotNull", "is_not_null", "是否非空", "notNull"),
             "是否技术字段": _attribute_value(record, "isTechnical", "is_technical", "是否技术字段", "technicalField"),
             "是否派生字段": _attribute_value(record, "isDerived", "is_derived", "是否派生字段", "derivedField"),
-            "属性状态": _attribute_value(record, "status", "decision", "attributeStatus", "attribute_status"),
+            "属性状态": _attribute_value(record, "status", "decision", "attributeStatus", "attribute_status", "属性状态"),
             "排除原因": _attribute_value(record, "exclusionReason", "exclusion_reason", "排除原因"),
-            "证据": _attribute_value(record, "evidence", "evidenceIds", "evidence_ids", "provenance"),
+            "证据": _attribute_value(record, "evidence", "evidenceIds", "evidence_ids", "provenance", "证据"),
         })
     return sorted(rows, key=lambda row: (row["属性编码"], row["来源表"], row["来源字段"]))
 
 
+def _read_all_attributes_rows(target: Path) -> list[dict[str, str]]:
+    """Return the rows of an existing canonical inventory file."""
+    try:
+        with target.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not {"属性编码", "来源表", "来源字段"}.issubset(set(reader.fieldnames or [])):
+                return []
+            return [dict(row) for row in reader if any((value or "").strip() for value in row.values())]
+    except (OSError, UnicodeError, csv.Error):
+        return []
+
+
 def write_all_attributes_csv(work_dir: str | os.PathLike[str],
                             state: Mapping[str, Any] | None) -> str:
-    """Persist the complete pre-filter attribute inventory to the work area."""
+    """Persist the complete pre-filter attribute inventory to the work area.
+
+    ``allAttributes`` is the single authoritative collection and is never
+    merged with candidate/business collections.  The persisted file is the
+    union of the durable Agent-produced inventory and the current state
+    projection: existing rows are kept, state rows with a complete attribute
+    code update the same identity, and new identities are appended.  This
+    prevents a partial checkpoint or a retry/finalize pass from shrinking or
+    overwriting the correct Agent data.
+    """
     target = Path(work_dir) / "all_attributes.csv"
     rows = _all_attribute_rows(state)
-    # A correct Agent-produced inventory is authoritative when the persisted
-    # checkpoint has not materialized allAttributes yet.  Do not replace it
-    # with an empty or candidate-only projection during a retry/finalize pass.
-    if not rows and target.is_file():
-        try:
-            with target.open("r", encoding="utf-8-sig", newline="") as handle:
-                header = next(csv.reader(handle), [])
-                if {"属性编码", "来源表", "来源字段"}.issubset(set(header)):
-                    return str(target)
-        except (OSError, UnicodeError, csv.Error):
-            pass
+    existing = _read_all_attributes_rows(target)
+    if existing and not rows:
+        # No state projection yet: the durable Agent inventory is authoritative.
+        return str(target)
+    if existing:
+        merged: dict[tuple[str, ...], dict[str, str]] = {}
+        for index, row in enumerate(existing):
+            merged.setdefault(_attribute_identity(row, index), dict(row))
+        for row in rows:
+            identity = _attribute_identity(row, len(merged))
+            current = merged.get(identity)
+            if current is None:
+                merged[identity] = dict(row)
+            elif _text(row.get("属性编码")):
+                # Prefer the newer state record once it carries a complete code.
+                merged[identity] = dict(row)
+        rows = sorted(merged.values(),
+                      key=lambda item: (item.get("属性编码", ""), item.get("来源表", ""),
+                                        item.get("来源字段", "")))
+    elif not rows and target.is_file():
+        # Legacy fallback: keep a valid Agent-produced file untouched.
+        if _read_all_attributes_rows(target):
+            return str(target)
     _atomic_csv_write(target, ALL_ATTRIBUTES_HEADERS, rows)
     return str(target)
 

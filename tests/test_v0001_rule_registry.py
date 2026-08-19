@@ -143,6 +143,90 @@ class V0001RuleRegistryTests(unittest.TestCase):
         self.assertNotIn("FORMAL_ATTRIBUTE_NOT_IN_ALL_ATTRIBUTES",
                          {item.code for item in findings})
 
+    def test_chinese_header_keys_are_projected_with_complete_attribute_codes(self):
+        state = {"allAttributes": [
+            {"逻辑实体编码": "LE1", "逻辑实体名称": "实体一", "属性编码": "AT1",
+             "属性名称": "名称", "属性英文名称": "Name", "属性定义": "定义",
+             "来源表": "t_order", "来源字段": "order_id", "数据类型": "VARCHAR",
+             "数据长度": "32", "是否物理主键": "Y", "是否外键": "N",
+             "是否技术字段": "N", "属性状态": "CONFIRMED", "证据": "来自建表语句"},
+            {"逻辑实体编码": "LE1", "属性编码": "AT2", "属性名称": "状态",
+             "来源表": "t_order", "来源字段": "status", "属性状态": "CANDIDATE"},
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_all_attributes_csv(directory, state)
+            with open(path, encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 2)
+        by_code = {row["属性编码"]: row for row in rows}
+        self.assertEqual(by_code["AT1"]["属性名称"], "名称")
+        self.assertEqual(by_code["AT1"]["属性英文名称"], "Name")
+        self.assertEqual(by_code["AT1"]["属性定义"], "定义")
+        self.assertEqual(by_code["AT1"]["属性状态"], "CONFIRMED")
+        self.assertEqual(by_code["AT1"]["证据"], "来自建表语句")
+        self.assertEqual(by_code["AT2"]["属性状态"], "CANDIDATE")
+
+    def test_partial_state_does_not_overwrite_or_duplicate_agent_inventory(self):
+        # The durable Agent-produced inventory is the union base: a partial
+        # checkpoint (only one of three tables) must not shrink the file, and
+        # overlapping rows must not be written twice.
+        existing = (
+            "逻辑实体编码,逻辑实体名称,属性编码,属性名称,来源表,来源字段\n"
+            "LE1,实体,AT1,名称,t_a,id\n"
+            "LE1,实体,AT2,名称,t_b,id\n"
+            "LE1,实体,AT3,名称,t_c,id\n"
+        )
+        state = {"allAttributes": [
+            {"logicalEntityCode": "LE1", "attributeCode": "AT1",
+             "sourceTable": "t_a", "sourceColumn": "id"},
+            {"logicalEntityCode": "LE1", "attributeCode": "AT4",
+             "sourceTable": "t_d", "sourceColumn": "id"},
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "all_attributes.csv").write_text(existing, encoding="utf-8-sig")
+            path = write_all_attributes_csv(directory, state)
+            with open(path, encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 4)
+        self.assertEqual({row["来源表"] for row in rows},
+                         {"t_a", "t_b", "t_c", "t_d"})
+        self.assertEqual(len({row["来源表"] for row in rows}), 4)
+
+    def test_merge_updates_same_identity_with_complete_code(self):
+        existing = (
+            "逻辑实体编码,逻辑实体名称,属性编码,属性名称,来源表,来源字段\n"
+            "LE1,实体,,,t_a,id\n"
+        )
+        state = {"allAttributes": [
+            {"logicalEntityCode": "LE1", "attributeCode": "AT1",
+             "attributeName": "完整名称", "sourceTable": "t_a", "sourceColumn": "id"},
+        ]}
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "all_attributes.csv").write_text(existing, encoding="utf-8-sig")
+            path = write_all_attributes_csv(directory, state)
+            with open(path, encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["属性编码"], "AT1")
+        self.assertEqual(rows[0]["属性名称"], "完整名称")
+
+    def test_formal_attributes_all_found_in_merged_inventory(self):
+        state = {"allAttributes": [
+            {"logicalEntityCode": "LE1", "attributeCode": "AT2",
+             "sourceTable": "t_b", "sourceColumn": "id"},
+        ]}
+        blob = ("逻辑实体编码,业务属性编码,业务属性名称\n"
+                "LE1,AT1,名称一\n"
+                "LE1,AT2,名称二\n").encode("utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "all_attributes.csv").write_text(
+                "逻辑实体编码,属性编码,属性名称,来源表,来源字段\n"
+                "LE1,AT1,名称一,t_a,id\n", encoding="utf-8-sig")
+            write_all_attributes_csv(directory, state)
+            findings = validate_formal_attribute_inventory(blob, state, directory)
+        self.assertNotIn("FORMAL_ATTRIBUTE_NOT_IN_ALL_ATTRIBUTES",
+                         {item.code for item in findings})
+
     def test_physical_id_is_not_promoted_to_logical_key_without_evidence(self):
         state = {"allAttributes": [{
             "logicalEntityCode": "LE1", "attributeCode": "AT_ID",

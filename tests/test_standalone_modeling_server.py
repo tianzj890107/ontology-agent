@@ -269,6 +269,101 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertEqual(run.resume_session_id, "session-after-retry")
         self.assertEqual(run.status, "BLOCKED")
 
+    def test_retry_resumes_from_persisted_stage_checkpoint_without_reprobe(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "guard pause resume")
+        run.resume_session_id = "session-before-retry"
+        run.attempt_number = 2
+        self.store.transition(run, "ANALYZING")
+        manager.execution_modes[run.run_id] = (False, "BLOCKED")
+        work = Path(run.root, "work")
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "modeling_state.json").write_text(json.dumps({
+            "validationStages": {
+                "INPUT_CONTEXT": {"status": "PASSED", "signature": "s1"},
+                "ASSET_INVENTORY": {"status": "PASSED", "signature": "s2"},
+                "ALL_ATTRIBUTES": {"status": "FAILED", "signature": "s3"},
+            }}, ensure_ascii=False), encoding="utf-8")
+        captured = {}
+
+        class FakeTask:
+            status = "blocked"
+            modeling_block_reason = "MODEL_TOOL_CALL_LIMIT"
+
+            def __init__(self, *args, **kwargs):
+                captured["kwargs"] = kwargs
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def session_id(self):
+                return "session-after-retry"
+
+            def stream_turn(self, text, emit, conversational=False):
+                captured["prompt"] = text
+
+        with patch("oc_codex_server.Task", FakeTask):
+            manager._execute(run)
+
+        # The retry continues from the first unfinished stage instead of
+        # restarting: the persisted checkpoint identifies the last PASSED
+        # stage and the continuation instruction forbids re-probing.
+        self.assertEqual(run.checkpoint_stage, "ASSET_INVENTORY")
+        self.assertIn("不要从头执行", captured["prompt"])
+        self.assertIn("不要重复输入盘点、数据库连接验证或 schema 提取",
+                      captured["prompt"])
+        self.assertIn("只处理第一个未完成或失败的阶段", captured["prompt"])
+        self.assertEqual(captured["kwargs"]["resume_session_id"], "session-before-retry")
+        self.assertEqual(run.status, "BLOCKED")
+
+    def test_provider_400_retry_keeps_original_checkpoint_and_session(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "provider 400 resume")
+        run.resume_session_id = "session-400"
+        self.store.transition(run, "ANALYZING")
+        manager.execution_modes[run.run_id] = (False, "INPUT_READY")
+        work = Path(run.root, "work")
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "modeling_state.json").write_text(json.dumps({
+            "validationStages": {
+                "INPUT_CONTEXT": {"status": "PASSED", "signature": "s1"},
+                "ASSET_INVENTORY": {"status": "PASSED", "signature": "s2"},
+            }}, ensure_ascii=False), encoding="utf-8")
+
+        class FakeTask:
+            status = "idle"
+
+            def __init__(self, *args, **kwargs):
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="always_allow"),
+                    system_prompt="",
+                )
+
+            def session_id(self):
+                return "session-400"
+
+            def stream_turn(self, text, emit, conversational=False):
+                emit({"type": "provider_retry", "attempt": 2,
+                      "text": "模型网关思考模式校验失败，已自动重试并继续执行"})
+
+        def fake_validate(run, internal=False):
+            run.status = "SUCCEEDED"
+            return {"semantic_validation_status": "PASSED"}
+
+        with patch("oc_codex_server.Task", FakeTask), \
+                patch.object(manager, "validate", side_effect=fake_validate):
+            manager._execute(run)
+
+        # The 400 was retried inside the same attempt: the original checkpoint
+        # and provider session are retained, no fresh run/session is created.
+        self.assertEqual(run.checkpoint_stage, "ASSET_INVENTORY")
+        self.assertEqual(run.resume_session_id, "session-400")
+        self.assertIn("provider_retry", [event["type"] for event in run.events])
+        self.assertEqual(run.status, "SUCCEEDED")
+
     def test_input_api_cannot_write_runtime_namespaces(self):
         run = self.store.create("DATABASE", "input boundary")
         bad_paths = [

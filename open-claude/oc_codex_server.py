@@ -122,6 +122,20 @@ DEFAULT_MODEL_MAX_TOOL_CALLS = 200
 DEFAULT_MODEL_MAX_TOKENS = 100_000_000
 DEFAULT_APPROVAL_TIMEOUT_SECONDS = 90.0
 
+# Budget-style guard limits are recoverable pauses: the run keeps its
+# provider session and stage checkpoint, and a re-queued attempt resumes
+# from the first unfinished stage instead of restarting the whole run.
+# Semantic-gate and sandbox-safety outcomes remain hard BLOCKED.
+GUARD_RECOVERABLE_PAUSES = frozenset({
+    "MODEL_EXECUTION_TIMEOUT",
+    "MODEL_TOOL_CALL_LIMIT",
+    "MODEL_TOKEN_BUDGET_EXCEEDED",
+})
+
+
+def is_recoverable_guard_pause(reason: str) -> bool:
+    return str(reason or "") in GUARD_RECOVERABLE_PAUSES
+
 
 def _bounded_env_number(name: str, default: float, minimum: float = 1.0) -> float:
     try:
@@ -234,9 +248,21 @@ class ModelingExecutionGuard:
         command = str(value.get("command") or value.get("cmd") or "").strip().lower()
         # Only classify explicit inspection commands as read-only.  Unknown
         # shell input remains guarded and therefore cannot bypass the limit.
+        # Environment probes, dependency checks and inspection commands are
+        # read-only.  Destructive python one-liners still consume the mutating
+        # budget so a probe cannot be used to bypass the tool-call limit.
+        probe = re.search(r"python(?:3)?\s+-c\s+(.*)$", command)
+        if probe:
+            payload = probe.group(1)
+            if re.search(r"(?:remove|unlink|rmdir|mkdir|write_text|writelines|"
+                         r"shutil\.rmtree|open\([^)]*['\"]w)", payload):
+                return False
+            return bool(re.search(r"(?:import|print|read|exists|version|--version)", payload))
         return bool(re.match(
-            r"^(pwd|ls|find|rg|grep|head|tail|stat|file|wc|git\s+(status|diff|log|show)|"
-            r"python(?:3)?\s+-c\s+.*(?:read|exists|version|--version))(?:\s|$)",
+            r"^(?:pwd|ls|find|rg|grep|head|tail|stat|file|wc|env|which|"
+            r"git\s+(?:status|diff|log|show)|"
+            r"python(?:3)?(?:\s+-[Vv]|\s+--version)|"
+            r"pip(?:3)?\s+(?:list|show|freeze|--version))(?:\s|$)",
             command))
 
     def record_tool_call(self, tool_name: str = "", tool_input: dict | None = None) -> str:
@@ -4098,8 +4124,53 @@ class Task:
                     rec({
                         "type": "execution_guard",
                         "status": "blocked",
+                        "recoverable": False,
                         "code": self.modeling_block_reason,
                         "message": "建模已停止，保留当前 work/output 供人工处理",
+                    })
+
+                def pause_modeling(reason: str):
+                    # A budget/tool-limit pause is not a quality block.  Persist
+                    # the current stage checkpoint first so a retry resumes from
+                    # the last PASSED stage and never re-runs input inventory,
+                    # database verification or schema extraction.  The run stays
+                    # retryable (BLOCKED), and the event is marked recoverable so
+                    # the scheduler/UI distinguish it from a hard gate/safety
+                    # block.
+                    checkpoint = None
+                    try:
+                        ensure_mission_output_files(self.cwd, self.mission_context)
+                        checkpoint = finalize_checkpoint()
+                    except Exception:
+                        checkpoint = None
+                    if isinstance(checkpoint, dict) and checkpoint.get("status") == "PASSED":
+                        # The semantic gate is already satisfied, so a budget
+                        # limit must not block a completed modeling run.
+                        self.status = "idle"
+                        rec({
+                            "type": "execution_guard",
+                            "status": "passed",
+                            "recoverable": True,
+                            "code": reason,
+                            "message": "建模产物已满足全部校验，预算上限不再阻断本轮结果。",
+                        })
+                        return
+                    self.modeling_block_reason = str(reason or "MODEL_EXECUTION_PAUSED")
+                    self.status = "blocked"
+                    errors = [self.modeling_block_reason]
+                    if isinstance(checkpoint, dict):
+                        errors.extend(
+                            str(getattr(issue, "code", "") or "VALIDATION_ERROR")
+                            for issue in checkpoint.get("issues", [])
+                            if getattr(issue, "severity", "") == "ERROR")
+                    set_task_run_result(self, "BLOCKED", errors=errors)
+                    rec({
+                        "type": "execution_guard",
+                        "status": "paused",
+                        "recoverable": True,
+                        "code": self.modeling_block_reason,
+                        "message": "建模运行已暂停（预算/工具上限），已保留当前 checkpoint；"
+                                   "重新排队后将从最后完成的阶段继续执行。",
                     })
 
                 def handle_gate_failure(checkpoint: dict) -> bool:
@@ -4133,7 +4204,7 @@ class Task:
                     if guard is not None:
                         budget_error = guard.check()
                         if budget_error:
-                            block_modeling(budget_error)
+                            pause_modeling(budget_error)
                             break
                     if iteration >= max_iterations:
                         if modeling_turn:
@@ -4153,7 +4224,7 @@ class Task:
                     if guard is not None:
                         budget_error = guard.check()
                         if budget_error:
-                            block_modeling(budget_error)
+                            pause_modeling(budget_error)
                             break
 
                     if stop_reason == "tool_use":

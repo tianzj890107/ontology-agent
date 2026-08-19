@@ -745,6 +745,9 @@ function StandaloneInputCard({ sourceMode, setSourceMode, prompt, setPrompt, inp
 const BLOCKED_REASON_TEXT = {
   MODEL_GATE_RETRY_LIMIT: "模型反复尝试修复仍未通过门禁校验，已达到自动修复次数上限（10 次），系统为避免无限消耗已自动暂停",
   MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE: "模型重复提交了相同的门禁错误且没有带来新的证据，触发安全阀已自动暂停",
+  MODEL_EXECUTION_TIMEOUT: "本次运行达到单轮执行时长上限，已保留当前 checkpoint 自动暂停，可继续运行",
+  MODEL_TOOL_CALL_LIMIT: "本次运行达到工具调用次数上限，已保留当前 checkpoint 自动暂停，可继续运行",
+  MODEL_TOKEN_BUDGET_EXCEEDED: "本次运行达到 Token 预算上限，已保留当前 checkpoint 自动暂停，可继续运行",
 };
 
 function blockedAdviceText(run) {

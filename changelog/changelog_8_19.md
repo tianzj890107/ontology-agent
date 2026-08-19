@@ -13,3 +13,9 @@
 - 独立建模服务(47314)取消 `READY_FOR_EXPORT` 中间状态：语义校验通过后 run 直接进入 `SUCCEEDED`，不再停在"待导出"等待状态（前端仅提供下载、无导出按钮）。同步更新状态机、`run_ready` 事件判定、standalone 前端状态展示/已完成提示、API 文档与相关回归测试，并重新构建 `frontend/dist`。已部署两个服务（commit `5142ffc`，web 47313 与 standalone 47314 均已重启，健康检查 200，部署前确认两服务无活跃任务）。
 - standalone 前端将 `BLOCKED` 状态标签由红色(error)改为灰色边框与灰色字体(default)，与红色 `FAILED` 区分；仅前端展示调整，重新构建 `frontend/dist`。
 - standalone 前端在 run 处于 `BLOCKED` 时，于对话流（agent 输出区域）自动追加一条建议消息：说明建模产物已生成、当前结果可直接下载使用，解释暂停原因（如 `MODEL_GATE_RETRY_LIMIT` 重试达上限 / `MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE` 无新证据）与未通过的门禁校验项，并给出“继续运行修复”或“直接使用当前产物”两种处理建议。仅前端展示调整，重新构建 `frontend/dist`。
+- 修复门禁导致的重复执行问题（门禁修复专项）：
+  - execution_guard 区分“可恢复暂停”与“硬阻断”：预算类限制（`MODEL_EXECUTION_TIMEOUT`/`MODEL_TOOL_CALL_LIMIT`/`MODEL_TOKEN_BUDGET_EXCEEDED`）命中时先持久化当前 stage checkpoint（`validationStages`）再暂停，重新排队后从最后 PASSED 阶段继续，不再从头执行输入盘点、数据库验证或 schema 提取；门禁重复无新证据、重试达上限仍为硬 BLOCKED。若暂停瞬间 finalize 已 PASSED 则不阻断本轮结果。普通只读命令、环境探测与依赖检查（`python -c import/print/version`、`pip list/show/freeze`、`which`、`env`、`python3 --version` 等）不消耗变更型工具预算，破坏性 python 单行仍计入。
+  - all_attributes 门禁：统一属性字段 schema，`属性编码`/`属性名称`/`属性英文名称`/`属性定义`/`属性状态`/`证据` 等中文表头键正确落盘；服务端根据 `modeling_state.json` 落盘时不再覆盖 Agent 已生成的正确数据——持久化清单为单调并集（保留现有行、同身份以带完整编码的状态行更新、追加新身份），杜绝部分 checkpoint 覆盖与 candidateAttributes 合并成 2 倍行数；`FORMAL_ATTRIBUTE_NOT_IN_ALL_ATTRIBUTES` 基于合并后的持久化清单校验，保证 business_attributes ⊆ all_attributes。
+  - retry/blocked/failed 断点续跑与 400 恢复：验证并补测试确认 retry 复用 provider session、从持久化 stage checkpoint 继续、不重复数据库/schema 探测；模型 API 400 自动重试后保留原 checkpoint 与 session。
+  - 前端：BLOCKED 原因文案补充三个预算暂停原因（时长/工具数/Token 上限），重新构建 `frontend/dist`。
+  - 新增 11 个验收回归测试（guard 可恢复暂停、预算暂停保留 checkpoint、已完成 stage 不重复执行、只读/依赖探测不消耗变更预算、破坏性命令仍阻断、all_attributes 中文键编码完整、部分状态不覆盖不重复、合并更新同身份、formal ⊆ all、retry 不重探数据库/schema、400 后从原 checkpoint 恢复）；完整测试集 212 通过（skipped=3）。本次未部署。

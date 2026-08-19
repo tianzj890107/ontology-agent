@@ -118,6 +118,94 @@ class TaskStateMachineTests(unittest.TestCase):
             self.assertEqual(guard.record_tool_call("Write", {"file_path": "out2.csv"}),
                              "MODEL_TOOL_CALL_LIMIT")
 
+    def test_budget_pause_persists_checkpoint_and_is_marked_recoverable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._modeling_task(directory, "budget-pause", ["business_objects.csv"])
+            task.conv.profile.max_iterations = 5
+            checkpoint = {
+                "status": "FAILED",
+                "issues": [type("Issue", (), {
+                    "code": "MISSING_EVIDENCE",
+                    "severity": "ERROR",
+                    "message": "需要独立证据",
+                })()],
+            }
+            with patch.object(oc_codex_server.ModelingExecutionGuard, "check",
+                              return_value="MODEL_TOOL_CALL_LIMIT"), \
+                    patch.object(task, "_stream_once", return_value="end_turn"), \
+                    patch.object(oc_codex_server, "finalize_modeling_task",
+                                 return_value=checkpoint) as finalize, \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("开始建模", lambda _event: None, conversational=False)
+
+            self.assertEqual(task.status, "blocked")
+            self.assertEqual(task.modeling_block_reason, "MODEL_TOOL_CALL_LIMIT")
+            self.assertEqual(task.run_result.get("status"), "BLOCKED")
+            # A budget pause must persist the current stage checkpoint so a
+            # retry resumes from the last PASSED stage instead of restarting.
+            self.assertGreaterEqual(finalize.call_count, 1)
+            guard_events = [event for event in task.log
+                            if event.get("type") == "execution_guard"]
+            self.assertTrue(guard_events)
+            self.assertEqual(guard_events[-1].get("status"), "paused")
+            self.assertTrue(guard_events[-1].get("recoverable"))
+
+    def test_budget_limit_does_not_block_when_checkpoint_already_passed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._modeling_task(directory, "budget-passed", ["business_objects.csv"])
+            task.conv.profile.max_iterations = 5
+            checkpoint = {"status": "PASSED", "issues": []}
+            with patch.object(oc_codex_server.ModelingExecutionGuard, "check",
+                              return_value="MODEL_TOKEN_BUDGET_EXCEEDED"), \
+                    patch.object(task, "_stream_once", return_value="end_turn"), \
+                    patch.object(oc_codex_server, "finalize_modeling_task",
+                                 return_value=checkpoint), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("开始建模", lambda _event: None, conversational=False)
+
+            self.assertEqual(task.status, "idle")
+            self.assertNotEqual(task.run_result.get("status"), "BLOCKED")
+            passed = [event for event in task.log
+                      if event.get("type") == "execution_guard"
+                      and event.get("status") == "passed"]
+            self.assertTrue(passed)
+
+    def test_gate_blocks_are_not_recoverable_pauses(self):
+        for code in ("MODEL_GATE_RETRY_LIMIT",
+                     "MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE"):
+            self.assertFalse(oc_codex_server.is_recoverable_guard_pause(code))
+        for code in ("MODEL_EXECUTION_TIMEOUT", "MODEL_TOOL_CALL_LIMIT",
+                     "MODEL_TOKEN_BUDGET_EXCEEDED"):
+            self.assertTrue(oc_codex_server.is_recoverable_guard_pause(code))
+        self.assertFalse(oc_codex_server.is_recoverable_guard_pause(""))
+
+    def test_dependency_and_environment_probes_do_not_consume_mutating_budget(self):
+        with patch.dict(os.environ, {"ONTOLOGY_MODELING_MAX_TOOL_CALLS": "3"}, clear=False):
+            guard = oc_codex_server.ModelingExecutionGuard()
+            probes = [
+                ("Bash", {"command": "python3 -c \"import sqlalchemy; print(sqlalchemy.__version__)\""}),
+                ("Bash", {"command": "python3 -c \"import psycopg2\""}),
+                ("Bash", {"command": "pip list | grep sqlalchemy"}),
+                ("Bash", {"command": "which python3"}),
+                ("Bash", {"command": "env | grep DATABASE"}),
+                ("Bash", {"command": "python3 --version"}),
+            ]
+            for name, payload in probes:
+                self.assertEqual(guard.record_tool_call(name, payload), "",
+                                 msg=f"{payload!r} should be read-only")
+            self.assertEqual(guard.mutating_tool_calls, 0)
+            self.assertEqual(guard.read_only_tool_calls, len(probes))
+
+    def test_destructive_python_one_liner_still_consumes_mutating_budget(self):
+        with patch.dict(os.environ, {"ONTOLOGY_MODELING_MAX_TOOL_CALLS": "1"}, clear=False):
+            guard = oc_codex_server.ModelingExecutionGuard()
+            self.assertEqual(guard.record_tool_call(
+                "Bash", {"command": "python3 -c \"import os; os.remove('x.csv')\""}),
+                "MODEL_TOOL_CALL_LIMIT")
+            self.assertEqual(guard.mutating_tool_calls, 1)
+
     def test_same_gate_without_new_evidence_blocks_and_preserves_result(self):
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory) / "mission-work").mkdir()
