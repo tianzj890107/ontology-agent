@@ -157,6 +157,10 @@ async function standaloneApi(path, apiKey, options = {}, retrySession = true) {
 }
 
 function standaloneRequestFailed(result) {
+  // Run detail payloads also have an `error` field for BLOCKED/FAILED reasons.
+  // A runId is authoritative evidence that this is a successful detail
+  // response, even if a proxy strips the synthetic HTTP status marker.
+  if (result?.runId) return false;
   return Boolean(result?.error && (!Number.isFinite(Number(result?._status)) || Number(result._status) >= 400));
 }
 
@@ -337,7 +341,6 @@ function StandaloneApp() {
     updateRunSummary(summary);
     const events = await standaloneApi(
       `/api/modeling-runs/${encodedId}/events?tail=1&limit=80`, "",
-      { signal: request.controller.signal },
     );
     if (events._aborted || selectedRunIdRef.current !== runId) return null;
     let eventPayload = events;
