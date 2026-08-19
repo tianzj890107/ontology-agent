@@ -9,10 +9,14 @@ sys.path.insert(0, str(ROOT / "open-claude"))
 
 from open_claude.modeling_reliability import (  # noqa: E402
     CANDIDATE,
+    COMPOSITION,
     CONFIRMED,
     DECISION_AUDIT_HEADERS,
+    REFERENCE,
     REJECTED,
     UNRESOLVED,
+    apply_aggregation_downgrades,
+    aggregation_components,
     business_object_decision_records,
     decision_audit_coverage,
     semantic_validation_issues,
@@ -115,6 +119,58 @@ class PipelineDecisionAuditTests(unittest.TestCase):
         codes = {issue.code for issue in semantic_validation_issues(state)}
         self.assertIn("INVALID_AGGREGATION_EDGE", codes)
         self.assertIn("TRANSFORMATION_EVIDENCE_GATE", codes)
+        issue = next(item for item in semantic_validation_issues(state)
+                     if item.code == "INVALID_AGGREGATION_EDGE")
+        self.assertEqual(issue.severity, "WARNING")
+
+    def test_weak_composition_auto_downgrades_to_reference(self):
+        state = {
+            "entities": [
+                {"entityId": "D", "role": "DEPENDENT_ENTITY"},
+                {"entityId": "A", "role": "MAIN_ENTITY"},
+            ],
+            "relationDecisions": [
+                {"relationId": "C1", "sourceEntity": "D", "targetEntity": "A",
+                 "relationType": COMPOSITION, "status": CONFIRMED,
+                 "evidenceTypes": ["FOREIGN_KEY"], "evidenceLevel": "STRONG",
+                 "provenance": ["schema.sql"]},
+            ],
+        }
+        self.assertEqual(apply_aggregation_downgrades(state), ["C1"])
+        self.assertEqual(apply_aggregation_downgrades(state), [])
+        record = state["relationDecisions"][0]
+        self.assertEqual(record["relationType"], REFERENCE)
+        self.assertEqual(record["downgradedFrom"], COMPOSITION)
+        codes = {issue.code for issue in semantic_validation_issues(state)}
+        self.assertIn("INVALID_AGGREGATION_EDGE", codes)
+        issue = next(item for item in semantic_validation_issues(state)
+                     if item.code == "INVALID_AGGREGATION_EDGE")
+        self.assertEqual(issue.severity, "WARNING")
+        self.assertEqual(issue.details["downgradedTo"], REFERENCE)
+        self.assertTrue(issue.details["autoResolved"])
+        self.assertFalse(any("C1" in component.relation_ids
+                             for component in aggregation_components(state)))
+
+    def test_weak_composition_alone_never_blocks_final_gate(self):
+        state = {
+            "entities": [
+                {"entityId": "D", "role": "DEPENDENT_ENTITY"},
+                {"entityId": "A", "role": "MAIN_ENTITY"},
+            ],
+            "relationDecisions": [
+                {"relationId": "C1", "sourceEntity": "D", "targetEntity": "A",
+                 "relationType": COMPOSITION, "status": CONFIRMED,
+                 "evidenceTypes": ["FOREIGN_KEY"], "evidenceLevel": "STRONG",
+                 "provenance": ["schema.sql"]},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            from open_claude.modeling_reliability import finalize_semantic_model
+            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            self.assertEqual(result["status"], "PASSED")
+            codes = {issue.code for issue in result["issues"]}
+            self.assertIn("INVALID_AGGREGATION_EDGE", codes)
+            self.assertFalse(any(issue.severity == "ERROR" for issue in result["issues"]))
 
     def test_view_filter_rule_with_direct_implementation_evidence_is_formal(self):
         state = {"ruleDecisions": [{

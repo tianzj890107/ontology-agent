@@ -94,6 +94,20 @@ class TaskStateMachineTests(unittest.TestCase):
         self.assertNotIn("UNSUPPORTED_FORMAL_INDICATOR", detail)
         self.assertIn("FORMAL_OUTPUT_EMPTY", detail)
 
+    def test_gate_blocker_detail_ignores_auto_resolved_warnings(self):
+        checkpoint = {"issues": [
+            SimpleNamespace(code="ASSET_PROCESSING_COVERAGE_MISSING", severity="WARNING",
+                            message="输入资产缺少处理决策，已自动标记 processingDecision=UNKNOWN"),
+            SimpleNamespace(code="INVALID_AGGREGATION_EDGE", severity="WARNING",
+                            message="COMPOSITION 缺少证据，已自动降级为 REFERENCE"),
+            SimpleNamespace(code="MISSING_COMPOSITION_OWNER", severity="ERROR",
+                            message="COMPOSITION 引用了不存在的 source 或 owner"),
+        ]}
+        detail = oc_codex_server._gate_blocker_detail(checkpoint)
+        self.assertNotIn("ASSET_PROCESSING_COVERAGE_MISSING", detail)
+        self.assertNotIn("INVALID_AGGREGATION_EDGE", detail)
+        self.assertIn("MISSING_COMPOSITION_OWNER", detail)
+
     @staticmethod
     def _modeling_task(directory, project, expected_files=None):
         task = oc_codex_server.Task(

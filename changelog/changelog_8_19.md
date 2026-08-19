@@ -46,3 +46,10 @@
   - `VALIDATION_CACHE_VERSION` 升级为 `2026-08-19-rule-indicator-gate-relaxed`，旧版本写入的 FAILED 阶段缓存自动失效重算，避免继续阻断重跑。
   - 同步 `agent_knowledge/业务规则v0.0.1.md`：明确 CANDIDATE/弱证据规则可写入正式 CSV、仅 WARNING，禁止为升级 CONFIRMED 伪造证据或为消除 WARNING 反复返工；web 服务 prompt 已对齐（无额外改动）。
   - 新增回归测试：弱规则证据全部 WARNING 且无 ERROR、弱规则/指标证据下 `validate_modeling_stages` 全部阶段 PASSED、弱指标正式输出仅 WARNING、`_gate_blocker_detail` 忽略规则/指标 WARNING；并更新既有 ENFORCED/VALIDATED/UNCONFIRMED 断言为 WARNING。 完整测试集 243 通过（skipped=3，并跑时存在一个与本次改动无关的既有并发时序偶发用例，单独运行通过）。已部署两个服务（commit `457c43e`，web 47313 与 standalone 47314 均已重启，健康检查 200，部署前确认两服务无活跃运行）。
+- 继续降低资产与聚合门禁阻断强度（资产覆盖与聚合边专项）：
+  - `ASSET_PROCESSING_COVERAGE_MISSING` 由 ERROR 降为 WARNING：服务端在 stage 校验与 finalize 前对未处理的输入资产自动落盘 `processingDecision=UNKNOWN`（写入 `assetDecisions` 与 `autoResolvedProcessingDecisions` 审计标记），不再因为缺少处理决策而阻断建模；显式 `MODELED/EXCLUDED/TECHNICAL/REJECTED/UNKNOWN` 均计入覆盖，WARNING 不触发 retry/run_blocked/safety valve。
+  - `INVALID_AGGREGATION_EDGE` 由 ERROR 降为 WARNING：`COMPOSITION` 缺少 ownership/containment/lifecycle 语义证据时自动降级为普通引用关系 `REFERENCE`（改写 `relationType` 并记录 `downgradedFrom=COMPOSITION`），不再计入聚合边；普通 FK/结构证据仍不能单独升级为 COMPOSITION。
+  - 仅保留真正结构性 ERROR 阻断：关系端点不存在（`MISSING_COMPOSITION_OWNER` 等）、编码缺失/冲突、schema/文件损坏无法读取、必要正式输出未生成（`REQUESTED_ARTIFACT_MISSING`）。
+  - execution_gate 同步验证：`validate_modeling_stages` 只按 ERROR 判 FAILED，自动降级/自动补 UNKNOWN 的问题只进 WARNING；`_gate_blocker_detail` 忽略这两个 WARNING，`block_modeling`/`finalize_modeling_task` 的 errors 只取 ERROR 级。
+  - `VALIDATION_CACHE_VERSION` 升级为 `2026-08-19-asset-composition-gate-relaxed`，旧阶段缓存自动失效重算。
+  - 新增回归测试：资产缺失决策自动补 UNKNOWN 且幂等、coverage WARNING 不阻断 stage/final gate、弱 COMPOSITION 自动降级 REFERENCE 且幂等、降级后 WARNING 不阻断 final gate、stage gate 保持 PASSED、`_gate_blocker_detail` 忽略自动处理项；更新既有 coverage/composition 断言为 WARNING。完整测试集 249 通过（skipped=3）。

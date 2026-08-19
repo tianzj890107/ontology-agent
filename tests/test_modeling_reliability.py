@@ -15,12 +15,14 @@ from open_claude.modeling_reliability import (  # noqa: E402
     COMPOSITION,
     CONFIRMED,
     EXTENSION,
+    REFERENCE,
     UNRESOLVED,
     BUSINESS_OBJECT_DECISION_HEADERS,
     BusinessRuleType,
     RuleEnforcement,
     aggregation_components,
     analyze_aggregation,
+    apply_aggregation_downgrades,
     business_object_decision_records,
     derive_business_object_decision,
     infer_business_object_rule_status,
@@ -424,8 +426,30 @@ class CompositionAggregationTests(unittest.TestCase):
         }
         codes = {issue.code for issue in semantic_validation_issues(state)}
         self.assertIn("INVALID_AGGREGATION_EDGE", codes)
+        issue = next(item for item in semantic_validation_issues(state)
+                     if item.code == "INVALID_AGGREGATION_EDGE")
+        self.assertEqual(issue.severity, "WARNING")
         self.assertFalse(any("REL_FK_ONLY" in component.relation_ids
                              for component in aggregation_components(state)))
+
+    def test_fk_composition_downgrade_keeps_stage_gate_passed(self):
+        state = {
+            "entities": [entity("LE_A", "MAIN"), entity("LE_D", "DEPENDENT")],
+            "relationDecisions": [composition(
+                "REL_FK_ONLY", "LE_D", "LE_A", evidence_types=["FOREIGN_KEY"])],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            work = Path(root) / "mission-work"
+            work.mkdir()
+            output = Path(root) / "mission-output"
+            output.mkdir()
+            (output / "entity_relations.csv").write_text(
+                "关系编码,源逻辑实体编码,目标逻辑实体编码,关系分类,关系基数\n"
+                "REL_FK_ONLY,LE_D,LE_A,REFERENCE,1:1\n", encoding="utf-8")
+            result = validate_modeling_stages(work, output,
+                                              state, ["entity_relations.csv"])
+            self.assertEqual(result["stages"][7]["status"], "PASSED")
+            self.assertFalse(any(issue.severity == "ERROR" for issue in result["issues"]))
 
 
 def business_candidate(code, name, statuses, *, confidence="60",

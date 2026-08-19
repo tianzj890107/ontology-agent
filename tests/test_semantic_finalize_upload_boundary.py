@@ -173,17 +173,24 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
             self.assertIn("UNSUPPORTED_CONFIRMED_RELATION",
                           {issue.code for issue in result["issues"]})
 
-    def test_missing_asset_processing_decision_is_a_real_coverage_error(self):
+    def test_missing_asset_processing_decision_is_auto_unknown_warning(self):
         state = {
             "tables": ["orders", "reference_codes"],
             "assetDecisions": [{"tableName": "orders", "decision": "MODELED"}],
         }
         with tempfile.TemporaryDirectory() as root:
             result = finalize_semantic_model(Path(root) / "mission-work", state)
-            self.assertEqual(result["status"], "FAILED")
+            self.assertEqual(result["status"], "PASSED")
             issue = next(item for item in result["issues"]
                          if item.code == "ASSET_PROCESSING_COVERAGE_MISSING")
-            self.assertEqual(issue.severity, "ERROR")
+            self.assertEqual(issue.severity, "WARNING")
+            self.assertEqual(issue.details["missing"], ["reference_codes"])
+            persisted = json.loads((Path(root) / "mission-work" / "modeling_state.json")
+                                   .read_text(encoding="utf-8"))
+            decisions = {row["tableName"]: row for row in persisted["assetDecisions"]}
+            self.assertEqual(decisions["orders"]["decision"], "MODELED")
+            self.assertEqual(decisions["reference_codes"]["processingDecision"], "UNKNOWN")
+            self.assertIn("reference_codes", persisted["autoResolvedProcessingDecisions"])
 
     def test_upload_checks_marker_without_running_semantic_gate(self):
         with tempfile.TemporaryDirectory() as root:

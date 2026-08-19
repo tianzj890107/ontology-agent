@@ -775,23 +775,35 @@ def analyze_aggregation(state: Mapping[str, Any] | None) -> AggregationAnalysis:
         status = _status(relation.get("status") or relation.get("decision"))
         source = _relation_endpoint(relation, True)
         target = _relation_endpoint(relation, False)
+        downgraded_from_composition = (_key(relation.get("downgradedFrom")
+                                            or relation.get("downgraded_from")) == COMPOSITION)
         if relation_type == COMPOSITION and status != CONFIRMED:
             if source:
                 candidate_composition_sources.add(source)
             continue
         if relation_type not in AGGREGATION_RELATION_TYPES or status != CONFIRMED:
+            if downgraded_from_composition and status == CONFIRMED:
+                issues.append(_issue(
+                    "INVALID_AGGREGATION_EDGE", "WARNING",
+                    f"COMPOSITION {_relation_id(relation, relation_id)} 缺少 ownership/containment/lifecycle "
+                    "语义证据，已自动降级为普通引用关系 REFERENCE；普通 FK 不能直接作为聚合边",
+                    artifact_type="ENTITY_RELATION", artifact_id=_relation_id(relation, relation_id),
+                    relation=relation,
+                    details={"reason": "foreign-key or structural evidence is not composition evidence",
+                             "downgradedTo": "REFERENCE", "autoResolved": True}))
             continue
         relation_id = _relation_id(relation, relation_id)
         if relation_type == COMPOSITION and not has_formal_evidence(relation):
             continue
         if relation_type == COMPOSITION and not has_composition_evidence(relation):
-            invalid_relation_ids.add(relation_id)
             issues.append(_issue(
-                "INVALID_AGGREGATION_EDGE", "ERROR",
-                f"COMPOSITION {relation_id} 缺少 ownership/containment 语义证据，普通 FK 不能直接作为聚合边",
+                "INVALID_AGGREGATION_EDGE", "WARNING",
+                f"COMPOSITION {relation_id} 缺少 ownership/containment/lifecycle 语义证据，"
+                "自动降级为普通引用关系 REFERENCE；普通 FK 不能直接作为聚合边",
                 artifact_type="ENTITY_RELATION", artifact_id=relation_id,
                 relation=relation,
-                details={"reason": "foreign-key or structural evidence is not composition evidence"},
+                details={"reason": "foreign-key or structural evidence is not composition evidence",
+                         "downgradedTo": "REFERENCE", "autoResolved": True},
             ))
             continue
         if relation_type == EXTENSION and not has_formal_evidence(relation):
@@ -1009,6 +1021,31 @@ def aggregation_components(state: Mapping[str, Any] | None,
 def build_aggregation_components(state: Mapping[str, Any] | None) -> list[AggregationComponent]:
     """Return only components eligible for formal Business Object aggregation."""
     return aggregation_components(state)
+
+
+def apply_aggregation_downgrades(state: Mapping[str, Any] | None) -> list[str]:
+    """In-place: downgrade COMPOSITION without ownership evidence to REFERENCE.
+
+    Ordinary FK/structural evidence cannot promote a relation to COMPOSITION;
+    such edges are re-recorded as REFERENCE so they stop counting as
+    aggregation edges while remaining visible as an auditable WARNING.
+    Returns the downgraded relation ids.
+    """
+    if not isinstance(state, Mapping):
+        return []
+    downgraded: list[str] = []
+    for relation in _iter_relation_decisions(state):
+        if _relation_type(relation) != COMPOSITION:
+            continue
+        if has_composition_evidence(relation):
+            continue
+        for key in ("relationType", "relation_type", "type", "关系类型"):
+            if key in relation and _key(relation.get(key)) == COMPOSITION:
+                relation[key] = "REFERENCE"
+        if not (relation.get("downgradedFrom") or relation.get("downgraded_from")):
+            relation["downgradedFrom"] = "COMPOSITION"
+        downgraded.append(_relation_identity(relation))
+    return sorted(set(identifier for identifier in downgraded if identifier))
 
 
 def _csv_rows(blob: bytes) -> tuple[list[str], list[dict[str, str]]]:
@@ -3139,31 +3176,29 @@ def _asset_inventory_records(state: Mapping[str, Any]) -> list[Mapping[str, Any]
     return records
 
 
-def validate_asset_processing_coverage(state: Mapping[str, Any] | None) -> list[ValidationIssue]:
-    """Require a disposition for every explicit input asset, not formal inclusion.
+_ASSET_DECISION_KEYS = ("processingDecision", "processing_decision", "disposition",
+                        "classification", "decision", "status", "处理决策", "处置")
 
-    MODELED, EXCLUDED_AS_MIRROR, TECHNICAL, REJECTED and UNKNOWN are all
-    processing decisions.  A missing decision is an actual coverage defect;
-    an UNKNOWN decision is not upgraded to an error and never causes the
-    validator to invent a model or relationship.
+
+def _asset_processing_coverage(state: Mapping[str, Any]) -> tuple[set[str], dict[str, str], list[str]]:
+    """Return (asset_ids, decisions, missing) for the explicit input inventory.
+
+    ``decisions`` maps each asset id to its first durable processing
+    disposition.  MODELED, EXCLUDED_AS_MIRROR, TECHNICAL, REJECTED and
+    UNKNOWN are all valid dispositions; a missing disposition is a coverage
+    gap that the caller may default to UNKNOWN instead of failing.
     """
-    if not isinstance(state, Mapping):
-        return []
     inventory = _asset_inventory_records(state)
-    if not inventory:
-        return []
     asset_ids = {_asset_record_id(item) for item in inventory}
     asset_ids.discard("")
-    if not asset_ids:
-        return []
-    decided: set[str] = set()
+    decisions: dict[str, str] = {}
+
+    def record(identifier: str, disposition: Any) -> None:
+        if identifier in asset_ids and _text(disposition) and identifier not in decisions:
+            decisions[identifier] = _key(disposition)
+
     for item in inventory:
-        identifier = _asset_record_id(item)
-        disposition = _first_value(item, ("processingDecision", "processing_decision",
-                                          "disposition", "classification", "decision",
-                                          "status", "处理决策", "处置"))
-        if identifier in asset_ids and _text(disposition):
-            decided.add(identifier)
+        record(_asset_record_id(item), _first_value(item, _ASSET_DECISION_KEYS))
     decision_keys = ("assetDecisions", "asset_decisions", "assetProcessingDecisions",
                      "asset_processing_decisions", "assetDispositionDecisions",
                      "asset_disposition_decisions")
@@ -3172,40 +3207,89 @@ def validate_asset_processing_coverage(state: Mapping[str, Any] | None) -> list[
         values = list(value.values()) if isinstance(value, Mapping) else value
         if isinstance(values, list):
             for item in values:
-                if not isinstance(item, Mapping):
-                    continue
-                identifier = _asset_record_id(item)
-                disposition = _first_value(item, ("processingDecision", "processing_decision",
-                                                  "disposition", "classification", "decision",
-                                                  "status", "处理决策", "处置"))
-                if identifier in asset_ids and _text(disposition):
-                    decided.add(identifier)
+                if isinstance(item, Mapping):
+                    record(_asset_record_id(item), _first_value(item, _ASSET_DECISION_KEYS))
     # Existing modeling outputs are valid processing decisions too.  This
     # keeps the check compatible with the current state schema while still
     # requiring every source asset to be accounted for.
     for item in _iter_entity_records(state):
-        identifier = _text(_first_value(item, ("sourceTable", "source_table", "tableName")))
-        if identifier in asset_ids:
-            decided.add(identifier)
+        record(_text(_first_value(item, ("sourceTable", "source_table", "tableName"))), "MODELED")
     for key in ("excludedAssets", "excluded_assets", "technicalAssets", "technical_assets"):
         value = state.get(key)
         values = list(value.values()) if isinstance(value, Mapping) else value
         if isinstance(values, list):
             for item in values:
-                if isinstance(item, Mapping):
-                    identifier = _asset_record_id(item)
-                else:
-                    identifier = _text(item)
-                if identifier in asset_ids:
-                    decided.add(identifier)
-    missing = sorted(asset_ids - decided)
-    if missing:
-        return [_issue("ASSET_PROCESSING_COVERAGE_MISSING", "ERROR",
-                       "输入资产缺少处理决策；正式建模、排除、技术字段或 UNKNOWN 均可计入覆盖",
-                       artifact_type="ASSET_INVENTORY",
-                       details={"assets": sorted(asset_ids), "decided": sorted(decided),
-                                "missing": missing})]
-    return []
+                identifier = _asset_record_id(item) if isinstance(item, Mapping) else _text(item)
+                record(identifier, "TECHNICAL" if "technical" in key else "EXCLUDED")
+    return asset_ids, decisions, sorted(asset_ids - set(decisions))
+
+
+def validate_asset_processing_coverage(state: Mapping[str, Any] | None) -> list[ValidationIssue]:
+    """Require a disposition for every explicit input asset, not formal inclusion.
+
+    A missing disposition is auto-resolved to processingDecision=UNKNOWN by
+    the server and is recorded as a WARNING, never a hard failure.  An UNKNOWN
+    decision is not upgraded to an error and never causes the validator to
+    invent a model or relationship.
+    """
+    if not isinstance(state, Mapping):
+        return []
+    asset_ids, decisions, missing = _asset_processing_coverage(state)
+    if not asset_ids:
+        return []
+    marker = {_text(item) for item in (state.get("autoResolvedProcessingDecisions")
+                                       or state.get("auto_resolved_processing_decisions") or [])}
+    # Only keep advisory entries whose current disposition is still unresolved,
+    # so an explicit later decision clears the warning.
+    auto_resolved = sorted(identifier for identifier in marker
+                           if identifier in asset_ids
+                           and decisions.get(identifier, "UNKNOWN") in {"", "UNKNOWN"})
+    if not missing and not auto_resolved:
+        return []
+    return [_issue("ASSET_PROCESSING_COVERAGE_MISSING", "WARNING",
+                   "输入资产缺少处理决策，已自动标记 processingDecision=UNKNOWN；"
+                   "正式建模、排除、技术字段或 UNKNOWN 均可计入覆盖",
+                   artifact_type="ASSET_INVENTORY",
+                   details={"assets": sorted(asset_ids), "decided": sorted(decisions),
+                            "missing": missing or auto_resolved, "autoResolved": True})]
+
+
+def apply_asset_processing_coverage_defaults(state: Mapping[str, Any] | None) -> list[str]:
+    """In-place: persist processingDecision=UNKNOWN for every undecided asset.
+
+    The server applies this before stage validation/finalization so a missing
+    disposition becomes an auditable UNKNOWN instead of a hard failure.
+    Returns the identifiers that were defaulted.
+    """
+    if not isinstance(state, Mapping):
+        return []
+    asset_ids, decisions, missing = _asset_processing_coverage(state)
+    if not missing:
+        return []
+    raw_marker = (state.get("autoResolvedProcessingDecisions")
+                  or state.get("auto_resolved_processing_decisions") or [])
+    marker = [str(item) for item in raw_marker] if isinstance(raw_marker, (list, tuple, set)) else []
+    for identifier in missing:
+        if identifier not in marker:
+            marker.append(identifier)
+    state["autoResolvedProcessingDecisions"] = marker
+    # A durable decision entry covers assets that only appear as bare names
+    # (e.g. tables: ["orders"]) and survives re-validation on later turns.
+    asset_decisions = state.get("assetDecisions")
+    if not isinstance(asset_decisions, list):
+        asset_decisions = []
+        state["assetDecisions"] = asset_decisions
+    existing = {_asset_record_id(item) for item in asset_decisions if isinstance(item, Mapping)}
+    for identifier in missing:
+        if identifier not in existing:
+            asset_decisions.append({"tableName": identifier, "processingDecision": "UNKNOWN"})
+    # Mirror the decision onto dict-shaped inventory records so consumers that
+    # only read assetInventory/assetDecisions see it too.
+    for item in _asset_inventory_records(state):
+        if _asset_record_id(item) in missing and isinstance(item, dict) \
+                and not _text(_first_value(item, _ASSET_DECISION_KEYS)):
+            item["processingDecision"] = "UNKNOWN"
+    return sorted(missing)
 
 
 def validate_uncertainty_preservation(state: Mapping[str, Any] | None) -> list[ValidationIssue]:
@@ -3406,7 +3490,7 @@ _FORMAL_ARTIFACT_REQUIRED_HEADERS = {
 # into every stage signature so stale PASSED/FAILED checkpoints written by an
 # older validator (for example the pre-entity-scope duplicate-name rule) are
 # invalidated and re-validated with the current code instead of being reused.
-VALIDATION_CACHE_VERSION = "2026-08-19-rule-indicator-gate-relaxed"
+VALIDATION_CACHE_VERSION = "2026-08-19-asset-composition-gate-relaxed"
 
 MODEL_VALIDATION_STAGES = (
     ("INPUT_CONTEXT", "输入契约"),
@@ -3591,6 +3675,11 @@ def validate_modeling_stages(work_dir: str | os.PathLike[str],
     target_work = Path(work_dir)
     target_output = Path(output_dir)
     current = dict(state) if isinstance(state, Mapping) else {}
+    # Auto-resolvable gaps are normalized before any stage check: undecided
+    # input assets become processingDecision=UNKNOWN and weak COMPOSITION
+    # edges are downgraded to REFERENCE, so they never hard-block a run.
+    apply_asset_processing_coverage_defaults(current)
+    apply_aggregation_downgrades(current)
     cache = current.get("validationStages") if isinstance(current.get("validationStages"), dict) else {}
     active = _requested_stage_set(required_outputs)
     events: list[dict[str, Any]] = []
@@ -3732,6 +3821,10 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
     target_dir.mkdir(parents=True, exist_ok=True)
     state = dict(state) if isinstance(state, Mapping) else (load_modeling_state(target_dir) or {})
     state = _normalized_logical_entity_state(state)
+    # Apply the same auto-resolutions before the staged/legacy validators run
+    # so the persisted modeling_state.json and audit CSVs carry them.
+    apply_asset_processing_coverage_defaults(state)
+    apply_aggregation_downgrades(state)
     output_path = Path(output_dir) if output_dir is not None else target_dir.parent / "mission-output"
 
     # Validate the current stage only.  Passed stages are content-addressed;

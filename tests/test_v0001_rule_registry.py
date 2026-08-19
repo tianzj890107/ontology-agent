@@ -20,6 +20,7 @@ from open_claude.modeling_reliability import (  # noqa: E402
     validate_fk_coverage,
     validate_formal_attribute_inventory,
     validate_asset_processing_coverage,
+    apply_asset_processing_coverage_defaults,
     write_all_attributes_csv,
 )
 
@@ -264,7 +265,43 @@ class V0001RuleRegistryTests(unittest.TestCase):
         }
         issues = validate_asset_processing_coverage(state)
         self.assertEqual([item.code for item in issues], ["ASSET_PROCESSING_COVERAGE_MISSING"])
+        self.assertEqual(issues[0].severity, "WARNING")
         self.assertEqual(issues[0].details["missing"], ["reference_codes"])
+
+    def test_asset_coverage_defaults_mark_unknown_and_are_idempotent(self):
+        state = {
+            "tables": ["orders", "reference_codes"],
+            "assetDecisions": [{"tableName": "orders", "decision": "MODELED"}],
+        }
+        self.assertEqual(apply_asset_processing_coverage_defaults(state), ["reference_codes"])
+        self.assertEqual(apply_asset_processing_coverage_defaults(state), [])
+        decisions = {row["tableName"]: row for row in state["assetDecisions"]}
+        self.assertEqual(decisions["reference_codes"]["processingDecision"], "UNKNOWN")
+        self.assertIn("reference_codes", state["autoResolvedProcessingDecisions"])
+        issues = validate_asset_processing_coverage(state)
+        self.assertEqual([item.code for item in issues], ["ASSET_PROCESSING_COVERAGE_MISSING"])
+        self.assertEqual(issues[0].severity, "WARNING")
+        self.assertEqual(issues[0].details["missing"], ["reference_codes"])
+        self.assertTrue(issues[0].details["autoResolved"])
+
+    def test_asset_coverage_warning_does_not_block_final_gate(self):
+        from open_claude.modeling_reliability import validate_modeling_stages
+        state = {
+            "tables": ["orders", "reference_codes"],
+            "assetDecisions": [{"tableName": "orders", "decision": "MODELED"}],
+        }
+        with tempfile.TemporaryDirectory() as root:
+            work = Path(root) / "mission-work"
+            work.mkdir()
+            output = Path(root) / "mission-output"
+            output.mkdir()
+            (output / "logical_entities.csv").write_text(
+                "业务对象编码,逻辑实体编码,逻辑实体名称,逻辑实体定义,是否主逻辑实体\n"
+                "CO1,LE1,逻辑实体1,定义,Y\n", encoding="utf-8")
+            result = validate_modeling_stages(work, output,
+                                              state, ["logical_entities.csv"])
+            self.assertEqual(result["stages"][1]["status"], "PASSED")
+            self.assertFalse(any(issue.severity == "ERROR" for issue in result["issues"]))
 
     def test_registry_matrix_covers_each_phase_and_output(self):
         from open_claude.modeling_rule_registry import registry_matrix
