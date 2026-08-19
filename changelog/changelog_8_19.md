@@ -45,4 +45,4 @@
   - WARNING 不触发阶段 FAILED、不进入 retry/run_blocked/safety valve：`validate_modeling_stages` 仅按 ERROR 判 FAILED；`_gate_blocker_detail` 现在只渲染 ERROR 级问题，规则/指标 WARNING 不再出现在阻断建议与 hard-block 事件中；`set_task_run_result` 的 errors 只取 ERROR 级，WARNING 仅进 warnings。
   - `VALIDATION_CACHE_VERSION` 升级为 `2026-08-19-rule-indicator-gate-relaxed`，旧版本写入的 FAILED 阶段缓存自动失效重算，避免继续阻断重跑。
   - 同步 `agent_knowledge/业务规则v0.0.1.md`：明确 CANDIDATE/弱证据规则可写入正式 CSV、仅 WARNING，禁止为升级 CONFIRMED 伪造证据或为消除 WARNING 反复返工；web 服务 prompt 已对齐（无额外改动）。
-  - 新增回归测试：弱规则证据全部 WARNING 且无 ERROR、弱规则/指标证据下 `validate_modeling_stages` 全部阶段 PASSED、弱指标正式输出仅 WARNING、`_gate_blocker_detail` 忽略规则/指标 WARNING；并更新既有 ENFORCED/VALIDATED/UNCONFIRMED 断言为 WARNING。
+  - 新增回归测试：弱规则证据全部 WARNING 且无 ERROR、弱规则/指标证据下 `validate_modeling_stages` 全部阶段 PASSED、弱指标正式输出仅 WARNING、`_gate_blocker_detail` 忽略规则/指标 WARNING；并更新既有 ENFORCED/VALIDATED/UNCONFIRMED 断言为 WARNING。 完整测试集 243 通过（skipped=3，并跑时存在一个与本次改动无关的既有并发时序偶发用例，单独运行通过）。已部署两个服务（commit `457c43e`，web 47313 与 standalone 47314 均已重启，健康检查 200，部署前确认两服务无活跃运行）。
