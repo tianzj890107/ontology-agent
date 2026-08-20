@@ -3721,6 +3721,13 @@ class Task:
         """将当前本体任务上下文放入 agent system prompt,避免每轮重复上传/描述。"""
         if not isinstance(context, dict):
             return
+        if self.conv is None:
+            # Deferred-runtime tasks keep conv uninitialized until the first
+            # streamed turn.  A platform callback can still push mission
+            # context before then; materialize the conversation so the
+            # context reaches the system prompt instead of raising on
+            # self.conv.model.  ensure_conversation() is re-entrant safe.
+            self.ensure_conversation()
         context = normalize_modeling_context(context)
         context_kind = normalize_task_type(context.get("taskType") or self.task_type or "")
         if context_kind == "modeling" or (not context_kind and infer_source_mode(context)):

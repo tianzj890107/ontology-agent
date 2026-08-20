@@ -201,6 +201,72 @@ class TaskStateMachineTests(unittest.TestCase):
         task.conv = _FakeConversation()
         return task
 
+    def test_deferred_runtime_set_mission_context_materializes_conversation(self):
+        # Regression: a platform callback can push mission context while a
+        # deferred-runtime task still has conv=None.  set_mission_context must
+        # materialize the conversation instead of raising
+        # AttributeError: 'NoneType' object has no attribute 'model'.
+        class FakeRuntime:
+            class AgentProfile:
+                def __init__(self, model, style):
+                    self.model = model
+                    self.style = style
+
+            def Conversation(self, cwd, permission_mode, resume_session_id, profile):
+                conv = _FakeConversation()
+                conv.model = profile.model
+                conv.permissions = SimpleNamespace(
+                    _prompt_user=None,
+                    mode="default",
+                )
+                return conv
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(oc_codex_server.AGENT_RUNTIME, "get", return_value=FakeRuntime()), \
+                patch.object(oc_codex_server, "download_mission_files",
+                             return_value=([], [])), \
+                patch.object(oc_codex_server, "migrate_legacy_mission_inputs",
+                             return_value=[]), \
+                patch.object(oc_codex_server, "prepare_mission_spreadsheets",
+                             return_value=([], [])), \
+                patch.object(oc_codex_server, "prepare_mission_documents",
+                             return_value=([], [])), \
+                patch.object(oc_codex_server, "list_project_files",
+                             return_value=[]), \
+                patch.object(oc_codex_server, "load_private_goals_and_rules",
+                             return_value=""):
+            task = oc_codex_server.Task(
+                project="mission-context-race",
+                cwd=directory,
+                task_type="modeling",
+                mission_context={
+                    "taskType": "modeling",
+                    "repositoryId": "1",
+                    "taskCode": "RM-RACE-001",
+                    "expectedFiles": [],
+                },
+                user_id="test",
+                defer_runtime=True,
+            )
+            with patch.object(type(task), "refresh_modeling_artifacts"):
+                self.assertIsNone(task.conv)
+                # The platform pushes context before the first streamed turn.
+                task.set_mission_context({
+                    "taskType": "modeling",
+                    "repositoryId": "1",
+                    "taskCode": "RM-RACE-001",
+                    "expectedFiles": [],
+                })
+                self.assertIsNotNone(task.conv)
+                self.assertIn("本体任务系统上下文", task.conv.system_prompt)
+                # A second push with identical context is idempotent.
+                task.set_mission_context({
+                    "taskType": "modeling",
+                    "repositoryId": "1",
+                    "taskCode": "RM-RACE-001",
+                    "expectedFiles": [],
+                })
+
     def test_modeling_guard_limits_and_counts(self):
         with patch.dict(os.environ, {
             "ONTOLOGY_MODELING_MAX_SECONDS": "1",
