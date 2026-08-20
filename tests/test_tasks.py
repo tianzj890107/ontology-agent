@@ -73,6 +73,57 @@ class TaskStateMachineTests(unittest.TestCase):
             self.assertEqual(error["code"], "LLM_STREAM_TIMEOUT")
             self.assertIn("本轮已暂停", error["error"])
 
+    def test_provider_timeout_fires_failed_callback_exactly_once(self):
+        # A provider timeout must terminate the turn with a single FAILED
+        # platform callback.  The shared-layer fix discards the partial
+        # assistant but must never duplicate the lifecycle callback.
+        with tempfile.TemporaryDirectory() as directory:
+            task = oc_codex_server.Task(
+                project="cb-once",
+                cwd=directory,
+                task_type="modeling",
+                task_code="RM-CB-ONCE",
+                repository_id="1",
+                mission_context={
+                    "taskType": "modeling",
+                    "repositoryId": "1",
+                    "taskCode": "RM-CB-ONCE",
+                    "expectedFiles": [],
+                },
+                user_id="test",
+                defer_runtime=True,
+            )
+            task.conv = _FakeConversation()
+
+            def fake_stream_message(client, messages, system_prompt, **kwargs):
+                yield {"type": "thinking_delta", "text": "推理中"}
+                yield {"type": "error",
+                       "error": "模型流式响应长时间无数据，本轮已暂停，可继续执行",
+                       "code": "LLM_STREAM_TIMEOUT",
+                       "recoverable": True}
+
+            fake_runtime = SimpleNamespace(stream_message=fake_stream_message)
+            calls = []
+            real_callback = oc_codex_server.task_status_callback
+
+            def counting_callback(task_obj, agent_status, **kwargs):
+                calls.append((agent_status, kwargs.get("error_code")))
+                return real_callback(task_obj, agent_status, **kwargs)
+
+            with patch.object(oc_codex_server.AGENT_RUNTIME, "get",
+                              return_value=fake_runtime), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"), \
+                    patch.object(oc_codex_server, "task_status_callback",
+                                 side_effect=counting_callback):
+                task.stream_turn("继续", lambda _event: None)
+
+            failed = [c for c in calls if c[0] == "FAILED"]
+            self.assertEqual(len(failed), 1)
+            self.assertEqual(failed[0][1], "AGENT_EXECUTION_FAILED")
+            # The partial reasoning is not part of provider history.
+            self.assertEqual([m["role"] for m in task.conv.messages], ["user"])
+
     def test_partial_text_timeout_is_audited_but_not_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
             task = self._modeling_task(directory, "timeout-partial", [])
