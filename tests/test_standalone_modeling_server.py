@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "open-claude"))
+import standalone_modeling_server  # noqa: E402
 from standalone_modeling_server import (
     DEFAULT_ARTIFACTS,
     DEFAULT_MODELING_PROMPT,
@@ -406,6 +407,26 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertEqual(run.resume_session_id, "session-resume")
         self.assertEqual(run.status, "SUCCEEDED")
 
+    def test_shared_repair_code_between_47313_and_47314(self):
+        # The standalone service and the web workbench must run the exact
+        # same DeepSeek repair layer: the standalone worker drives the shared
+        # oc_codex_server.Task (same Conversation/_stream_once), and both
+        # route through openai_compat.sanitize_messages/to_openai_messages.
+        from open_claude import openai_compat as shared_compat
+
+        import inspect
+        source = inspect.getsource(standalone_modeling_server)
+        self.assertIn("from oc_codex_server import Task", source)
+        # The shared Task path is the same object the 47313 server exposes.
+        import oc_codex_server
+        self.assertTrue(hasattr(oc_codex_server.Task, "stream_turn"))
+        # api.stream_message (used by Task._stream_once) sanitizes before any
+        # provider call, so both services share the same sanitizer instance.
+        import open_claude.api as api
+        self.assertIs(api.openai_compat.sanitize_messages,
+                      shared_compat.sanitize_messages)
+        self.assertTrue(callable(shared_compat.sanitize_messages))
+
     def test_resume_without_next_prompt_uses_default_resume_prompt(self):
         manager = self._manager()
         run = self.store.create("DATABASE", "继续建模")
@@ -441,6 +462,10 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
 
         self.assertIn("不要重复输入盘点、数据库连接验证或 schema 提取", captured["prompt"])
         self.assertIn("只处理第一个未完成或失败的阶段", captured["prompt"])
+        # The default resume instruction must open with the exact continue
+        # contract sentence from the shared requirement.
+        self.assertTrue(captured["prompt"].startswith(
+            "继续执行上一次未完成的任务，从中断位置继续。不要重复已经完成的步骤。"))
 
     def test_conversational_turn_sends_user_text_verbatim(self):
         manager = self._manager()

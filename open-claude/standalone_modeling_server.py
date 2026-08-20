@@ -73,6 +73,7 @@ PUBLIC_DIRS = ("input", "work", "output")
 # their own continuation text.  When the user does provide text it is kept
 # verbatim and only this short constraint is appended.
 RESUME_CHECKPOINT_PROMPT = (
+    "继续执行上一次未完成的任务，从中断位置继续。不要重复已经完成的步骤。\n"
     "继续当前建模运行，不要从头执行。请读取 work/modeling_state.json、"
     "work/validation_report.json（如存在）以及现有 work/output 文件；"
     "保留已经 PASS 且产物未变化的阶段，只处理第一个未完成或失败的阶段。"

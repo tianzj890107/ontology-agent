@@ -74,6 +74,21 @@ def _provider_timeout():
         return None
 
 
+class ProviderStreamTimeoutError(RuntimeError):
+    """Recoverable provider transport timeout raised by the non-streaming path.
+
+    ``stream()`` surfaces the same condition as an LLM_STREAM_TIMEOUT event;
+    ``send()`` raises this so sub-agents and compacters can distinguish a
+    pause-worthy timeout from a permanent provider failure.
+    """
+
+    code = "LLM_STREAM_TIMEOUT"
+    recoverable = True
+
+    def __init__(self, message: str = "模型流式响应长时间无数据，本轮已暂停，可继续执行"):
+        super().__init__(message)
+
+
 def _client(provider: str, api_key: str | None = None):
     """Build an OpenAI SDK client pointed at the provider's endpoint."""
     try:
@@ -240,6 +255,11 @@ def _lookup_persisted_tool_result(tool_call_id: str) -> dict[str, Any] | None:
         return _tool_result_store.get(str(tool_call_id or ""))
 
 
+def lookup_tool_result(tool_call_id: str) -> dict[str, Any] | None:
+    """Public read of the persisted real-execution result for one tool call."""
+    return _lookup_persisted_tool_result(tool_call_id)
+
+
 def _is_tool_use_block(block: Any) -> bool:
     return (isinstance(block, dict)
             and block.get("type") in ("tool_use", "tool_call"))
@@ -389,6 +409,19 @@ def sanitize_messages(messages: list[dict[str, Any]], *,
                         # duplicate result for an already-consumed call: the
                         # duplicate is dropped entirely, only one result stays.
                         continue
+                    elif len(active_window) == 1 and resolver(tid) is not None:
+                        # tool_call_id mismatch with a real execution result:
+                        # the assistant call id was corrupted, but the store
+                        # proves the tool really ran under this orphan id and
+                        # exactly one call is still pending.  Remap the real
+                        # result to the pending call instead of dropping it.
+                        only = next(iter(active_window))
+                        normalized = dict(block)
+                        normalized["tool_use_id"] = only
+                        kept.append(normalized)
+                        seen.add(only)
+                        consume(only)
+                        active_window.pop(only, None)
                     else:
                         # orphan (no pending assistant call): preserved so the
                         # converter can keep the content as plain user text;
@@ -441,8 +474,22 @@ def sanitize_messages(messages: list[dict[str, Any]], *,
                 continue
             # No real result exists for at least one id: never fabricate a
             # success.  Truncate to the last consistent checkpoint so the
-            # current step re-issues without the unpaired tool call.
+            # current step re-issues without the unpaired tool call.  Plain
+            # user text that follows the broken turn (for example a resume
+            # prompt typed after the interrupted turn) is preserved:
+            # sanitization must never delete subsequent normal user messages.
+            tail = result[index:]
             del result[index:]
+            for message in tail:
+                if not isinstance(message, dict) or message.get("role") != "user":
+                    continue
+                content = message.get("content")
+                if isinstance(content, str) and str(content).strip():
+                    result.append(message)
+                    continue
+                if (isinstance(content, list) and content
+                        and not any(_is_tool_result_block(block) for block in content)):
+                    result.append(message)
             break
 
     messages[:] = result
@@ -469,11 +516,13 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]],
     removed, and missing tool ids are filled deterministically.  This keeps the
     converted OpenAI message list valid for every provider.
 
-    ``strip_reasoning`` drops every assistant reasoning block (and the
-    provider-native ``reasoning_content`` field) from the outgoing history.
-    DeepSeek thinking-mode gateways return a recoverable 400 when a reasoning
-    turn is not passed back verbatim; resending the same conversation without
-    reasoning keeps the request self-consistent so execution can continue.
+    ``strip_reasoning`` accepts False (keep every reasoning block), True
+    (legacy escape hatch: drop all reasoning) or "orphan_only" (drop only
+    reasoning that cannot form a legal assistant turn; a turn with content or
+    tool_calls keeps its full ``reasoning_content``).  DeepSeek thinking-mode
+    gateways require the complete ``reasoning_content`` to be passed back on
+    legal tool turns, so auto-repair retries use "orphan_only" and never
+    strip legal reasoning.
     """
     sanitize_messages(messages)
     out: list[dict[str, Any]] = []
@@ -490,7 +539,7 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]],
             continue
         role = msg.get("role")
         content = msg.get("content")
-        top_level_reasoning = "" if strip_reasoning else str(
+        top_level_reasoning = "" if strip_reasoning is True else str(
             msg.get("reasoning_content") or msg.get("reasoning") or "")
 
         if isinstance(content, str):
@@ -533,7 +582,7 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]],
                 if blk.get("type") == "text":
                     text_parts.append(str(blk.get("text") or ""))
                 elif blk.get("type") in ("thinking", "reasoning"):
-                    if not strip_reasoning:
+                    if strip_reasoning is not True:
                         block_reasoning_parts.append(str(
                             blk.get("thinking") or blk.get("reasoning_content") or blk.get("text") or ""
                         ))
@@ -773,16 +822,24 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
                 "detail": str(e)[:400],
             }
             return
-        # Tool-chain / thinking-mode 400s are recoverable.  Sanitize the
-        # history again (a missing tool result may now be restorable from the
-        # persisted store, or the chain is truncated to the last consistent
-        # checkpoint), then retry the same request once as-is, and once with
-        # reasoning stripped from the outgoing history.  Only the current LLM
-        # step is retried: checkpoints, stages and the run state are untouched,
-        # so a successful retry continues instead of restarting the run.
+        # Tool-chain / thinking-mode 400s are recoverable and repaired with
+        # at most two automatic attempts, always re-issuing only the current
+        # LLM step (checkpoints, stages and run state stay untouched):
+        #   attempt 1 — restore the full reasoning_content and tool-chain from
+        #               the persisted store/transcript, sanitize, resend;
+        #   attempt 2 — rebuild the outbound history from the last consistent
+        #               checkpoint and strip only orphan reasoning (a turn
+        #               without content or tool_calls).  Legal reasoning on
+        #               assistant turns with content/tool_calls is preserved:
+        #               DeepSeek thinking mode requires it to be passed back.
         if _allow_fallback and _is_recoverable_provider_error(e):
             sanitize_messages(messages)
-            for attempt, retry_strip in ((1, False), (2, True)):
+            for attempt in (1, 2):
+                if attempt == 2:
+                    # Rebuild the outbound chain from the last consistent
+                    # checkpoint before the final repair attempt.
+                    sanitize_messages(messages)
+                retry_strip = "orphan_only" if attempt == 2 else False
                 retry_events = list(stream(provider, model, messages, system_prompt,
                                            tools, max_tokens, temperature,
                                            _allow_fallback=False, api_key=api_key,
@@ -793,9 +850,11 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
                 yield {
                     "type": "provider_retry",
                     "attempt": attempt,
-                    "text": ("模型网关返回可恢复错误，已自动重试并继续执行"
-                             if not retry_strip else
-                             "模型网关消息链/思考模式校验失败，已修复消息链并清理 reasoning 后自动重试并继续执行"),
+                    "text": ("模型网关返回可恢复错误，已从持久化历史恢复完整 "
+                             "reasoning_content 与工具链后自动重试并继续执行"
+                             if attempt == 1 else
+                             "模型网关仍拒绝消息链，已从最后一致 checkpoint 重建历史、"
+                             "仅清理孤立推理内容并保留合法 reasoning 后自动重试并继续执行"),
                 }
                 yield from retry_events
                 return
@@ -829,15 +888,35 @@ def send(provider: str, model: str, messages: list[dict[str, Any]], system_promp
                           max_tokens, temperature, api_key)
     except Exception as e:
         if _is_provider_timeout(e):
-            raise RuntimeError(
-                "LLM_STREAM_TIMEOUT: 模型响应超时，本轮已暂停，可继续执行"
-            ) from e
+            raise ProviderStreamTimeoutError() from e
         if not _is_recoverable_provider_error(e):
             raise
-        # Sanitize (recover/truncate the tool chain) and retry only this call.
+        # Repair like the streaming path: restore reasoning + tool chain and
+        # retry only this call, then rebuild from the last consistent
+        # checkpoint (stripping only orphan reasoning) before the final retry.
+        # Legal reasoning_content is preserved on both attempts.
         sanitize_messages(messages)
-        resp = _send_once(provider, model, messages, system_prompt, tools,
-                          max_tokens, temperature, api_key)
+        for attempt in (1, 2):
+            if attempt == 2:
+                # Rebuild the outbound chain from the last consistent
+                # checkpoint before the final repair attempt.
+                sanitize_messages(messages)
+            try:
+                resp = _send_once(provider, model, messages, system_prompt, tools,
+                                  max_tokens, temperature, api_key)
+                break
+            except ProviderStreamTimeoutError:
+                raise
+            except Exception as repair_error:
+                if attempt == 1 and _is_recoverable_provider_error(repair_error):
+                    continue
+                if attempt == 2 and _is_recoverable_provider_error(repair_error):
+                    # Both automatic repairs failed: surface the real
+                    # provider error instead of masking it.
+                    raise repair_error
+                raise
+        else:
+            raise RuntimeError("LLM provider repair retries exhausted")
     msg = resp.choices[0].message
 
     content: list[dict[str, Any]] = []

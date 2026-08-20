@@ -4298,7 +4298,7 @@ class Task:
                     # the requested artifacts.  The iteration limit is only a
                     # window boundary; an incomplete modeling gate starts the
                     # next window instead of ending the task.
-                    if (stop_reason != "error" and not conversational
+                    if (stop_reason not in ("error", "timeout") and not conversational
                             and task_callback_kind(self) == "modeling"):
                         ensure_mission_output_files(self.cwd, self.mission_context)
                         checkpoint = finalize_checkpoint()
@@ -4308,9 +4308,20 @@ class Task:
                             continue
                     break
                 if self.status != "blocked":
-                    self.status = "error" if stop_reason == "error" else "idle"
+                    self.status = "error" if stop_reason in ("error", "timeout") else "idle"
                 if stop_reason == "error":
                     failure_message = "Agent 执行返回不可恢复错误，请查看该任务的执行审计记录"
+                elif stop_reason == "timeout":
+                    failure_message = "模型流式响应长时间无数据，本轮已暂停，可继续执行"
+                    if modeling_turn and self.mission_context:
+                        # Save the last valid stage checkpoint so the continue
+                        # resumes from the most recent PASSED stage instead of
+                        # re-running the whole modeling pipeline.
+                        try:
+                            ensure_mission_output_files(self.cwd, self.mission_context)
+                            finalize_checkpoint()
+                        except Exception:
+                            pass
             except Exception as e:
                 traceback.print_exc()
                 self.status = "error"
@@ -4446,7 +4457,14 @@ class Task:
                     error_payload["recoverable"] = True
                 error_event = self._record_event(error_payload)
                 emit(error_event)
-                stop_reason = "error"
+                # A provider read-timeout pauses the turn at the current
+                # checkpoint (recoverable); any other error is terminal for
+                # this turn.  Both keep the task error so a continue can
+                # resume, but only the timeout is marked recoverable.
+                stop_reason = ("timeout"
+                               if ev.get("recoverable")
+                               and ev.get("code") == "LLM_STREAM_TIMEOUT"
+                               else "error")
                 break
 
         # Persist the assistant message exactly like the REPL does, but only
@@ -4464,7 +4482,7 @@ class Task:
         if full:
             content.append({"type": "text", "text": full})
         content.extend(tool_uses)
-        if (full or tool_uses) and stop_reason not in ("error", "budget_exceeded"):
+        if (full or tool_uses) and stop_reason not in ("error", "timeout", "budget_exceeded"):
             if thinking:
                 # Keep provider reasoning in the durable message history.  The
                 # OpenAI-compatible adapter maps this block back to the exact

@@ -11,6 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "open-claude"))
 
 from open_claude.tasks import TaskStore, get_task_store  # noqa: E402
+from open_claude.repl import Conversation  # noqa: E402
+from open_claude.openai_compat import (  # noqa: E402
+    clear_tool_results,
+    remember_tool_result,
+)
 import oc_codex_server  # noqa: E402
 
 
@@ -72,6 +77,48 @@ class TaskStateMachineTests(unittest.TestCase):
                          if event.get("type") == "error")
             self.assertEqual(error["code"], "LLM_STREAM_TIMEOUT")
             self.assertIn("本轮已暂停", error["error"])
+
+    def test_timeout_continue_resumes_from_current_llm_step(self):
+        # After a provider timeout the partial turn is discarded; the next
+        # "继续运行" turn re-issues only the current LLM step from the last
+        # valid checkpoint instead of replaying a broken assistant message.
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._modeling_task(directory, "timeout-continue", [])
+            task.user_id = ""
+
+            def timeout_stream(client, messages, system_prompt, **kwargs):
+                yield {"type": "thinking_delta", "text": "半截推理"}
+                yield {"type": "text_delta", "text": "半截回答"}
+                yield {"type": "error",
+                       "error": "模型流式响应长时间无数据，本轮已暂停，可继续执行",
+                       "code": "LLM_STREAM_TIMEOUT",
+                       "recoverable": True}
+
+            def resume_stream(client, messages, system_prompt, **kwargs):
+                sent = [m for m in messages if m.get("role") == "assistant"]
+                assert sent == [], f"partial assistant must not be resent: {sent}"
+                yield {"type": "text_delta", "text": "从断点继续完成"}
+                yield {"type": "message_end", "stop_reason": "end_turn", "usage": {}}
+
+            fake_runtime = SimpleNamespace(stream_message=timeout_stream)
+            with patch.object(oc_codex_server.AGENT_RUNTIME, "get",
+                              return_value=fake_runtime), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("继续", lambda _event: None)
+            self.assertEqual([m["role"] for m in task.conv.messages], ["user"])
+
+            fake_runtime = SimpleNamespace(stream_message=resume_stream)
+            with patch.object(oc_codex_server.AGENT_RUNTIME, "get",
+                              return_value=fake_runtime), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("继续执行上一次未完成的任务，从中断位置继续。"
+                                 "不要重复已经完成的步骤。", lambda _event: None)
+            self.assertEqual([m["role"] for m in task.conv.messages],
+                             ["user", "user", "assistant"])
+            self.assertEqual(task.conv.messages[-1]["content"][0]["text"],
+                             "从断点继续完成")
 
     def test_provider_timeout_fires_failed_callback_exactly_once(self):
         # A provider timeout must terminate the turn with a single FAILED
@@ -566,6 +613,89 @@ class TaskStateMachineTests(unittest.TestCase):
             self.assertEqual(second.id, 1)
             self.assertEqual(get_task_store(first_dir).list_all()[0].subject, "First")
             self.assertEqual(get_task_store(second_dir).list_all()[0].subject, "Second")
+
+class ToolExecutionDedupTests(unittest.TestCase):
+    """A tool_call_id must never execute twice across retry/continue."""
+
+    def setUp(self):
+        clear_tool_results()
+
+    def _stub_conversation(self, messages):
+        hooks = type("Hooks", (), {
+            "run": lambda *args, **kwargs: type("HookResult", (), {
+                "errors": [], "blocked": False, "reasons": [], "block_reason": ""})(),
+        })()
+        permissions = type("Permissions", (), {
+            "check_permission": lambda *args, **kwargs: (True, ""),
+        })()
+        mcp = type("Mcp", (), {"is_mcp_tool": lambda *args: False, "call": lambda *args: None})()
+        session = type("Session", (), {
+            # The real session is a separate transcript; self.messages.append
+            # already records the turn for the assertions below.
+            "append_message": lambda self, msg: None,
+        })()
+        return type("Conv", (), {
+            "messages": messages,
+            "hooks": hooks,
+            "permissions": permissions,
+            "mcp": mcp,
+            "session": session,
+            "cwd": ".",
+            "client": None,
+            "agent_types": {},
+        })()
+
+    def test_same_tool_call_id_is_not_executed_twice(self):
+        from unittest.mock import patch
+        from open_claude import repl as repl_module
+
+        messages = [{"role": "assistant", "content": [
+            {"type": "tool_use", "id": "call-1", "name": "Write",
+             "input": {"file_path": "x.txt", "content": "data"}},
+        ]}]
+        conv = self._stub_conversation(messages)
+        executed = []
+        with patch.object(repl_module, "execute_tool",
+                          side_effect=lambda name, params, cwd: (
+                              executed.append((name, params)) or "已写入")):
+            Conversation._execute_pending_tools(conv)
+        self.assertEqual(len(executed), 1)
+        self.assertTrue(any(m.get("role") == "user" for m in messages))
+
+        # The same turn is presented again (retry/continue): the stored real
+        # result is reused and the write tool is NOT executed a second time.
+        messages.append({"role": "assistant", "content": [
+            {"type": "tool_use", "id": "call-1", "name": "Write",
+             "input": {"file_path": "x.txt", "content": "data"}},
+        ]})
+        Conversation._execute_pending_tools(conv)
+        self.assertEqual(len(executed), 1, "write tool must not run twice")
+        results = [b for m in messages if m.get("role") == "user"
+                   for b in m.get("content", []) if b.get("type") == "tool_result"]
+        self.assertTrue(all(b.get("content") == "已写入" for b in results))
+
+    def test_store_seeded_result_skips_execution_on_restore(self):
+        from unittest.mock import patch
+        from open_claude import repl as repl_module
+
+        # Session restore seeds the store from the persisted transcript.
+        remember_tool_result("call-9", "恢复的真实结果")
+        messages = [{"role": "assistant", "content": [
+            {"type": "tool_use", "id": "call-9", "name": "Bash",
+             "input": {"command": "rm -rf data"}},
+        ]}]
+        conv = self._stub_conversation(messages)
+        executed = []
+        with patch.object(repl_module, "execute_tool",
+                          side_effect=lambda name, params, cwd: (
+                              executed.append((name, params)) or "不应执行")):
+            Conversation._execute_pending_tools(conv)
+        self.assertEqual(executed, [], "restored tool result must not re-execute")
+        results = [b for m in messages if m.get("role") == "user"
+                   for b in m.get("content", []) if b.get("type") == "tool_result"]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["content"], "恢复的真实结果")
+
 
     def test_task_state_survives_store_reconstruction(self):
         with tempfile.TemporaryDirectory() as directory:

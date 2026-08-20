@@ -31,7 +31,11 @@ from .profile import (
     save_profile,
 )
 from .prompt import build_system_prompt
-from .openai_compat import remember_tool_result, seed_tool_results_from_messages
+from .openai_compat import (
+    lookup_tool_result,
+    remember_tool_result,
+    seed_tool_results_from_messages,
+)
 from .sessions import SessionStore, latest_session_id, list_sessions, load_session
 from .settings import (
     Settings,
@@ -561,6 +565,12 @@ class Conversation:
             if thinking:
                 content.insert(0, {"type": "thinking", "thinking": thinking})
             msg = {"role": "assistant", "content": content}
+            if thinking:
+                # Keep the provider-native field alongside the replayable
+                # thinking block exactly like the web server does, so a
+                # resumed CLI session passes DeepSeek's required
+                # reasoning_content back verbatim.
+                msg["reasoning_content"] = thinking
             self.messages.append(msg)
             self.session.append_message(msg)
 
@@ -581,6 +591,21 @@ class Conversation:
             tool_name = block["name"]
             tool_input = block["input"]
             tool_id = block["id"]
+
+            # Same tool_call_id must never execute twice.  A retry or
+            # continue can re-present an assistant turn whose tools already
+            # ran (result in the persisted store / restored transcript);
+            # reusing the real result keeps write tools idempotent instead
+            # of running a duplicate write.
+            existing = lookup_tool_result(tool_id)
+            if existing is not None:
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": existing.get("content", ""),
+                    "is_error": bool(existing.get("is_error")),
+                })
+                continue
 
             # --- PreToolUse hooks (can block) ---
             pre = self.hooks.run("PreToolUse", tool_name=tool_name, tool_input=tool_input)

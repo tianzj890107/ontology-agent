@@ -198,6 +198,7 @@ def execute_agent(params: dict[str, Any], cwd: str, client: anthropic.Anthropic,
 
     # Lazy import to avoid circular dependency
     from .tools import get_base_tool_schemas, execute_tool
+    from .openai_compat import lookup_tool_result, remember_tool_result
 
     # Sub-agent gets the type's tool subset (no Agent/Task to prevent nesting)
     allowed = set(agent_type.tools)
@@ -256,9 +257,22 @@ def execute_agent(params: dict[str, Any], cwd: str, client: anthropic.Anthropic,
             final_text = "\n".join(text_parts)
             break
 
-        # Execute tools and add results
+        # Execute tools and add results.  A recoverable 400 repair can
+        # re-issue the same sub-agent step, so a tool_call_id that already
+        # produced a real result (persisted store) is never executed twice;
+        # the stored result is replayed instead.  Every fresh execution is
+        # remembered so retries and continues stay idempotent.
         tool_results: list[dict[str, Any]] = []
         for tu in tool_uses:
+            existing = lookup_tool_result(tu["id"])
+            if existing is not None:
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu["id"],
+                    "content": existing.get("content", ""),
+                    "is_error": bool(existing.get("is_error")),
+                })
+                continue
             if tu["name"] not in allowed:
                 result = f"Error: tool {tu['name']} is not available to this agent type"
             else:
@@ -267,6 +281,7 @@ def execute_agent(params: dict[str, Any], cwd: str, client: anthropic.Anthropic,
                 except Exception as e:
                     result = f"Error: {e}"
 
+            remember_tool_result(tu["id"], result)
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tu["id"],
