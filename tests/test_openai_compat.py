@@ -168,6 +168,73 @@ class OpenAIMessageContractTests(unittest.TestCase):
         self.assertEqual(messages[0]["reasoning_content"], "先判断文件范围")
         self.assertEqual(messages[1]["role"], "tool")
 
+    def test_reasoning_only_assistant_is_dropped_without_strip_reasoning(self):
+        # A stream interrupted right after the thinking phase leaves an
+        # assistant that only has reasoning.  It must never be sent as
+        # {"role": "assistant", "content": null, "reasoning_content": ...},
+        # which DeepSeek rejects with "content or tool_calls must be set".
+        messages = to_openai_messages("", [
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "只有推理"},
+            ]},
+            {"role": "user", "content": "继续执行"},
+        ])
+
+        self.assertEqual([m["role"] for m in messages], ["user"])
+        self.assertEqual(messages[0]["content"], "继续执行")
+        self.assertFalse(any(m.get("role") == "assistant" for m in messages))
+
+    def test_reasoning_plus_text_is_kept(self):
+        messages = to_openai_messages("", [
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "推理"},
+                {"type": "text", "text": "已分析"},
+            ]},
+            {"role": "user", "content": "继续"},
+        ])
+        self.assertEqual(messages[0]["role"], "assistant")
+        self.assertEqual(messages[0]["content"], "已分析")
+        self.assertEqual(messages[0]["reasoning_content"], "推理")
+
+    def test_empty_assistant_text_is_dropped(self):
+        messages = to_openai_messages("", [
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "继续"},
+        ])
+        self.assertEqual([m["role"] for m in messages], ["user"])
+
+    def test_minimal_fault_fixture_keeps_tool_pair_and_continuation(self):
+        # Fault fixture from the reported incident: a complete tool turn, then
+        # a reasoning-only assistant (interrupted stream), then the user
+        # continuation.  After outbound cleanup the tool pair must stay intact
+        # and "继续执行" must remain the last user message.
+        messages = [
+            {"role": "user", "content": "开始"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "推理A"},
+                {"type": "tool_use", "id": "call-1", "name": "Bash", "input": {"command": "echo ok"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call-1", "content": "ok"},
+            ]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "未完成的推理"},
+            ]},
+            {"role": "user", "content": "继续执行"},
+        ]
+        converted = to_openai_messages("", messages)
+        roles = [m["role"] for m in converted]
+        self.assertEqual(roles, ["user", "assistant", "tool", "user"])
+        self.assertEqual(converted[-1]["content"], "继续执行")
+        tool_turn = converted[1]
+        self.assertEqual(tool_turn["tool_calls"][0]["id"], "call-1")
+        self.assertEqual(tool_turn["reasoning_content"], "推理A")
+        self.assertEqual(converted[2]["tool_call_id"], "call-1")
+        # Every sent assistant must carry non-empty content or tool_calls.
+        self.assertTrue(all(
+            (str(m.get("content") or "").strip() or m.get("tool_calls"))
+            for m in converted if m.get("role") == "assistant"))
+
     def test_orphan_tool_result_is_not_sent_as_tool_message(self):
         messages = to_openai_messages("", [
             {"role": "user", "content": "继续"},
@@ -508,6 +575,157 @@ class ToolChainSanitizerTests(unittest.TestCase):
         self.assertIs(messages, original_object)
         self.assertEqual(result["stop_reason"], "end_turn")
         self.assertEqual(result["content"][0]["text"], "正常回答")
+
+    def test_invalid_assistant_message_400_is_recovered(self):
+        # Exact provider error from the reported incident: a reasoning-only
+        # assistant was persisted, and every continue returned the same 400.
+        # The retry must sanitize the outgoing history (drop the invalid turn,
+        # keep the user continuation and the completed tool pair) and succeed
+        # on the current LLM step only.
+        from open_claude import openai_compat
+
+        error_text = (
+            "litellm.BadRequestError: DeepseekException - "
+            '{"error":{"message":"Invalid assistant message: content or '
+            'tool_calls must be set","type":"invalid_request_error",'
+            '"param":null,"code":"invalid_request_error"}} '
+            "Received Model Group=direct-deepseek-v4-flash"
+        )
+        calls = []
+
+        class _FakeDelta:
+            content = "已继续执行"
+            reasoning_content = None
+            tool_calls = None
+
+        class _FakeChoice:
+            delta = _FakeDelta()
+            finish_reason = "stop"
+
+        class _FakeChunk:
+            choices = [_FakeChoice()]
+            usage = None
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise RuntimeError(error_text)
+            return [_FakeChunk()]
+
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        messages = [
+            {"role": "user", "content": "开始"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "推理A"},
+                {"type": "tool_use", "id": "call-1", "name": "Bash", "input": {"command": "echo ok"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call-1", "content": "ok"},
+            ]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "未完成的推理"},
+            ]},
+            {"role": "user", "content": "继续执行"},
+        ]
+
+        with patch.object(openai_compat, "_client", return_value=fake_client):
+            events = list(openai_compat.stream(
+                "deepseek", "deepseek-v4-flash", messages, "", None, None, None,
+                api_key="k"))
+
+        self.assertFalse([e for e in events if e.get("type") == "error"])
+        self.assertTrue(any(e.get("type") == "provider_retry" for e in events))
+        self.assertTrue(any(e.get("type") == "text_delta" for e in events))
+        self.assertEqual(len(calls), 2)
+        # The retried request must not contain the reasoning-only assistant,
+        # must keep the tool pair, and must end with the user continuation.
+        sent = calls[-1]["messages"]
+        self.assertEqual([m["role"] for m in sent], ["user", "assistant", "tool", "user"])
+        self.assertEqual(sent[-1]["content"], "继续执行")
+        self.assertEqual(sent[1]["tool_calls"][0]["id"], "call-1")
+        self.assertEqual(sent[2]["tool_call_id"], "call-1")
+
+    def test_unrelated_400_is_not_retried(self):
+        from open_claude import openai_compat
+
+        calls = []
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            raise RuntimeError(
+                "litellm.BadRequestError: DeepseekException - "
+                '{"error":{"message":"invalid api key","code":"invalid_api_key"}}')
+
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        messages = [{"role": "user", "content": "你好"}]
+        with patch.object(openai_compat, "_client", return_value=fake_client):
+            events = list(openai_compat.stream(
+                "deepseek", "deepseek-v4-flash", messages, "", None, None, None,
+                api_key="k"))
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(any(e.get("type") == "error" for e in events))
+        self.assertFalse(any(e.get("type") == "provider_retry" for e in events))
+
+    def test_timeout_yields_distinct_error_and_no_retry(self):
+        from open_claude import openai_compat
+
+        calls = []
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            raise openai_compat.APITimeoutError("Request timed out.")
+
+        fake_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        messages = [{"role": "user", "content": "你好"}]
+        with patch.object(openai_compat, "_client", return_value=fake_client):
+            events = list(openai_compat.stream(
+                "deepseek", "deepseek-v4-flash", messages, "", None, None, None,
+                api_key="k"))
+        self.assertEqual(len(calls), 1)
+        errors = [e for e in events if e.get("type") == "error"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["code"], "LLM_STREAM_TIMEOUT")
+        self.assertIn("本轮已暂停", errors[0]["error"])
+        self.assertTrue(errors[0]["recoverable"])
+        self.assertFalse(any(e.get("type") == "provider_retry" for e in events))
+
+    def test_sanitize_drops_reasoning_only_assistant_idempotently(self):
+        messages = [
+            {"role": "user", "content": "开始"},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "未完成的推理"},
+            ]},
+            {"role": "user", "content": "继续执行"},
+        ]
+        sanitize_messages(messages)
+        self.assertEqual([m["role"] for m in messages], ["user", "user"])
+        self.assertEqual(messages[-1]["content"], "继续执行")
+        # Idempotent: running the sanitizer again changes nothing.
+        snapshot = list(messages)
+        sanitize_messages(messages)
+        self.assertEqual(messages, snapshot)
+
+    def test_client_uses_explicit_transport_timeouts(self):
+        from open_claude import openai_compat
+        import os as _os
+
+        with patch.dict(_os.environ, {
+            "ONTOLOGY_LLM_CONNECT_TIMEOUT": "3",
+            "ONTOLOGY_LLM_READ_TIMEOUT": "120",
+            "ONTOLOGY_LLM_WRITE_TIMEOUT": "90",
+            "ONTOLOGY_LLM_POOL_TIMEOUT": "60",
+        }, clear=False):
+            config = openai_compat.provider_timeout_config()
+            summary = openai_compat.provider_timeout_summary()
+        self.assertEqual(config["ONTOLOGY_LLM_CONNECT_TIMEOUT"], 3.0)
+        self.assertEqual(config["ONTOLOGY_LLM_READ_TIMEOUT"], 120.0)
+        self.assertEqual(config["ONTOLOGY_LLM_WRITE_TIMEOUT"], 90.0)
+        self.assertEqual(config["ONTOLOGY_LLM_POOL_TIMEOUT"], 60.0)
+        self.assertIn("read=120s", summary)
+        self.assertNotIn("key", summary.lower())
 
 
 if __name__ == "__main__":

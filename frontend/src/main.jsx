@@ -156,6 +156,36 @@ async function standaloneApi(path, apiKey, options = {}, retrySession = true) {
   return { ...body, _status: response.status };
 }
 
+async function standaloneFileResponse(path) {
+  // Standalone file content is returned as raw bytes, so this mirrors
+  // standaloneApi without JSON parsing. The browser session cookie can
+  // expire while a long modeling run stays open; refresh it once like the
+  // JSON API path instead of failing the download with a silent 401.
+  let response;
+  try {
+    response = await fetch(path, { credentials: "same-origin" });
+  } catch (error) {
+    if (error?.name === "AbortError") return { error: "请求已取消" };
+    return { error: `网络连接失败: ${error?.message || "无法连接服务"}` };
+  }
+  if (response.status === 401 && typeof window !== "undefined") {
+    try {
+      const refreshed = await fetch("/", { credentials: "same-origin", cache: "no-store" });
+      if (refreshed.ok) {
+        try {
+          response = await fetch(path, { credentials: "same-origin" });
+        } catch (error) {
+          if (error?.name === "AbortError") return { error: "请求已取消" };
+          return { error: `网络连接失败: ${error?.message || "无法连接服务"}` };
+        }
+      }
+    } catch (error) {
+      if (error?.name === "AbortError") return { error: "请求已取消" };
+    }
+  }
+  return { response };
+}
+
 function standaloneRequestFailed(result) {
   // Run detail payloads also have an `error` field for BLOCKED/FAILED reasons.
   // A runId is authoritative evidence that this is a successful detail
@@ -223,6 +253,7 @@ function StandaloneApp() {
   const standaloneEventCacheRef = useRef(new Map());
   const olderEventsLoadingRef = useRef(new Set());
   const pollInFlightRef = useRef(false);
+  const continueInFlightRef = useRef(false);
   const standaloneFileInputRef = useRef(null);
   const standaloneFeedPrependAnchorRef = useRef(null);
 
@@ -329,13 +360,14 @@ function StandaloneApp() {
     // Loading a large historical event journal must never block selecting a
     // different run, and selecting a run is view-only: it does not stop or
     // mutate any server-side execution.
-    // File metadata is loaded after the newest thought-chain window. Keep the
-    // task header/input shell immediate without rendering a large file tree.
-    // Preserve any already-rendered history while the event journal request
-    // is in flight. This matters especially for BLOCKED/FAILED runs: they do
-    // not poll after selection, so replacing the chain with [] makes the
-    // conversation look empty until Continue causes another load.
-    const summaryRun = { ...summary, files: visibleRun?.files || [], events: cachedEvents };
+    // The run-detail payload already carries the file tree. Keep it so the
+    // file panel is usable immediately instead of waiting for the event
+    // journal replay, which can take many seconds on long runs.
+    const summaryRun = {
+      ...summary,
+      files: Array.isArray(summary.files) ? summary.files : (visibleRun?.files || []),
+      events: cachedEvents,
+    };
     if (summary.model) setStandaloneModel(summary.model);
     setRun(summaryRun);
     updateRunSummary(summary);
@@ -382,16 +414,20 @@ function StandaloneApp() {
     const start = Number(eventPayload.eventStart ?? Math.max(0, total - latestEvents.length));
     eventCursorRef.current.set(runId, Number(summary.eventsCount) || total);
     eventWindowRef.current.set(runId, { start, total });
-    const result = { ...summary, files: [], events: latestEvents };
+    const result = {
+      ...summary,
+      files: Array.isArray(summary.files) ? summary.files : [],
+      events: latestEvents,
+    };
     standaloneEventCacheRef.current.set(runId, latestEvents);
     if (summary.model) setStandaloneModel(summary.model);
     if (selectedRunIdRef.current === runId) setRun(result);
     scheduleIdle(async () => {
-      // Render roughly ten viewport heights of recent history first. This
-      // gives the user useful scrollback quickly, then prioritizes the file
-      // panel before replaying the remaining old journal.
-      const historyHasMore = await loadOlderStandaloneEvents(runId, 10);
+      // The file tree is a single cheap request; populate the panel first so
+      // the user can browse and download artifacts while the remaining old
+      // journal replays in the background.
       await loadRunFiles(runId);
+      const historyHasMore = await loadOlderStandaloneEvents(runId, 10);
       if (historyHasMore) await loadOlderStandaloneEvents(runId);
     });
     return result;
@@ -620,8 +656,10 @@ function StandaloneApp() {
   };
   const continueRun = async (nextPrompt = "", selectedModel = standaloneModel) => {
     if (!run?.runId || !["CREATED", "INPUT_READY", "FAILED", "BLOCKED"].includes(run.status)) return;
+    if (continueInFlightRef.current) return;
     setError("");
     setBusy(true);
+    continueInFlightRef.current = true;
     try {
       const started = await standaloneApi(`/api/modeling-runs/${encodeURIComponent(run.runId)}/execute`, "", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -636,16 +674,26 @@ function StandaloneApp() {
         return;
       }
       selectedRunIdRef.current = started.runId;
-      eventCursorRef.current.delete(started.runId);
-      setRun(started);
+      // Keep the persisted event cursor: a continue appends to the same run,
+      // so only pull the delta instead of reloading the whole journal window.
+      // The full window is re-established only when this browser never loaded
+      // it (e.g. the run was continued from another client).  Preserve the
+      // already-rendered file tree until the next refresh replaces it.
+      setRun({ ...started, files: Array.isArray(run.files) ? run.files : [] });
       setRuns((current) => current.map((item) => item.runId === started.runId
         ? { ...item, ...started } : item));
-      void loadRun(started.runId);
+      if (eventWindowRef.current.has(started.runId)) {
+        void refreshRun(started.runId);
+      } else {
+        eventCursorRef.current.delete(started.runId);
+        void loadRun(started.runId);
+      }
       messageApi.success("已继续运行建模任务");
     } catch (requestError) {
       setError(requestError?.message || "请求失败");
     } finally {
       setBusy(false);
+      continueInFlightRef.current = false;
     }
   };
   const onStandaloneAttach = () => standaloneFileInputRef.current?.click();
@@ -684,7 +732,9 @@ function StandaloneApp() {
   const openFile = async (path) => {
     // Keep standalone file access on its own API, but reuse the shared
     // workbook reader instead of decoding XLSX bytes as text.
-    const response = await fetch(`/api/modeling-runs/${encodeURIComponent(run.runId)}/files/content?path=${encodeURIComponent(path)}`);
+    const fetched = await standaloneFileResponse(`/api/modeling-runs/${encodeURIComponent(run.runId)}/files/content?path=${encodeURIComponent(path)}`);
+    const response = fetched.response;
+    if (fetched.error || !response) { setError(fetched.error || "无法读取文件"); return; }
     if (!response.ok) {
       let detail = `HTTP ${response.status}`;
       try { const body = await response.json(); detail = body.error || detail; } catch (_) { /* keep HTTP status */ }
@@ -705,16 +755,32 @@ function StandaloneApp() {
     setPreview({ path, text, csv: /\.csv$/i.test(path) });
   };
   const downloadRunFiles = async (paths) => {
-    for (const path of paths) {
-      const response = await fetch(`/api/modeling-runs/${encodeURIComponent(run.runId)}/files/content?path=${encodeURIComponent(path)}`);
-      if (!response.ok) continue;
-      const blob = await response.blob();
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = path.split("/").pop() || "download";
-      link.click();
-      URL.revokeObjectURL(link.href);
+    const selected = Array.isArray(paths) && paths.length ? paths : selectedRunFiles;
+    if (!selected.length || !run) return;
+    const failed = [];
+    for (const path of selected) {
+      try {
+        const fetched = await standaloneFileResponse(`/api/modeling-runs/${encodeURIComponent(run.runId)}/files/content?path=${encodeURIComponent(path)}`);
+        const response = fetched.response;
+        if (fetched.error || !response || !response.ok) { failed.push(path); continue; }
+        const blob = await response.blob();
+        const name = path.split("/").pop() || "download";
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = name;
+        link.rel = "noopener";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (requestError) {
+        failed.push(path);
+      }
     }
+    const okCount = selected.length - failed.length;
+    if (okCount > 0) messageApi.success(`已开始下载 ${okCount} 个文件`);
+    if (failed.length) messageApi.error(`下载失败 ${failed.length} 个文件：${failed.map((path) => path.split("/").pop()).join("、")}`);
   };
   const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "default" }[run?.status] || "default";
   return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
@@ -1413,7 +1479,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" aria-label="刷新文件" title="刷新文件" onClick={onRefresh}><RefreshFilePanelIcon /></Button><Button size="small" aria-label="折叠文件面板" title="折叠文件面板" onClick={onClose}><CollapseFilePanelIcon /></Button></div>
-    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={onDownload}>下载所选</Button>{mission && <Tooltip title={uploadBlocked ? "任务执行或状态变更期间不能上传" : platformStatus === "COMPLETED" ? "上传新结果将恢复任务为执行中" : "上传选中的任务结果"}><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || uploadBlocked} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">{platformStatus === "COMPLETED" ? "上传新结果将恢复执行" : "当前任务范围"}</span>}</div>
+    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={() => onDownload(selected)}>下载所选</Button>{mission && <Tooltip title={uploadBlocked ? "任务执行或状态变更期间不能上传" : platformStatus === "COMPLETED" ? "上传新结果将恢复任务为执行中" : "上传选中的任务结果"}><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || uploadBlocked} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">{platformStatus === "COMPLETED" ? "上传新结果将恢复执行" : "当前任务范围"}</span>}</div>
     {loading ? <Spin /> : !files.length && !mission && !workspaceFolders ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, subgroups]) => {
       const collapsed = collapsedDirs.has(dir);
       const items = [...subgroups.values()].flat();

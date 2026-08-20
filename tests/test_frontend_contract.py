@@ -67,7 +67,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('setRun({ ...cached, events:', source)
         self.assertIn('const standaloneEventCacheRef = useRef(new Map());', source)
         self.assertIn('const cachedEvents = Array.isArray(visibleRun?.events)', source)
-        self.assertIn('const summaryRun = { ...summary, files: visibleRun?.files || [], events: cachedEvents };', source)
+        self.assertIn('files: Array.isArray(summary.files) ? summary.files : (visibleRun?.files || []),', source)
         self.assertIn('if (events.error && !cachedEvents.length)', source)
         self.assertIn('includeEvents=true', source)
         self.assertIn('standaloneEventCacheRef.current.set(runId, latestEvents);', source)
@@ -339,6 +339,71 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('¥12,345.00', spec)
         self.assertIn('¥12.34万', spec)
         self.assertIn('禁止显示', spec)
+
+    def test_standalone_download_selected_uses_explicit_paths(self):
+        source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
+        # React passes the click event to onClick handlers. The standalone
+        # download handler must receive the selected file paths explicitly,
+        # otherwise `for (const path of paths)` throws "event is not iterable"
+        # and the download silently never starts.
+        self.assertIn("onClick={() => onDownload(selected)}>下载所选", source)
+        self.assertIn("const selected = Array.isArray(paths) && paths.length ? paths : selectedRunFiles;", source)
+        # Downloads must tolerate an expired browser session cookie the same
+        # way the JSON API path does (refresh once via the root page).
+        self.assertIn("async function standaloneFileResponse(path)", source)
+        self.assertIn('credentials: "same-origin"', source)
+        self.assertIn('const refreshed = await fetch("/", { credentials: "same-origin", cache: "no-store" });', source)
+        self.assertIn("standaloneFileResponse(`/api/modeling-runs/${encodeURIComponent(run.runId)}/files/content?path=${encodeURIComponent(path)}`)", source)
+        # The blob download must survive the click: append the anchor to the
+        # DOM and revoke the object URL asynchronously instead of revoking it
+        # synchronously right after link.click().
+        self.assertIn("document.body.appendChild(link);", source)
+        self.assertIn("link.click();", source)
+        self.assertIn("document.body.removeChild(link);", source)
+        self.assertIn("setTimeout(() => URL.revokeObjectURL(url), 1000);", source)
+        self.assertNotIn("link.click();\n      URL.revokeObjectURL(link.href);", source)
+        # Failures must be reported instead of silently skipped.
+        self.assertIn("messageApi.success(`已开始下载 ${okCount} 个文件`)", source)
+        self.assertIn("messageApi.error(`下载失败 ${failed.length} 个文件", source)
+        # The run-detail payload already carries the file tree; keep it so the
+        # panel is populated immediately instead of after the (slow) journal
+        # replay, which previously left the download button unusable.
+        self.assertIn("files: Array.isArray(summary.files) ? summary.files : (visibleRun?.files || []),", source)
+        idle_start = source.index("scheduleIdle(async () => {")
+        files_first = source.index("await loadRunFiles(runId);", idle_start)
+        history_load = source.index("await loadOlderStandaloneEvents(runId, 10);", idle_start)
+        self.assertLess(files_first, history_load)
+
+
+    def test_continue_run_preserves_event_cursor_and_guards_double_submit(self):
+        source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
+        # Double clicks on Continue must not issue two /execute POSTs.
+        self.assertIn("const continueInFlightRef = useRef(false);", source)
+        self.assertIn("if (continueInFlightRef.current) return;", source)
+        self.assertIn("continueInFlightRef.current = true;", source)
+        self.assertIn("continueInFlightRef.current = false;", source)
+        self.assertLess(
+            source.index("continueInFlightRef.current = true;"),
+            source.index("standaloneApi(`/api/modeling-runs/${encodeURIComponent(run.runId)}/execute`"),
+        )
+        # A continue appends to the same run: when this browser already loaded
+        # the event window, only pull the delta via /events?since=cursor.
+        self.assertIn("if (eventWindowRef.current.has(started.runId)) {", source)
+        self.assertIn("void refreshRun(started.runId);", source)
+        self.assertIn("eventCursorRef.current.delete(started.runId);", source)
+        self.assertIn("void loadRun(started.runId);", source)
+        continue_start = source.index("const continueRun = async (nextPrompt")
+        has_branch = source.index("if (eventWindowRef.current.has(started.runId)) {", continue_start)
+        self.assertLess(has_branch, source.index("void loadRun(started.runId);", continue_start))
+        # refreshRun must keep the persisted cursor and never reload the whole
+        # journal when the window is already loaded.
+        self.assertIn("const cursor = eventCursorRef.current.get(runId) || 0;", source)
+        self.assertIn("`/api/modeling-runs/${encodedId}/events?since=${cursor}`", source)
+        self.assertIn("eventCursorRef.current.set(runId, cursor + delta.length);", source)
+        self.assertIn("if (!eventWindowRef.current.has(runId)) return null;", source)
+        # The already-rendered file tree must survive until refresh replaces it.
+        self.assertIn("setRun({ ...started, files: Array.isArray(run.files) ? run.files : [] });", source)
+        self.assertIn("if (!run?.runId || ![\"CREATED\", \"INPUT_READY\", \"FAILED\", \"BLOCKED\"].includes(run.status)) return;", source)
 
     def test_legacy_static_frontends_are_removed(self):
         self.assertEqual([], sorted(ROOT.glob("*.html")))

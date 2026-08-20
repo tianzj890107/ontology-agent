@@ -25,6 +25,9 @@ class _FakeConversation:
             "thinking_budget": 0,
         })()
         self.messages = []
+        self.session = type("Session", (), {
+            "append_message": lambda self, msg: None,
+        })()
         self.tool_schemas = []
         self.system_prompt = ""
         self.model = "test-model"
@@ -41,6 +44,80 @@ class _FakeConversation:
 
 
 class TaskStateMachineTests(unittest.TestCase):
+    def test_provider_timeout_does_not_persist_reasoning_only_assistant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._modeling_task(directory, "timeout-thinking", [])
+            task.user_id = ""
+
+            def fake_stream_message(client, messages, system_prompt, **kwargs):
+                yield {"type": "thinking_delta", "text": "未完成的推理"}
+                yield {"type": "error",
+                       "error": "模型流式响应长时间无数据，本轮已暂停，可继续执行",
+                       "code": "LLM_STREAM_TIMEOUT",
+                       "recoverable": True}
+
+            fake_runtime = SimpleNamespace(stream_message=fake_stream_message)
+            with patch.object(oc_codex_server.AGENT_RUNTIME, "get",
+                              return_value=fake_runtime), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("继续", lambda _event: None)
+
+            # The provider history keeps only the user message; the partial
+            # reasoning is preserved as an audit event, never as assistant
+            # provider history.
+            self.assertEqual([m["role"] for m in task.conv.messages], ["user"])
+            self.assertIn("thinking", [event["type"] for event in task.log])
+            error = next(event for event in task.log
+                         if event.get("type") == "error")
+            self.assertEqual(error["code"], "LLM_STREAM_TIMEOUT")
+            self.assertIn("本轮已暂停", error["error"])
+
+    def test_partial_text_timeout_is_audited_but_not_persisted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._modeling_task(directory, "timeout-partial", [])
+            task.user_id = ""
+
+            def fake_stream_message(client, messages, system_prompt, **kwargs):
+                yield {"type": "thinking_delta", "text": "推理中"}
+                yield {"type": "text_delta", "text": "部分回答"}
+                yield {"type": "error", "error": "read timeout", "code": "LLM_STREAM_TIMEOUT"}
+
+            fake_runtime = SimpleNamespace(stream_message=fake_stream_message)
+            with patch.object(oc_codex_server.AGENT_RUNTIME, "get",
+                              return_value=fake_runtime), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("继续", lambda _event: None)
+
+            self.assertEqual([m["role"] for m in task.conv.messages], ["user"])
+            # The partial text is visible in the audit log but must not be
+            # persisted as an assistant provider-history message.
+            self.assertTrue(any(
+                event.get("type") == "assistant" and "部分回答" in event.get("text", "")
+                for event in task.log))
+            self.assertFalse(any(
+                m.get("role") == "assistant" for m in task.conv.messages))
+
+    def test_completed_reasoning_only_turn_is_not_persisted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._modeling_task(directory, "reasoning-only", [])
+            task.user_id = ""
+
+            def fake_stream_message(client, messages, system_prompt, **kwargs):
+                yield {"type": "thinking_delta", "text": "只有推理没有输出"}
+                yield {"type": "message_end", "stop_reason": "end_turn", "usage": {}}
+
+            fake_runtime = SimpleNamespace(stream_message=fake_stream_message)
+            with patch.object(oc_codex_server.AGENT_RUNTIME, "get",
+                              return_value=fake_runtime), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("继续", lambda _event: None, conversational=True)
+
+            self.assertEqual([m["role"] for m in task.conv.messages], ["user"])
+            self.assertEqual(task.status, "idle")
+
     def test_provider_retry_notice_is_recorded_and_turn_continues(self):
         with tempfile.TemporaryDirectory() as directory:
             task = self._modeling_task(directory, "retry-notice", [])

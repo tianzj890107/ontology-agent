@@ -4432,24 +4432,37 @@ class Task:
                 emit(retry_event)
             elif t == "error":
                 flush_text()
-                error_event = self._record_event({"type": "error", "error": ev["error"]})
+                error_payload = {"type": "error", "error": ev["error"]}
+                if ev.get("code"):
+                    error_payload["code"] = ev["code"]
+                if ev.get("recoverable"):
+                    error_payload["recoverable"] = True
+                error_event = self._record_event(error_payload)
                 emit(error_event)
                 stop_reason = "error"
                 break
 
-        # Persist the assistant message exactly like the REPL does.
+        # Persist the assistant message exactly like the REPL does, but only
+        # when the turn produced a provider-sendable payload (text or complete
+        # tool calls) and actually finished.  A stream interrupted right after
+        # the reasoning phase leaves only thinking, which cannot be sent back
+        # to an OpenAI-compatible provider ("content or tool_calls must be
+        # set"); the thinking stays in the UI audit events, never in the
+        # provider history.  A turn that ended with an error or a budget pause
+        # is also left out so the next continue starts from the last complete
+        # turn instead of reloading an invalid partial assistant.
         content = []
         thinking = "".join(turn_thinking)
-        if thinking:
-            # Keep provider reasoning in the durable message history.  The
-            # OpenAI-compatible adapter maps this block back to the exact
-            # ``reasoning_content`` field required by DeepSeek tool turns.
-            content.append({"type": "thinking", "thinking": thinking})
         full = "".join(turn_text)
         if full:
             content.append({"type": "text", "text": full})
         content.extend(tool_uses)
-        if content:
+        if (full or tool_uses) and stop_reason not in ("error", "budget_exceeded"):
+            if thinking:
+                # Keep provider reasoning in the durable message history.  The
+                # OpenAI-compatible adapter maps this block back to the exact
+                # ``reasoning_content`` field required by DeepSeek tool turns.
+                content.insert(0, {"type": "thinking", "thinking": thinking})
             msg = {"role": "assistant", "content": content}
             if thinking:
                 # Persist the provider-native field alongside the replayable
@@ -6094,6 +6107,13 @@ def main():
     crypto = startup_crypto_check()
     print(f"[codex] credential crypto: {crypto['mode']} ({crypto['algorithm']})",
           file=sys.stderr)
+    try:
+        from open_claude.openai_compat import provider_timeout_summary
+        print(f"[codex] {provider_timeout_summary()}", file=sys.stderr)
+    except Exception:
+        # The timeout summary is informational; a missing optional import
+        # must not prevent startup.
+        pass
 
     # Credential crypto intentionally has its own degraded startup state:
     # legacy plaintext tasks remain operable, while encrypted credentials fail

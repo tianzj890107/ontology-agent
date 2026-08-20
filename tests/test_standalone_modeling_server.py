@@ -364,6 +364,157 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertIn("provider_retry", [event["type"] for event in run.events])
         self.assertEqual(run.status, "SUCCEEDED")
 
+    def test_resume_keeps_user_next_prompt_verbatim(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "原始提示")
+        run.resume_session_id = "session-resume"
+        run.attempt_number = 2
+        self.store.transition(run, "ANALYZING")
+        manager.execution_modes[run.run_id] = (False, "FAILED")
+        manager.execution_prompts[run.run_id] = "只处理和采购有关的表"
+        captured = {}
+
+        class FakeTask:
+            status = "idle"
+
+            def __init__(self, *args, **kwargs):
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def session_id(self):
+                return "session-resume"
+
+            def stream_turn(self, text, emit, conversational=False):
+                captured["prompt"] = text
+
+        def fake_validate(run, internal=False):
+            run.status = "SUCCEEDED"
+            return {"semantic_validation_status": "PASSED"}
+
+        with patch("oc_codex_server.Task", FakeTask), \
+                patch.object(manager, "validate", side_effect=fake_validate):
+            manager._execute(run)
+
+        # The user's own continuation text is preserved and only a short
+        # checkpoint constraint is appended; the fixed resume prompt must not
+        # overwrite it.
+        self.assertIn("只处理和采购有关的表", captured["prompt"])
+        self.assertIn("不要从头执行", captured["prompt"])
+        self.assertEqual(run.resume_session_id, "session-resume")
+        self.assertEqual(run.status, "SUCCEEDED")
+
+    def test_resume_without_next_prompt_uses_default_resume_prompt(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "继续建模")
+        run.resume_session_id = "session-resume-2"
+        run.attempt_number = 3
+        self.store.transition(run, "ANALYZING")
+        manager.execution_modes[run.run_id] = (False, "FAILED")
+        captured = {}
+
+        class FakeTask:
+            status = "idle"
+
+            def __init__(self, *args, **kwargs):
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def session_id(self):
+                return "session-resume-2"
+
+            def stream_turn(self, text, emit, conversational=False):
+                captured["prompt"] = text
+
+        def fake_validate(run, internal=False):
+            run.status = "SUCCEEDED"
+            return {"semantic_validation_status": "PASSED"}
+
+        with patch("oc_codex_server.Task", FakeTask), \
+                patch.object(manager, "validate", side_effect=fake_validate):
+            manager._execute(run)
+
+        self.assertIn("不要重复输入盘点、数据库连接验证或 schema 提取", captured["prompt"])
+        self.assertIn("只处理第一个未完成或失败的阶段", captured["prompt"])
+
+    def test_conversational_turn_sends_user_text_verbatim(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "原提示")
+        run.resume_session_id = "session-question"
+        self.store.transition(run, "ANALYZING")
+        manager.execution_modes[run.run_id] = (True, "INPUT_READY")
+        manager.execution_prompts[run.run_id] = "这个表是什么意思？"
+        captured = {}
+
+        class FakeTask:
+            status = "idle"
+
+            def __init__(self, *args, **kwargs):
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def session_id(self):
+                return "session-question"
+
+            def stream_turn(self, text, emit, conversational=False):
+                captured["prompt"] = text
+                captured["conversational"] = conversational
+
+        with patch("oc_codex_server.Task", FakeTask):
+            manager._execute(run)
+
+        self.assertEqual(captured["prompt"], "这个表是什么意思？")
+        self.assertTrue(captured["conversational"])
+        self.assertEqual(run.status, "INPUT_READY")
+
+    def test_same_process_continue_reuses_task_instance(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "复用任务")
+        run.resume_session_id = "session-reuse"
+        self.store.transition(run, "ANALYZING")
+        manager.execution_modes[run.run_id] = (False, "FAILED")
+        instances = []
+
+        class FakeTask:
+            status = "blocked"
+            modeling_block_reason = "MODEL_TOOL_CALL_LIMIT"
+
+            def __init__(self, *args, **kwargs):
+                instances.append(self)
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def session_id(self):
+                return "session-reuse"
+
+            def stream_turn(self, text, emit, conversational=False):
+                self.status = "blocked"
+
+        with patch("oc_codex_server.Task", FakeTask):
+            manager._execute(run)
+            self.assertEqual(len(instances), 1)
+            self.assertIs(manager.tasks[run.run_id], instances[0])
+            # A second attempt in the same process reuses the in-memory
+            # Task/Conversation instead of rebuilding the runtime.
+            self.store.transition(run, "ANALYZING", allowed_from={"BLOCKED"})
+            run.attempt_number = 2
+            manager.execution_modes[run.run_id] = (False, "FAILED")
+            manager._execute(run)
+            self.assertEqual(len(instances), 1)
+            self.assertIs(manager.tasks[run.run_id], instances[0])
+        self.assertEqual(run.status, "BLOCKED")
+
     def test_input_api_cannot_write_runtime_namespaces(self):
         run = self.store.create("DATABASE", "input boundary")
         bad_paths = [

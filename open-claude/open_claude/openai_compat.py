@@ -21,6 +21,59 @@ from typing import Any, Callable, Generator, Iterable, Mapping, Optional
 from .config import PROVIDERS, get_api_key_for, get_provider_base_url
 
 
+_TIMEOUT_ENV_DEFAULTS = {
+    "ONTOLOGY_LLM_CONNECT_TIMEOUT": 5.0,
+    "ONTOLOGY_LLM_READ_TIMEOUT": 600.0,
+    "ONTOLOGY_LLM_WRITE_TIMEOUT": 600.0,
+    "ONTOLOGY_LLM_POOL_TIMEOUT": 600.0,
+}
+
+
+def provider_timeout_config() -> dict[str, float]:
+    """Resolve explicit provider transport timeouts from the environment."""
+    resolved: dict[str, float] = {}
+    for name, default in _TIMEOUT_ENV_DEFAULTS.items():
+        raw = os.environ.get(name, "").strip()
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = default
+        resolved[name] = value if value > 0 else default
+    return resolved
+
+
+def provider_timeout_summary() -> str:
+    """Non-sensitive one-line timeout summary for startup logs."""
+    config = provider_timeout_config()
+    return ("provider transport timeouts: "
+            f"connect={config['ONTOLOGY_LLM_CONNECT_TIMEOUT']:g}s "
+            f"read={config['ONTOLOGY_LLM_READ_TIMEOUT']:g}s "
+            f"write={config['ONTOLOGY_LLM_WRITE_TIMEOUT']:g}s "
+            f"pool={config['ONTOLOGY_LLM_POOL_TIMEOUT']:g}s")
+
+
+def _provider_timeout():
+    """Build the SDK timeout object, falling back to httpx when available."""
+    try:
+        from openai import Timeout as OpenAITimeout
+    except ImportError:
+        OpenAITimeout = None
+    config = provider_timeout_config()
+    kwargs = {
+        "connect": config["ONTOLOGY_LLM_CONNECT_TIMEOUT"],
+        "read": config["ONTOLOGY_LLM_READ_TIMEOUT"],
+        "write": config["ONTOLOGY_LLM_WRITE_TIMEOUT"],
+        "pool": config["ONTOLOGY_LLM_POOL_TIMEOUT"],
+    }
+    if OpenAITimeout is not None:
+        return OpenAITimeout(**kwargs)
+    try:
+        import httpx
+        return httpx.Timeout(**kwargs)
+    except ImportError:
+        return None
+
+
 def _client(provider: str, api_key: str | None = None):
     """Build an OpenAI SDK client pointed at the provider's endpoint."""
     try:
@@ -36,7 +89,8 @@ def _client(provider: str, api_key: str | None = None):
         envs = ", ".join(PROVIDERS.get(provider, {}).get("env", [])) or "the provider API key"
         raise RuntimeError(f"No API key for provider '{provider}'. Set {envs}.")
 
-    return OpenAI(api_key=key, base_url=get_provider_base_url(provider))
+    return OpenAI(api_key=key, base_url=get_provider_base_url(provider),
+                  timeout=_provider_timeout())
 
 
 def _qwen_fallback_models(model: str) -> list[str]:
@@ -56,6 +110,24 @@ def _is_quota_error(error: Exception) -> bool:
     return any(x in msg for x in markers)
 
 
+def _is_provider_timeout(error: Exception) -> bool:
+    """Whether a provider failure is a transport/read timeout, not a 400/429.
+
+    The SDK raises ``APITimeoutError`` when a streaming read stays silent
+    beyond the configured read timeout.  These failures must never be treated
+    as the same error class as modeling total-time budget pauses: the run is
+    paused at the current checkpoint with the partial turn discarded, and the
+    user can continue from there.
+    """
+    if type(error).__name__ in ("APITimeoutError", "APIConnectionError", "ReadTimeout", "ConnectTimeout"):
+        return True
+    text = str(error or "").lower()
+    return any(marker in text for marker in (
+        "timed out", "read timeout", "connect timeout", "write timeout",
+        "apiconnectionerror", "apitimeouterror",
+    ))
+
+
 def _is_recoverable_provider_error(error: Exception) -> bool:
     """Whether a provider 400 is recoverable by resending the same turn.
 
@@ -64,6 +136,11 @@ def _is_recoverable_provider_error(error: Exception) -> bool:
     it they answer with a 400 that only means the conversation history is not
     self-consistent.  The request itself is safe to resend, optionally with
     reasoning stripped, so the task can continue instead of failing.
+
+    A reasoning-only assistant (a stream interrupted right after the thinking
+    phase) also produces a 400 ("content or tool_calls must be set").  The
+    outgoing history is sanitized before the retry drops that invalid turn, so
+    the same request is safe to resend once.
     """
     text = str(error or "").lower()
     markers = (
@@ -73,6 +150,8 @@ def _is_recoverable_provider_error(error: Exception) -> bool:
         "tool messages",
         "role tool",
         "must be passed back",
+        "content or tool_calls must be set",
+        "invalid assistant message",
     )
     return any(marker in text for marker in markers)
 
@@ -170,6 +249,30 @@ def _is_tool_result_block(block: Any) -> bool:
     return isinstance(block, dict) and block.get("type") == "tool_result"
 
 
+def _assistant_has_sendable_payload(message: Mapping[str, Any]) -> bool:
+    """Whether an assistant message can be sent to an OpenAI-compatible API.
+
+    Assistant messages must carry non-empty text or tool_calls.  A turn that
+    only contains thinking/reasoning (for example a stream interrupted right
+    after the reasoning phase) cannot be represented in the protocol and must
+    be dropped from the outgoing history; the persisted thinking stays as a
+    UI audit event only.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(str(content).strip())
+    if not isinstance(content, list):
+        return False
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") in ("tool_use", "tool_call"):
+            return True
+        if block.get("type") == "text" and str(block.get("text") or "").strip():
+            return True
+    return False
+
+
 def _orphan_tool_result_text(tool_id: str, content: Any) -> str:
     """Keep malformed historical tool output without sending it as ``role=tool``.
 
@@ -255,6 +358,12 @@ def sanitize_messages(messages: list[dict[str, Any]], *,
                 result.append({**message, "content": rebuilt})
                 continue
             active_window = {}
+            if not _assistant_has_sendable_payload({"role": role, "content": rebuilt}):
+                # Reasoning-only / empty assistant turns cannot be represented
+                # in the OpenAI protocol.  Drop them so the next user message
+                # remains sendable; the persisted thinking is kept only as an
+                # audit event, never as provider history.
+                continue
             result.append(message)
             continue
 
@@ -296,6 +405,8 @@ def sanitize_messages(messages: list[dict[str, Any]], *,
             continue
 
         active_window = {}
+        if role == "assistant" and not _assistant_has_sendable_payload(message):
+            continue
         result.append(message)
 
     if truncate:
@@ -395,6 +506,11 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]],
                     out.append({"role": "user", "content":
                                 _orphan_tool_result_text(tool_id, content)})
                 continue
+            if role == "assistant" and not content.strip():
+                # Empty assistant text is rejected by OpenAI-compatible APIs
+                # when no tool_calls accompany it; drop the turn instead.
+                pending_tool_ids.clear()
+                continue
             converted: dict[str, Any] = {
                 "role": role if role in ("user", "assistant", "system") else "user",
                 "content": content,
@@ -457,8 +573,11 @@ def to_openai_messages(system_prompt: str, messages: list[dict[str, Any]],
                 out.append(assistant_message)
                 pending_tool_ids.clear()
             elif reasoning_parts:
-                out.append({"role": "assistant", "content": None,
-                            "reasoning_content": "".join(reasoning_parts)})
+                # Reasoning-only assistant: the OpenAI protocol requires
+                # content or tool_calls, so this turn cannot be forwarded.
+                # Drop it; the next user message remains sendable, and any
+                # follow-up "reasoning_content must be passed back" 400 is
+                # handled by the strip-reasoning retry.
                 pending_tool_ids.clear()
             else:
                 pending_tool_ids.clear()
@@ -640,6 +759,20 @@ def stream(provider: str, model: str, messages: list[dict[str, Any]], system_pro
         yield {"type": "message_end", "stop_reason": stop_reason, "usage": usage}
 
     except Exception as e:
+        # A provider transport/read timeout pauses the turn at the current
+        # checkpoint instead of retrying the same request blindly.  The
+        # partial turn is never persisted as provider history (the caller
+        # drops reasoning-only assistants), so the user can continue from
+        # the last durable state.
+        if _is_provider_timeout(e):
+            yield {
+                "type": "error",
+                "error": "模型流式响应长时间无数据，本轮已暂停，可继续执行",
+                "code": "LLM_STREAM_TIMEOUT",
+                "recoverable": True,
+                "detail": str(e)[:400],
+            }
+            return
         # Tool-chain / thinking-mode 400s are recoverable.  Sanitize the
         # history again (a missing tool result may now be restorable from the
         # persisted store, or the chain is truncated to the last consistent
@@ -695,6 +828,10 @@ def send(provider: str, model: str, messages: list[dict[str, Any]], system_promp
         resp = _send_once(provider, model, messages, system_prompt, tools,
                           max_tokens, temperature, api_key)
     except Exception as e:
+        if _is_provider_timeout(e):
+            raise RuntimeError(
+                "LLM_STREAM_TIMEOUT: 模型响应超时，本轮已暂停，可继续执行"
+            ) from e
         if not _is_recoverable_provider_error(e):
             raise
         # Sanitize (recover/truncate the tool chain) and retry only this call.

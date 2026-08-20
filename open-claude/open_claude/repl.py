@@ -545,17 +545,21 @@ class Conversation:
                 status.stop()
             md_stream.finish()
 
-        # Build the assistant message content blocks
+        # Build the assistant message content blocks.  Only persist a turn
+        # that carries a provider-sendable payload (text or complete tool
+        # calls).  A reasoning-only turn cannot be represented in the OpenAI
+        # protocol ("content or tool_calls must be set") and must not enter
+        # the provider history; the thinking is only an audit trail.
         content: list[dict[str, Any]] = []
         thinking = "".join(thinking_parts)
-        if thinking:
-            content.append({"type": "thinking", "thinking": thinking})
         if md_stream.buffer:
             content.append({"type": "text", "text": md_stream.buffer})
         for tu in tool_uses:
             content.append(tu)
 
-        if content:
+        if content and (md_stream.buffer or tool_uses):
+            if thinking:
+                content.insert(0, {"type": "thinking", "thinking": thinking})
             msg = {"role": "assistant", "content": content}
             self.messages.append(msg)
             self.session.append_message(msg)

@@ -68,6 +68,22 @@ _BROWSER_SESSION_LOCK = threading.RLock()
 _BROWSER_SESSIONS: dict[str, float] = {}
 _BROWSER_SESSION_USERS: dict[str, str] = {}
 PUBLIC_DIRS = ("input", "work", "output")
+
+# Default checkpoint-resume instruction used when the user does not provide
+# their own continuation text.  When the user does provide text it is kept
+# verbatim and only this short constraint is appended.
+RESUME_CHECKPOINT_PROMPT = (
+    "继续当前建模运行，不要从头执行。请读取 work/modeling_state.json、"
+    "work/validation_report.json（如存在）以及现有 work/output 文件；"
+    "保留已经 PASS 且产物未变化的阶段，只处理第一个未完成或失败的阶段。"
+    "不要重复输入盘点、数据库连接验证或 schema 提取；如果当前阶段需要"
+    "修复，完成修复后继续后续阶段。"
+)
+RESUME_CHECKPOINT_SUFFIX = (
+    "\n\n继续当前建模运行，不要从头执行；保留已经 PASS 且产物未变化的阶段，"
+    "只处理第一个未完成或失败的阶段；不要重复输入盘点、数据库连接验证或 "
+    "schema 提取。"
+)
 _FILE_TREE_SKIP_DIRS = {".git", ".open-claude", "node_modules", "__pycache__", ".venv", "venv", "pylibs", ".py_deps"}
 _WEB_HIDDEN_FILES = {".db_connection.json", ".env", ".env.local", "credentials.json",
                     "db_connection.py", "verify_database.py"}
@@ -1228,6 +1244,14 @@ class ModelingRunManager:
         self.store.register_manager(self)
         self.threads: dict[str, _RunHandle] = {}
         self.execution_modes: dict[str, tuple[bool, str]] = {}
+        # The user-provided continuation text ("" when not provided) for the
+        # next attempt.  Kept separate from run.prompt so a resume never
+        # overwrites the user's own words with the fixed checkpoint prompt.
+        self.execution_prompts: dict[str, str] = {}
+        # Reused Task/Conversation per run inside this process so a continue
+        # keeps the in-memory session instead of rebuilding the runtime and
+        # reloading the whole journal.
+        self.tasks: dict[str, Any] = {}
         self.scheduler_lock = threading.RLock()
         self.scheduler_wakeup = threading.Condition(self.scheduler_lock)
         self.worker_futures: dict[str, Future[Any]] = {}
@@ -1414,6 +1438,7 @@ class ModelingRunManager:
                 run, "QUEUED", allowed_from={"CREATED", "INPUT_READY", "FAILED", "BLOCKED"},
                 changes=changes)
             self.execution_modes[run.run_id] = (conversational, return_status)
+            self.execution_prompts[run.run_id] = str(prompt or "").strip()
             self.threads[run.run_id] = _RunHandle()
         self.store.append_event(run, "run_queued", maxActiveRuns=self.max_active_runs)
         with self.scheduler_wakeup:
@@ -1592,42 +1617,54 @@ class ModelingRunManager:
             # not need model/provider dependencies, and 47313 has no shared
             # process state with this service.
             from oc_codex_server import Task
-            task = Task(project=run.run_id, cwd=run.root, repository_id="",
-                        task_code="", task_type="modeling", mission_context=self._context(run),
-                        resume_session_id=run.resume_session_id or None,
-                        task_id=run.run_id, user_id="standalone-modeling")
+            task = self.tasks.get(run.run_id)
+            if task is None:
+                task = Task(project=run.run_id, cwd=run.root, repository_id="",
+                            task_code="", task_type="modeling", mission_context=self._context(run),
+                            resume_session_id=run.resume_session_id or None,
+                            task_id=run.run_id, user_id="standalone-modeling")
+                self.tasks[run.run_id] = task
             if run.model:
                 task.conv.model = run.model
             # There is no browser approval channel on this API.  Commands are
             # still confined by TaskSandboxBoundary; this only permits the
             # sandboxed run to progress without an interactive workbench.
             task.conv.permissions.mode = "always_allow"
-            task.conv.system_prompt += (
-                "\n\n[独立通用建模运行]\n"
-                "本次运行没有平台 taskCode、回调或业务任务绑定。只处理当前 ModelingRun。"
-                "对外工作区使用 input/、work/、output/；内部 mission-* 目录只是安全别名。"
-                "所有审计和中间态写入 work/，正式交付文件写入 output/。"
-                "数据库连接必须执行 input/verify_database.py 或导入 input/db_connection.py 的 create_db_engine；"
-                "禁止直接读取 input/.db_connection.json 的加密 password，也禁止手工拼接连接 URL；"
-                "数据库查询必须使用连接 helper 配置的 sourceSchema/search_path，不得默认查询 public。"
-            )
+            if "[独立通用建模运行]" not in task.conv.system_prompt:
+                task.conv.system_prompt += (
+                    "\n\n[独立通用建模运行]\n"
+                    "本次运行没有平台 taskCode、回调或业务任务绑定。只处理当前 ModelingRun。"
+                    "对外工作区使用 input/、work/、output/；内部 mission-* 目录只是安全别名。"
+                    "所有审计和中间态写入 work/，正式交付文件写入 output/。"
+                    "数据库连接必须执行 input/verify_database.py 或导入 input/db_connection.py 的 create_db_engine；"
+                    "禁止直接读取 input/.db_connection.json 的加密 password，也禁止手工拼接连接 URL；"
+                    "数据库查询必须使用连接 helper 配置的 sourceSchema/search_path，不得默认查询 public。"
+                )
 
             def emit(event: dict[str, Any]) -> None:
                 self.store.append_event(run, event.get("type", "agent_event"), **event)
 
             self._persist_task_checkpoint(run, task)
-            if run.resume_session_id or run.attempt_number > 1:
-                resume_prompt = (
-                    "继续当前建模运行，不要从头执行。请读取 work/modeling_state.json、"
-                    "work/validation_report.json（如存在）以及现有 work/output 文件；"
-                    "保留已经 PASS 且产物未变化的阶段，只处理第一个未完成或失败的阶段。"
-                    "不要重复输入盘点、数据库连接验证或 schema 提取；如果当前阶段需要"
-                    "修复，完成修复后继续后续阶段。"
-                )
+            resuming = bool(run.resume_session_id or run.attempt_number > 1)
+            requested_prompt = (self.execution_prompts.pop(run.run_id, "") or "").strip()
+            if conversational:
+                # A normal question/cancellation turn is sent verbatim; the
+                # checkpoint constraint only applies to modeling continuations.
+                resume_prompt = requested_prompt or run.prompt
+            elif requested_prompt:
+                # The user's own continuation text is preserved verbatim;
+                # only a short checkpoint constraint is appended so the model
+                # does not restart the whole run.
+                resume_prompt = requested_prompt if not resuming \
+                    else requested_prompt + RESUME_CHECKPOINT_SUFFIX
+            elif resuming:
+                resume_prompt = RESUME_CHECKPOINT_PROMPT
             else:
                 resume_prompt = run.prompt
             task.stream_turn(resume_prompt, emit, conversational=conversational)
             self._persist_task_checkpoint(run, task)
+            if run.status in {"SUCCEEDED", "CANCELLED"}:
+                self.tasks.pop(run.run_id, None)
             if run.cancel_requested:
                 if run.status in {"ANALYZING", "VALIDATING"}:
                     self.store.transition(run, "CANCELLING",
@@ -2067,6 +2104,13 @@ def main(argv: list[str] | None = None) -> int:
         f"max_queued_runs={manager.max_queued_runs}",
         flush=True,
     )
+    try:
+        from open_claude.openai_compat import provider_timeout_summary
+        print(f"[standalone-modeling] {provider_timeout_summary()}", flush=True)
+    except Exception:
+        # The timeout summary is informational; a missing optional import
+        # must not prevent startup.
+        pass
     print(f"[BOOT] core ready: {BOOT.snapshot()['stages']['core_ready']['elapsedMs']:.2f}ms", flush=True)
     print("[BOOT] database metadata, Agent runtime and document parsing: on-demand", flush=True)
     try:
