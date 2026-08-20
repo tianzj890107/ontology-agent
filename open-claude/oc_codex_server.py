@@ -89,6 +89,7 @@ from open_claude.modeling_reliability import (
     validate_decision_audits,
     decision_audit_coverage,
     finalize_semantic_model,
+    is_structural_blocker,
     load_validation_report,
     semantic_validation_status,
 )
@@ -195,10 +196,24 @@ def _modeling_evidence_signature(cwd: str) -> str:
                                      default=str).encode("utf-8")).hexdigest()
 
 
+def _structural_blocker_issues(checkpoint: dict) -> list[Any]:
+    """Return the genuine structural blockers of a semantic checkpoint."""
+    if not isinstance(checkpoint, dict):
+        return []
+    return [issue for issue in checkpoint.get("issues", [])
+            if is_structural_blocker(issue)]
+
+
 def _modeling_gate_signature(checkpoint: dict) -> str:
-    """Return a stable signature for the current semantic blocker set."""
+    """Return a stable signature for the current semantic blocker set.
+
+    Only genuine STRUCTURAL_BLOCKER findings count toward the repair loop.
+    Evidence gaps, UNKNOWN/CANDIDATE states, deterministic normalizations and
+    quality warnings are resolved server-side, so a change limited to those
+    never looks like a new repair window (and never re-enters the loop).
+    """
     issues = []
-    for issue in (checkpoint.get("issues", []) if isinstance(checkpoint, dict) else []):
+    for issue in _structural_blocker_issues(checkpoint):
         issues.append((str(getattr(issue, "code", "") or "VALIDATION_ERROR"),
                        str(getattr(issue, "severity", "") or ""),
                        str(getattr(issue, "message", "") or "")))
@@ -280,7 +295,17 @@ class ModelingExecutionGuard:
         return self.check()
 
     def observe_gate(self, checkpoint: dict, evidence_signature: str) -> str:
-        """Return empty when another repair window is justified, else a code."""
+        """Return empty when another repair window is justified, else a code.
+
+        Only genuine STRUCTURAL_BLOCKER findings consume the repair budget.
+        Evidence gaps, UNKNOWN/CANDIDATE states, deterministic normalizations
+        and quality warnings are resolved server-side, so they never
+        accumulate gate retries and never trigger the repeated-without-new-
+        evidence safety valve.  A checkpoint without any structural blocker
+        has nothing to repair and must not count against the run.
+        """
+        if not _structural_blocker_issues(checkpoint):
+            return ""
         gate_signature = _modeling_gate_signature(checkpoint)
         if (self.last_gate_signature == gate_signature
                 and self.last_evidence_signature == evidence_signature):
@@ -2642,9 +2667,9 @@ def finalize_modeling_task(task) -> dict:
     )
     if result.get("status") != "PASSED":
         errors = [item.code for item in result.get("issues", [])
-                  if getattr(item, "severity", "") == "ERROR"]
+                  if is_structural_blocker(item)]
         warnings = [item.code for item in result.get("issues", [])
-                    if getattr(item, "severity", "") == "WARNING"]
+                    if not is_structural_blocker(item)]
         set_task_run_result(task, "BLOCKED", errors=errors or ["SEMANTIC_VALIDATION_FAILED"],
                             warnings=warnings)
     return result
@@ -2677,9 +2702,7 @@ def _gate_blocker_detail(checkpoint: dict) -> str:
     WARNINGs are recorded in the audit and never force repair or block.
     """
     blockers = []
-    for issue in (checkpoint.get("issues", []) if isinstance(checkpoint, dict) else [])[:12]:
-        if str(getattr(issue, "severity", "") or "") != "ERROR":
-            continue
+    for issue in _structural_blocker_issues(checkpoint)[:12]:
         code = str(getattr(issue, "code", "") or "VALIDATION_ERROR")
         message = str(getattr(issue, "message", "") or code)
         blockers.append(f"{code}: {message}")
@@ -4133,7 +4156,7 @@ class Task:
                         errors.extend(
                             str(getattr(issue, "code", "") or "VALIDATION_ERROR")
                             for issue in checkpoint.get("issues", [])
-                            if getattr(issue, "severity", "") == "ERROR")
+                            if is_structural_blocker(issue))
                         blocker_detail = _gate_blocker_detail(checkpoint)
                     set_task_run_result(self, "BLOCKED", errors=errors)
                     rec({
@@ -4178,7 +4201,7 @@ class Task:
                         errors.extend(
                             str(getattr(issue, "code", "") or "VALIDATION_ERROR")
                             for issue in checkpoint.get("issues", [])
-                            if getattr(issue, "severity", "") == "ERROR")
+                            if is_structural_blocker(issue))
                     set_task_run_result(self, "BLOCKED", errors=errors)
                     rec({
                         "type": "execution_guard",

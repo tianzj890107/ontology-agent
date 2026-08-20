@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "open-claude"))
 import oc_codex_server as server  # noqa: E402
 import open_claude.modeling_reliability as reliability  # noqa: E402
 from open_claude.modeling_reliability import (  # noqa: E402
+    CANDIDATE,
     finalize_semantic_model,
     load_validation_report,
     modeling_validation_stage_plan,
@@ -121,17 +122,17 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
             self.assertEqual(report["semantic_validation_status"], "PASSED")
             self.assertEqual(report["business_object_decision_coverage"], 1.0)
 
-            # A missing audit after finalize is a hard failure, not an upload-
-            # time repair that silently recreates the missing decision ledger.
+            # A missing audit after finalize is rebuilt deterministically from
+            # the canonical modeling_state.json instead of failing the run.
             (work / "business_object_decisions.csv").unlink()
-            failed = finalize_semantic_model(
+            rebuilt = finalize_semantic_model(
                 work, state, output_dir=output,
                 required_outputs=["business_objects.csv"],
             )
-            self.assertEqual(failed["status"], "FAILED")
-            self.assertFalse((work / "business_object_decisions.csv").exists())
-            self.assertIn("MISSING_DECISION_AUDIT",
-                          {issue.code for issue in failed["issues"]})
+            self.assertEqual(rebuilt["status"], "PASSED")
+            self.assertTrue((work / "business_object_decisions.csv").is_file())
+            self.assertNotIn("MISSING_DECISION_AUDIT",
+                             {issue.code for issue in rebuilt["issues"]})
 
     def test_nested_r1_schema_is_read_as_status_not_as_mapping(self):
         state = {"businessObjectDecisions": [confirmed_bo("CO_NESTED")]}
@@ -161,6 +162,10 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
             self.assertTrue(report["warnings"])
 
     def test_error_still_blocks_export(self):
+        # A CONFIRMED relation without any evidence is a formal-eligibility
+        # gap, not a structural defect: the server deterministically downgrades
+        # it to CANDIDATE and keeps the run moving instead of entering the
+        # Agent repair loop.
         state = {"relationDecisions": [{
             "relationId": "REL_UNSUPPORTED",
             "sourceEntity": "LE_A", "targetEntity": "LE_B",
@@ -169,9 +174,31 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
         }]}
         with tempfile.TemporaryDirectory() as root:
             result = finalize_semantic_model(Path(root) / "mission-work", state)
+            self.assertEqual(result["status"], "PASSED")
+            self.assertNotIn("UNSUPPORTED_CONFIRMED_RELATION",
+                             {issue.code for issue in result["issues"]})
+            persisted = json.loads((Path(root) / "mission-work" / "modeling_state.json")
+                                   .read_text(encoding="utf-8"))
+            record = persisted["relationDecisions"][0]
+            self.assertEqual(record["status"], CANDIDATE)
+            self.assertTrue(record.get("eligibilityBlockers"))
+
+    def test_malformed_artifact_still_fails(self):
+        # Genuine structural defects (zero-byte/required formal artifact) still
+        # fail the final gate and enter the repair loop.
+        state = {}
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "mission-output"
+            output.mkdir(parents=True, exist_ok=True)
+            (output / "business_objects.csv").write_bytes(b"")
+            result = finalize_semantic_model(Path(root) / "mission-work", state,
+                                             output_dir=output,
+                                             required_outputs=["business_objects.csv"],
+                                             context={"expectedFiles": ["business_objects.csv"],
+                                                      "taskType": "modeling"})
             self.assertEqual(result["status"], "FAILED")
-            self.assertIn("UNSUPPORTED_CONFIRMED_RELATION",
-                          {issue.code for issue in result["issues"]})
+            codes = {issue.code for issue in result["issues"]}
+            self.assertIn("FORMAL_OUTPUT_EMPTY", codes)
 
     def test_missing_asset_processing_decision_is_auto_unknown_warning(self):
         state = {

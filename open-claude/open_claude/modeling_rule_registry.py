@@ -632,15 +632,18 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
                                      f"正式业务对象编码 {value} 重复", 16, "BUSINESS_OBJECT", value))
         for row in data:
             code = _text(row.get("业务对象编码"))
-            if not _text(row.get("业务对象名称")) or not _text(row.get("业务对象定义")):
+            # A missing name makes the formal row structurally un-consumable.
+            # A missing definition is a description-quality WARNING handled by
+            # V0001_DESCRIPTION_MISSING below, never a structural blocker.
+            if not _text(row.get("业务对象名称")):
                 findings.append(_finding("V0001_FORMAL_BUSINESS_OBJECT_INCOMPLETE", ERROR,
-                                         f"正式业务对象 {code} 缺少名称或定义", 17, "BUSINESS_OBJECT", code))
+                                         f"正式业务对象 {code} 缺少名称", 17, "BUSINESS_OBJECT", code))
         for value, _ in _unique(data, ("业务对象名称",)):
             findings.append(_finding("V0001_DUPLICATE_BUSINESS_OBJECT_NAME", ERROR,
                                      f"正式业务对象名称 {value} 重复", 13, "BUSINESS_OBJECT", value))
         for row in data:
             if _text(row.get("业务对象名称")) and not _text(row.get("业务对象定义")):
-                findings.append(_finding("V0001_DESCRIPTION_MISSING", ERROR,
+                findings.append(_finding("V0001_DESCRIPTION_MISSING", WARNING,
                                          f"正式业务对象 {_text(row.get('业务对象编码'))} 缺少业务定义",
                                          17, "BUSINESS_OBJECT", _text(row.get("业务对象编码"))))
     elif name == "logical_entities.csv":
@@ -714,8 +717,8 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
         for row in data:
             value = _text(row.get("业务属性名称"))
             if re.search(r"[&+/*-]", value):
-                findings.append(_finding("V0001_ATTRIBUTE_SPECIAL_CHARACTER", ERROR,
-                                         f"业务属性 {value} 含有不允许的特殊字符", 42,
+                findings.append(_finding("V0001_ATTRIBUTE_SPECIAL_CHARACTER", WARNING,
+                                         f"业务属性 {value} 含有不推荐的特殊字符", 42,
                                          "BUSINESS_ATTRIBUTE", value))
         findings.extend(duplicate_formal_attribute_name_findings(data))
     elif name in {"entity_relations.csv", "entity_relationships.csv"}:

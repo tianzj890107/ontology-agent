@@ -40,6 +40,18 @@ DECISION_STATES = {CONFIRMED, CANDIDATE, UNRESOLVED, REJECTED}
 STRUCTURAL_FIX = "STRUCTURAL_FIX"
 SEMANTIC_FIX = "SEMANTIC_FIX"
 
+# Gate actions: every validator finding is classified into one of four
+# processing actions instead of letting raw severity decide everything.
+# Only STRUCTURAL_BLOCKER may fail a stage and enter the Agent repair loop;
+# the other three are handled server-side without asking the Agent to retry.
+STRUCTURAL_BLOCKER = "STRUCTURAL_BLOCKER"
+DETERMINISTIC_NORMALIZATION = "DETERMINISTIC_NORMALIZATION"
+FORMAL_ELIGIBILITY = "FORMAL_ELIGIBILITY"
+QUALITY_WARNING = "QUALITY_WARNING"
+_NON_BLOCKING_ACTIONS = frozenset({
+    DETERMINISTIC_NORMALIZATION, FORMAL_ELIGIBILITY, QUALITY_WARNING,
+})
+
 COMPOSITION = "COMPOSITION"
 EXTENSION = "EXTENSION"
 REFERENCE = "REFERENCE"
@@ -198,6 +210,7 @@ class ValidationIssue:
     fix_class: str = SEMANTIC_FIX
     auto_fixable: bool = False
     details: Mapping[str, Any] = field(default_factory=dict)
+    action: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -210,6 +223,7 @@ class ValidationIssue:
             "fixClass": self.fix_class,
             "autoFixable": self.auto_fixable,
             "details": dict(self.details),
+            "action": self.action,
         }
 
 
@@ -665,7 +679,8 @@ class AggregationAnalysis:
 
 def _issue(code: str, severity: str, message: str, *, artifact_type: str = "",
            artifact_id: str = "", relation: Mapping[str, Any] | None = None,
-           details: Mapping[str, Any] | None = None) -> ValidationIssue:
+           details: Mapping[str, Any] | None = None,
+           action: str = "") -> ValidationIssue:
     info = dict(details or {})
     if relation is not None:
         info.setdefault("sourceEntity", _relation_endpoint(relation, True))
@@ -673,7 +688,70 @@ def _issue(code: str, severity: str, message: str, *, artifact_type: str = "",
         info.setdefault("relationType", _relation_type(relation))
     return ValidationIssue(code=code, severity=severity, message=message,
                            artifact_type=artifact_type, artifact_id=artifact_id,
-                           details=info)
+                           details=info, action=action)
+
+
+# Registry codes whose failure is about formal eligibility or a quality
+# suggestion rather than an unreadable artifact.  They may stay WARNING even
+# when the underlying rule is HARD_FORMAL: the model element is auto-downgraded
+# (or excluded from the formal CSV) instead of failing the whole run.
+_FORMAL_ELIGIBILITY_CODES = frozenset({
+    "UNSUPPORTED_CONFIRMED_RELATION", "TRANSFORMATION_EVIDENCE_GATE",
+    "UNSUPPORTED_STATUS_UPGRADE", "RELATION_DECISION_MISSING_FROM_FORMAL_OUTPUT",
+    "V0001_FORMAL_MAIN_ENTITY_COUNT", "V0001_FORMAL_LOGICAL_KEY_MISSING",
+    "V0001_FORMAL_CARDINALITY_MISSING", "V0001_CONFIRMED_CARDINALITY_MISSING",
+    "V0001_FORMAL_MANY_TO_MANY", "V0001_CONFIRMED_MANY_TO_MANY",
+    "V0001_MAIN_FLAG_WITHOUT_BUSINESS_OBJECT",
+    "V0001_MAIN_FLAG_WITHOUT_CONFIRMED_BUSINESS_OBJECT",
+})
+_DETERMINISTIC_NORMALIZATION_CODES = frozenset({
+    "ASSET_PROCESSING_COVERAGE_MISSING", "INVALID_AGGREGATION_EDGE",
+    "BUSINESS_OBJECT_DECISION_COUNT_MISMATCH", "INVALID_BUSINESS_OBJECT_CONFIDENCE",
+    "CROSS_ENTITY_EVIDENCE", "CIRCULAR_EVIDENCE", "FK_COVERAGE_MISSING",
+    "INVALID_BUSINESS_OBJECT_ASSIGNMENT", "TECHNICAL_ATTRIBUTE_IN_FORMAL_OUTPUT",
+})
+_QUALITY_WARNING_CODES = frozenset({
+    "V0001_DESCRIPTION_MISSING", "V0001_ATTRIBUTE_SPECIAL_CHARACTER",
+})
+
+
+def _issue_field(issue: Any, name: str) -> str:
+    if isinstance(issue, Mapping):
+        return _text(issue.get(name))
+    return _text(getattr(issue, name, ""))
+
+
+def issue_action(issue: Any) -> str:
+    """Classify one validator finding into a processing action.
+
+    Accepts both ``ValidationIssue`` objects and plain dicts (for example
+    issues restored from a persisted stage cache).  Explicitly attached
+    actions win; otherwise the code registry and finally the raw severity
+    decide.  Only STRUCTURAL_BLOCKER may fail a stage.
+    """
+    explicit = _issue_field(issue, "action")
+    if explicit:
+        return explicit
+    code = _issue_field(issue, "code")
+    if code in _FORMAL_ELIGIBILITY_CODES:
+        return FORMAL_ELIGIBILITY
+    if code in _DETERMINISTIC_NORMALIZATION_CODES:
+        return DETERMINISTIC_NORMALIZATION
+    if code in _QUALITY_WARNING_CODES:
+        return QUALITY_WARNING
+    if _issue_field(issue, "severity") != "ERROR":
+        return QUALITY_WARNING
+    return STRUCTURAL_BLOCKER
+
+
+def is_structural_blocker(issue: Any) -> bool:
+    """Return whether this issue alone may fail a stage and trigger repair."""
+    action = issue_action(issue)
+    if action == STRUCTURAL_BLOCKER:
+        return True
+    if action in _NON_BLOCKING_ACTIONS:
+        return False
+    return _issue_field(issue, "severity") == "ERROR"
 
 
 def _registry_issue(finding: RuleFinding) -> ValidationIssue:
@@ -1048,6 +1126,401 @@ def apply_aggregation_downgrades(state: Mapping[str, Any] | None) -> list[str]:
     return sorted(set(identifier for identifier in downgraded if identifier))
 
 
+def apply_relation_eligibility_downgrades(state: Mapping[str, Any] | None) -> list[str]:
+    """In-place: downgrade CONFIRMED relations that cannot satisfy formal
+    eligibility (missing evidence / missing cardinality / M:N) to CANDIDATE.
+
+    The element stays in the decision audit with previousStatus recorded but
+    never enters the formal CSV and never triggers the Agent repair loop.
+    A CONFIRMED TRANSFORMATION backed only by FK/JOIN evidence is reclassified
+    as a structural REFERENCE instead of being guessed or repaired.
+    Returns the downgraded relation ids.
+    """
+    if not isinstance(state, Mapping):
+        return []
+    downgraded: list[str] = []
+    for relation in _iter_relation_decisions(state):
+        status = _status(relation.get("status") or relation.get("decision"))
+        if status != CONFIRMED:
+            continue
+        relation_type = _relation_type(relation)
+        relation_id = _relation_identity(relation)
+        cardinality = _text(relation.get("cardinality") or relation.get("关系基数"))
+        evidence_ok = (has_transformation_evidence(relation)
+                       if relation_type == TRANSFORMATION else has_formal_evidence(relation))
+        reasons: list[str] = []
+        if not evidence_ok:
+            if relation_type == TRANSFORMATION:
+                if evidence_types(relation) & {"FOREIGN_KEY", "DECLARED_CONSTRAINT",
+                                               "REFERENTIAL_CONSTRAINT"}:
+                    # FK/JOIN proves an association, never a derivation.
+                    for key in ("relationType", "relation_type", "type", "关系类型"):
+                        if key in relation and _key(relation.get(key)) == TRANSFORMATION:
+                            relation[key] = REFERENCE
+                    relation.setdefault("downgradedFrom", TRANSFORMATION)
+                    relation.setdefault(
+                        "downgradeReason",
+                        "FK/join evidence cannot prove transformation; reclassified as reference")
+                    downgraded.append(relation_id)
+                    continue
+                reasons.append("missing transformation evidence")
+            else:
+                reasons.append("missing formal evidence")
+        if ("cardinality" in relation or "关系基数" in relation) and not cardinality:
+            reasons.append("missing cardinality")
+        if cardinality == "M:N":
+            reasons.append("many-to-many needs a relation entity")
+        if not reasons:
+            continue
+        relation.setdefault("previousStatus",
+                            relation.get("status") or relation.get("decision") or CONFIRMED)
+        status_key = next((key for key in ("status", "decision") if key in relation), "status")
+        relation[status_key] = CANDIDATE
+        relation.setdefault("eligibilityBlockers", reasons)
+        if cardinality == "M:N":
+            relation.setdefault("needsRelationEntity", True)
+        downgraded.append(relation_id)
+    return sorted({identifier for identifier in downgraded if identifier})
+
+
+def apply_status_upgrade_protection(state: Mapping[str, Any] | None) -> list[str]:
+    """In-place: reject UNKNOWN/CANDIDATE -> CONFIRMED upgrades that carry no
+    new evidence by keeping the original status (WARNING, no repair loop)."""
+    if not isinstance(state, Mapping):
+        return []
+    reverted: list[str] = []
+    for collection in ("relationDecisions", "businessObjectDecisions",
+                       "ruleDecisions", "indicatorDecisions"):
+        value = state.get(collection)
+        if not isinstance(value, list):
+            continue
+        for record in value:
+            if not isinstance(record, Mapping):
+                continue
+            previous = _key(record.get("previousStatus") or record.get("previous_status"))
+            current = _status(record.get("status") or record.get("decision")
+                              or record.get("metricStatus"))
+            upgrades = record.get("upgradeEvidenceIds") or record.get("upgrade_evidence_ids") or []
+            if previous not in {"UNKNOWN", UNRESOLVED, CANDIDATE} or current != CONFIRMED or upgrades:
+                continue
+            original = CANDIDATE if previous == CANDIDATE else UNRESOLVED
+            status_key = next((key for key in ("status", "decision", "metricStatus")
+                               if key in record), "status")
+            record[status_key] = original
+            record.setdefault("statusUpgradeRejected", "no new evidence for upgrade")
+            identifier = _text(record.get("relationId") or record.get("candidateCode")
+                               or record.get("ruleId") or record.get("indicatorId")
+                               or record.get("id"))
+            reverted.append(identifier)
+    return sorted({identifier for identifier in reverted if identifier})
+
+
+def apply_business_object_normalization(state: Mapping[str, Any] | None) -> dict[str, int]:
+    """In-place: normalize BO confidence, recompute the final decision from the
+    canonical R1-R5 rules, and downgrade CONFIRMED BOs without a unique main
+    logical entity (formal eligibility)."""
+    if not isinstance(state, Mapping):
+        return {"normalized": 0, "downgraded": 0}
+    records = _business_object_candidate_values(state)
+    entities = entity_index(state)
+    normalized = 0
+    downgraded = 0
+    for record in records:
+        confidence_key = next((key for key in ("confidence", "置信度") if key in record), None)
+        if confidence_key is not None:
+            raw = record.get(confidence_key)
+            normalized_conf = _confidence_percent(raw)
+            if _text(raw) and not re.fullmatch(r"(?:100|[0-9]{1,2})(?:\.\d+)?%",
+                                               _text(normalized_conf)):
+                record[confidence_key] = "UNKNOWN"
+                normalized += 1
+            elif normalized_conf != _text(raw):
+                record[confidence_key] = normalized_conf
+        rules = tuple(_rule_decision(record, rule) for rule in BUSINESS_OBJECT_RULES)
+        derived = derive_business_object_decision(*[rule.status for rule in rules])
+        reported = _business_rule_status(_first_value(record, (
+            "finalDecision", "decision", "status", "conclusion", "结论", "最终决策")))
+        eligibility_blocked = bool(record.get("eligibilityBlockers")
+                                   or record.get("eligibility_downgraded"))
+        if reported and reported != derived and not eligibility_blocked:
+            decision_key = next((key for key in ("finalDecision", "decision", "status",
+                                                 "conclusion", "结论", "最终决策")
+                                 if key in record), None)
+            if decision_key:
+                record[decision_key] = derived
+                normalized += 1
+        if derived == CONFIRMED and entities:
+            member_ids = [entity_id for entity_id in _candidate_entity_ids(record)]
+            mains = [entity_id for entity_id in member_ids
+                     if entity_id in entities and is_main_entity(entities[entity_id])]
+            if member_ids and len(mains) != 1:
+                decision_key = next((key for key in ("finalDecision", "decision", "status",
+                                                     "conclusion", "结论", "最终决策")
+                                     if key in record), None)
+                if decision_key is None:
+                    decision_key = "finalDecision"
+                record.setdefault("previousStatus", record.get(decision_key))
+                record[decision_key] = CANDIDATE
+                record.setdefault("eligibilityBlockers",
+                                  ["missing unique main logical entity"])
+                downgraded += 1
+    return {"normalized": normalized, "downgraded": downgraded}
+
+
+def apply_evidence_isolation_cleanup(state: Mapping[str, Any] | None) -> int:
+    """In-place: drop cross-entity and circular evidence claims and recompute
+    the affected rule statuses so invalid evidence can never support a
+    CONFIRMED decision.  Returns the number of evidence items removed."""
+    if not isinstance(state, Mapping):
+        return 0
+    removed_count = 0
+    for record in _business_object_candidate_values(state):
+        candidate = _text(_first_value(record, ("candidateCode", "candidateId",
+                                                "businessObjectId", "code", "id")))
+        subjects = set(_candidate_entity_ids(record))
+        affected: list[str] = []
+        for rule_name in BUSINESS_OBJECT_RULES:
+            raw = _rule_field(record, rule_name)
+            evidence_values = raw.get("evidence") if isinstance(raw, Mapping) else None
+            if isinstance(evidence_values, Mapping):
+                evidence_values = [evidence_values]
+            if not isinstance(evidence_values, list):
+                continue
+            kept: list[Any] = []
+            changed = False
+            for evidence in evidence_values:
+                if not isinstance(evidence, Mapping):
+                    kept.append(evidence)
+                    continue
+                subject = _text(evidence.get("subjectId") or evidence.get("subject_id")
+                                or evidence.get("subjectEntity") or evidence.get("subject_entity"))
+                kind = _key(evidence.get("type") or evidence.get("evidenceType")
+                            or evidence.get("kind"))
+                circular = bool(evidence.get("derivedClaim") or evidence.get("isDerivedClaim")
+                                or kind in {"DERIVED_CLAIM", "CLASSIFICATION_CLAIM",
+                                            "MODEL_CLAIM"})
+                cross = bool(subject and subjects and subject not in subjects
+                             and subject != candidate)
+                if circular or cross:
+                    removed_count += 1
+                    changed = True
+                else:
+                    kept.append(evidence)
+            if changed:
+                raw["evidence"] = kept
+                affected.append(rule_name)
+        if affected:
+            for rule_name in affected:
+                raw = _rule_field(record, rule_name)
+                if not isinstance(raw, Mapping):
+                    continue
+                status = infer_business_object_rule_status(
+                    rule_name,
+                    _evidence_summary(raw.get("evidence") or raw.get("summary") or ""),
+                    negative_evidence=_evidence_summary(
+                        raw.get("negativeEvidence") or raw.get("contradiction") or ""),
+                    record=record, nested=raw)
+                if status == "UNKNOWN" and _business_rule_status(raw) == "PASS":
+                    raw["status"] = "UNKNOWN"
+            rules = tuple(_rule_decision(record, rule) for rule in BUSINESS_OBJECT_RULES)
+            derived = derive_business_object_decision(*[rule.status for rule in rules])
+            decision_key = next((key for key in ("finalDecision", "decision", "status",
+                                                 "conclusion", "结论", "最终决策")
+                                 if key in record), None)
+            if decision_key is None:
+                decision_key = "finalDecision"
+            eligibility_blocked = bool(record.get("eligibilityBlockers")
+                                       or record.get("eligibility_downgraded"))
+            if not eligibility_blocked and _status(record.get(decision_key)) != derived:
+                record.setdefault("previousStatus", record.get(decision_key))
+                record[decision_key] = derived
+            record.setdefault("evidenceCleaned", True)
+    return removed_count
+
+
+def apply_fk_coverage_defaults(state: Mapping[str, Any] | None) -> int:
+    """In-place: give every declared FK without a relation mapping or explicit
+    exclusion a durable disposition=UNRESOLVED instead of a coverage failure."""
+    if not isinstance(state, Mapping):
+        return 0
+    declarations = _records_for_keys(state, ("declaredForeignKeys", "declared_foreign_keys",
+                                             "foreignKeys", "foreign_keys", "fkDeclarations"))
+    if not declarations:
+        return 0
+    relations = _relation_rows(state)
+    mapped_pairs = {(relation["source_entity"], relation["target_entity"])
+                    for relation in relations
+                    if "FOREIGN_KEY" in relation["evidence_types"].split("|")}
+    mapped_ids = {relation["relation_decision_id"] for relation in relations
+                  if "FOREIGN_KEY" in relation["evidence_types"].split("|")}
+    defaulted = 0
+    for declaration in declarations:
+        disposition = _key(_first_value(declaration, ("disposition", "status", "coverageStatus")))
+        if disposition in {"EXCLUDED", "TECHNICAL", "NOT_APPLICABLE",
+                           "UNRESOLVED", "PENDING", "NEEDS_CONFIRMATION"}:
+            continue
+        source = _text(_first_value(declaration, ("sourceEntity", "sourceTable",
+                                                  "childTable", "source")))
+        target = _text(_first_value(declaration, ("targetEntity", "targetTable",
+                                                  "parentTable", "target")))
+        if (_text(_first_value(declaration, ("relationDecisionId", "relation_decision_id")))
+                in mapped_ids or (source, target) in mapped_pairs):
+            continue
+        declaration["disposition"] = "UNRESOLVED"
+        defaulted += 1
+    return defaulted
+
+
+def apply_mapping_dedup(state: Mapping[str, Any] | None) -> int:
+    """In-place: remove exact duplicate mapping definitions.  Conflicting
+    definitions under the same key are kept so the validator can raise a
+    structural error instead of silently dropping either one."""
+    if not isinstance(state, Mapping):
+        return 0
+    key_name = ("mappingDefinitions" if isinstance(state.get("mappingDefinitions"), list)
+                else "mapping_definitions")
+    definitions = state.get(key_name)
+    if not isinstance(definitions, list):
+        return 0
+    kept: list[Any] = []
+    seen: dict[str, str] = {}
+    removed = 0
+    for definition in definitions:
+        if not isinstance(definition, Mapping):
+            kept.append(definition)
+            continue
+        key = _text(definition.get("key") or definition.get("businessObjectCode")
+                    or definition.get("id") or definition.get("name"))
+        identity = json.dumps(definition, ensure_ascii=False, sort_keys=True, default=str)
+        if key:
+            if key in seen and seen[key] == identity:
+                removed += 1
+                continue
+            seen.setdefault(key, identity)
+        kept.append(definition)
+    if removed:
+        state[key_name] = kept
+    return removed
+
+
+def apply_assignment_normalization(state: Mapping[str, Any] | None) -> int:
+    """In-place: entities assigned to a BO that exists but is not CONFIRMED
+    move to UNRESOLVED.  References to non-existent BO codes stay untouched so
+    the structural validator can still raise a hard error for them."""
+    if not isinstance(state, Mapping):
+        return 0
+    records = business_object_decision_records(state)
+    all_codes = {record.candidate_code for record in records}
+    confirmed_codes = {record.candidate_code for record in records
+                       if record.decision == CONFIRMED}
+    changed = 0
+    for entity in _iter_entity_records(state):
+        status = _key(entity.get("businessObjectAssignmentStatus")
+                      or entity.get("business_object_assignment_status")
+                      or entity.get("归属状态"))
+        if status != "ASSIGNED":
+            continue
+        bo_code = _text(entity.get("businessObjectCode") or entity.get("business_object_code")
+                        or entity.get("业务对象编码"))
+        if bo_code and bo_code in all_codes and bo_code not in confirmed_codes:
+            entity["businessObjectAssignmentStatus"] = "UNRESOLVED"
+            entity.setdefault("missingEvidence",
+                              "业务对象尚未 CONFIRMED，归属自动降为 UNRESOLVED")
+            changed += 1
+    return changed
+
+
+def apply_decision_summary_recompute(state: Mapping[str, Any] | None) -> None:
+    """In-place: recompute the BO decision summary from canonical records."""
+    if not isinstance(state, Mapping):
+        return
+    summary = state.get("businessObjectDecisionSummary")
+    if not isinstance(summary, Mapping):
+        return
+    records = business_object_decision_records(state)
+    actual = {status: sum(record.decision == status for record in records)
+              for status in (CONFIRMED, CANDIDATE, REJECTED)}
+    for status, count in actual.items():
+        if status in summary and int(summary.get(status) or 0) != count:
+            summary[status] = count
+
+
+def apply_technical_attribute_exclusion(state: Mapping[str, Any] | None) -> int:
+    """In-place: mark confirmed technical attributes as excluded from the
+    formal model so they never flow into formal output.
+
+    Only a deterministic technical marker (是否技术字段 / isTechnical /
+    technicalFieldStatus) can exclude an attribute; a name-based heuristic
+    never excludes and stays a WARNING.  Excluded attributes remain in the
+    canonical inventory/audit for PK/FK and provenance analysis.
+    """
+    if not isinstance(state, Mapping):
+        return 0
+    excluded = 0
+    containers: list[tuple[list[Any], str]] = []
+    for key in ("businessAttributes", "business_attributes", "attributeDecisions"):
+        value = state.get(key)
+        if isinstance(value, Mapping):
+            value = list(value.values())
+        if isinstance(value, list):
+            containers.append((value, key))
+    for records, collection_key in containers:
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            deterministic = _key(record.get("是否技术字段") or record.get("isTechnical")
+                                 or record.get("is_technical")
+                                 or record.get("technicalFieldStatus")
+                                 or record.get("technical_field_status"))
+            technical = deterministic in {"Y", "YES", "TRUE", "1", "FAIL", "TECHNICAL"}
+            if not technical:
+                continue
+            # A claimed logical key must survive for PK/FK and key-semantics
+            # analysis (and its pending confirmation), so it is never silently
+            # excluded on the technical marker alone.
+            logical_key = _key(record.get("是否逻辑主键") or record.get("isLogicalKey")
+                               or record.get("is_logical_key"))
+            if logical_key in {"Y", "YES", "TRUE", "1"}:
+                continue
+            formal_key = next((key for key in ("是否正式", "formalStatus", "formal_status",
+                                               "isFormal", "is_formal")
+                               if key in record), None)
+            if formal_key is not None and _key(record.get(formal_key)) in {"N", "NO", "FALSE",
+                                                                           "0", "CANDIDATE"}:
+                continue
+            record["formalStatus"] = "CANDIDATE"
+            record.setdefault("excludedFromFormal", True)
+            record.setdefault("exclusionReason",
+                              "确认的技术字段由服务端自动从正式属性中排除")
+            excluded += 1
+    return excluded
+
+
+def normalize_modeling_state(state: Mapping[str, Any] | None) -> dict[str, Any]:
+    """In-place deterministic normalization applied before any stage check.
+
+    Auto-resolvable gaps are fixed server-side (DETERMINISTIC_NORMALIZATION),
+    ineligible elements are downgraded (FORMAL_ELIGIBILITY), and only genuine
+    structural defects remain for the Agent repair loop.  Returns a summary of
+    the normalizations applied for audit/reporting.
+    """
+    if not isinstance(state, Mapping):
+        return {}
+    summary: dict[str, Any] = {}
+    summary["assetCoverageDefaults"] = apply_asset_processing_coverage_defaults(state)
+    summary["aggregationDowngrades"] = apply_aggregation_downgrades(state)
+    summary["relationEligibilityDowngrades"] = apply_relation_eligibility_downgrades(state)
+    summary["statusUpgradeRejections"] = apply_status_upgrade_protection(state)
+    summary["businessObjectNormalization"] = apply_business_object_normalization(state)
+    summary["evidenceCleanedCount"] = apply_evidence_isolation_cleanup(state)
+    summary["fkCoverageDefaults"] = apply_fk_coverage_defaults(state)
+    summary["mappingDuplicatesRemoved"] = apply_mapping_dedup(state)
+    summary["assignmentDowngrades"] = apply_assignment_normalization(state)
+    summary["technicalAttributesExcluded"] = apply_technical_attribute_exclusion(state)
+    apply_decision_summary_recompute(state)
+    return summary
+
+
 def _csv_rows(blob: bytes) -> tuple[list[str], list[dict[str, str]]]:
     text = bytes(blob).decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text, newline=""))
@@ -1091,6 +1564,7 @@ class BusinessObjectDecision:
     missing_evidence: str = ""
     previous_status: str = ""
     upgrade_evidence_ids: tuple[str, ...] = field(default_factory=tuple)
+    eligibility_downgraded: bool = False
 
     @property
     def derived_decision(self) -> str:
@@ -1098,6 +1572,14 @@ class BusinessObjectDecision:
 
     @property
     def decision(self) -> str:
+        # A server-side formal-eligibility downgrade (for example a CONFIRMED
+        # Business Object without a unique main logical entity) is the
+        # authoritative final decision, even when the R1-R5 rules alone would
+        # still derive CONFIRMED.  The element stays in the decision audit as
+        # CANDIDATE and is excluded from formal output instead of entering the
+        # Agent repair loop.
+        if self.eligibility_downgraded:
+            return self.reported_decision or UNRESOLVED
         return self.derived_decision
 
     def as_csv_row(self) -> list[str]:
@@ -1490,6 +1972,8 @@ def business_object_decision_records(state: Mapping[str, Any] | None) -> list[Bu
             missing_evidence=unknowns,
             previous_status=_text(_first_value(record, ("previousStatus", "previous_status"))),
             upgrade_evidence_ids=upgrade_ids,
+            eligibility_downgraded=bool(record.get("eligibilityBlockers")
+                                        or record.get("eligibility_downgraded")),
         ))
     return result
 
@@ -1505,9 +1989,10 @@ def validate_business_object_decisions(state: Mapping[str, Any] | None) -> list[
             issues.append(_issue("BUSINESS_OBJECT_DECISION_MISMATCH", "ERROR",
                                  "业务对象候选必须有稳定编码和名称",
                                  artifact_type="BUSINESS_OBJECT", artifact_id=record.candidate_code))
-        if not re.fullmatch(r"(?:100|[0-9]{1,2})(?:\.\d+)?%", record.confidence):
+        if record.confidence != "UNKNOWN" and not re.fullmatch(
+                r"(?:100|[0-9]{1,2})(?:\.\d+)?%", record.confidence):
             issues.append(_issue("INVALID_BUSINESS_OBJECT_CONFIDENCE", "ERROR",
-                                 f"业务对象 {record.candidate_code} 的置信度必须是 0-100 的百分比数值",
+                                 f"业务对象 {record.candidate_code} 的置信度必须是 0-100 的百分比数值或 UNKNOWN",
                                  artifact_type="BUSINESS_OBJECT", artifact_id=record.candidate_code))
         if record.candidate_code in seen:
             issues.append(_issue("BUSINESS_OBJECT_DECISION_MISMATCH", "ERROR",
@@ -1515,7 +2000,8 @@ def validate_business_object_decisions(state: Mapping[str, Any] | None) -> list[
                                  artifact_type="BUSINESS_OBJECT", artifact_id=record.candidate_code))
         seen.add(record.candidate_code)
         expected = record.derived_decision
-        if record.reported_decision and record.reported_decision != expected:
+        if (record.reported_decision and record.reported_decision != expected
+                and not record.eligibility_downgraded):
             issues.append(_issue("BUSINESS_OBJECT_DECISION_MISMATCH", "ERROR",
                                  f"业务对象 {record.candidate_code} 的最终决策与 R1-R5 不一致",
                                  artifact_type="BUSINESS_OBJECT", artifact_id=record.candidate_code,
@@ -3435,6 +3921,8 @@ def write_validation_report(work_dir: str | os.PathLike[str],
     all_issues = semantic + audit
     normalized_status = _key(status) if status else "FAILED"
     coverage = coverage if isinstance(coverage, Mapping) else decision_audit_coverage(target_dir)
+    blocking = [item for item in all_issues if is_structural_blocker(item)]
+    advisory = [item for item in all_issues if not is_structural_blocker(item)]
     report = {
         "schemaVersion": "2",
         "decisionAuditTemplateVersion": DECISION_AUDIT_TEMPLATE_VERSION,
@@ -3445,8 +3933,8 @@ def write_validation_report(work_dir: str | os.PathLike[str],
         "rule_decision_coverage": _coverage_value(coverage, "rule_decisions.csv"),
         "indicator_decision_coverage": _coverage_value(coverage, "indicator_decisions.csv"),
         "logical_entity_decision_coverage": _coverage_value(coverage, "logical_entity_decisions.csv"),
-        "errors": [item.as_dict() for item in all_issues if item.severity == "ERROR"],
-        "warnings": [item.as_dict() for item in all_issues if item.severity == "WARNING"],
+        "errors": [item.as_dict() for item in blocking],
+        "warnings": [item.as_dict() for item in advisory],
         "issues": [item.as_dict() for item in all_issues],
         "decisionAuditCoverage": dict(coverage),
     }
@@ -3490,7 +3978,7 @@ _FORMAL_ARTIFACT_REQUIRED_HEADERS = {
 # into every stage signature so stale PASSED/FAILED checkpoints written by an
 # older validator (for example the pre-entity-scope duplicate-name rule) are
 # invalidated and re-validated with the current code instead of being reused.
-VALIDATION_CACHE_VERSION = "2026-08-19-asset-composition-gate-relaxed"
+VALIDATION_CACHE_VERSION = "2026-08-19-gate-action-normalization-v2"
 
 MODEL_VALIDATION_STAGES = (
     ("INPUT_CONTEXT", "输入契约"),
@@ -3518,17 +4006,21 @@ _STAGE_OUTPUTS = {
 }
 
 _STAGE_STATE_KEYS = {
-    "ASSET_INVENTORY": ("assetInventory", "sourceInventory", "tables"),
+    "ASSET_INVENTORY": ("assetInventory", "sourceInventory", "tables",
+                        "assetDecisions", "asset_processing_decisions",
+                        "autoResolvedProcessingDecisions",
+                        "auto_resolved_processing_decisions"),
     "ALL_ATTRIBUTES": ("allAttributes", "candidateAttributes", "businessAttributes"),
     "KEYS_AND_FOREIGN_KEYS": (
         "allAttributes", "declaredForeignKeys", "declared_foreign_keys",
         "foreignKeys", "foreign_keys", "fkDeclarations",
     ),
     "TERMS": ("termDecisions", "terms"),
-    "LOGICAL_ENTITIES": ("logicalEntities", "logicalEntityDecisions"),
+    "LOGICAL_ENTITIES": ("logicalEntities", "logicalEntityDecisions",
+                         "businessObjectDecisions"),
     "BUSINESS_ATTRIBUTES": ("businessAttributes", "candidateAttributes"),
     "ENTITY_RELATIONS": ("relationDecisions",),
-    "BUSINESS_OBJECTS": ("businessObjectDecisions",),
+    "BUSINESS_OBJECTS": ("businessObjectDecisions", "businessObjectDecisionSummary"),
     # Final validation includes cross-file integrity and audit coverage, so
     # any semantic collection that can affect that result belongs in the
     # content signature.  This prevents an upstream change from reusing an
@@ -3538,8 +4030,10 @@ _STAGE_STATE_KEYS = {
         "allAttributes", "candidateAttributes", "declaredForeignKeys",
         "declared_foreign_keys", "foreignKeys", "foreign_keys", "fkDeclarations",
         "logicalEntities", "logicalEntityDecisions", "businessAttributes",
-        "relationDecisions", "businessObjectDecisions", "termDecisions",
-        "ruleDecisions", "indicatorDecisions", "pendingConfirmations",
+        "relationDecisions", "businessObjectDecisions", "businessObjectDecisionSummary",
+        "termDecisions", "ruleDecisions", "indicatorDecisions", "pendingConfirmations",
+        "mappingDefinitions", "mapping_definitions", "assetDecisions",
+        "autoResolvedProcessingDecisions", "auto_resolved_processing_decisions",
     ),
 }
 
@@ -3676,10 +4170,11 @@ def validate_modeling_stages(work_dir: str | os.PathLike[str],
     target_output = Path(output_dir)
     current = dict(state) if isinstance(state, Mapping) else {}
     # Auto-resolvable gaps are normalized before any stage check: undecided
-    # input assets become processingDecision=UNKNOWN and weak COMPOSITION
-    # edges are downgraded to REFERENCE, so they never hard-block a run.
-    apply_asset_processing_coverage_defaults(current)
-    apply_aggregation_downgrades(current)
+    # input assets become processingDecision=UNKNOWN, weak COMPOSITION edges
+    # are downgraded to REFERENCE, ineligible CONFIRMED relations/BOs are
+    # downgraded to CANDIDATE and invalid evidence is removed, so none of
+    # them can hard-block a run or re-enter the Agent repair loop.
+    normalize_modeling_state(current)
     cache = current.get("validationStages") if isinstance(current.get("validationStages"), dict) else {}
     active = _requested_stage_set(required_outputs)
     events: list[dict[str, Any]] = []
@@ -3711,7 +4206,7 @@ def validate_modeling_stages(work_dir: str | os.PathLike[str],
                 break
             continue
         issues = _stage_specific_issues(stage, target_work, target_output, current, required_outputs)
-        status = "FAILED" if any(item.severity == "ERROR" for item in issues) else "PASSED"
+        status = "FAILED" if any(is_structural_blocker(item) for item in issues) else "PASSED"
         row = {"stage": stage, "name": name, "status": status, "signature": signature,
                "validatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                "issueCodes": [item.code for item in issues],
@@ -3823,8 +4318,7 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
     state = _normalized_logical_entity_state(state)
     # Apply the same auto-resolutions before the staged/legacy validators run
     # so the persisted modeling_state.json and audit CSVs carry them.
-    apply_asset_processing_coverage_defaults(state)
-    apply_aggregation_downgrades(state)
+    normalize_modeling_state(state)
     output_path = Path(output_dir) if output_dir is not None else target_dir.parent / "mission-output"
 
     # Validate the current stage only.  Passed stages are content-addressed;
@@ -3880,17 +4374,26 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
     missing_before = [name for name in (*DECISION_AUDIT_FILES, *WORK_REQUIRED_FILES)
                       if not (target_dir / name).is_file()]
     if marker_exists and missing_before:
-        audit_issues = [_issue("MISSING_DECISION_AUDIT", "ERROR",
-                                f"缺少必须的 mission-work 审计文件 {name}",
-                                artifact_type="DECISION_AUDIT", artifact_id=name)
-                        for name in missing_before]
-        coverage = decision_audit_coverage(target_dir, state)
-        path = write_validation_report(target_dir, status="FAILED",
-                                       audit_issues=audit_issues, coverage=coverage)
-        return {"status": "FAILED", "report": path, "issues": audit_issues,
-                "auditIssues": audit_issues, "coverage": coverage,
-                "stages": stage_result.get("stages") or [],
-                "stageEvents": stage_result.get("events") or []}
+        # Decision audits are deterministic projections of the canonical
+        # modeling_state.json, so a missing audit is rebuilt server-side
+        # instead of being treated as an unrecoverable failure.  Only a
+        # rebuild that still cannot produce the required files (for example
+        # a corrupt or unreadable canonical state) is a structural ERROR.
+        write_decision_audits(target_dir, state, write_report=False)
+        still_missing = [name for name in (*DECISION_AUDIT_FILES, *WORK_REQUIRED_FILES)
+                         if not (target_dir / name).is_file()]
+        if still_missing:
+            audit_issues = [_issue("MISSING_DECISION_AUDIT", "ERROR",
+                                    f"审计文件重建后仍缺失 {name}",
+                                    artifact_type="DECISION_AUDIT", artifact_id=name)
+                            for name in still_missing]
+            coverage = decision_audit_coverage(target_dir, state)
+            path = write_validation_report(target_dir, status="FAILED",
+                                           audit_issues=audit_issues, coverage=coverage)
+            return {"status": "FAILED", "report": path, "issues": audit_issues,
+                    "auditIssues": audit_issues, "coverage": coverage,
+                    "stages": stage_result.get("stages") or [],
+                    "stageEvents": stage_result.get("events") or []}
 
     # First finalize is the only allowed materialization point.  The writer
     # emits the complete decision ledger, not just formal/confirmed results.
@@ -3927,7 +4430,7 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
         audit_issues.append(_issue("DECISION_AUDIT_COVERAGE", "ERROR",
                                    "决策审计未达到 100% 覆盖", artifact_type="DECISION_AUDIT",
                                    details=dict(coverage)))
-    status = "FAILED" if any(item.severity == "ERROR"
+    status = "FAILED" if any(is_structural_blocker(item)
                               for item in [*semantic_issues, *audit_issues]) else "PASSED"
     report_path = write_validation_report(target_dir, status=status,
                                           issues=semantic_issues,
