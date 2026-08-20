@@ -10,4 +10,4 @@
   - safety valve 与 gate retry 只对结构性阻断累计：`_modeling_gate_signature`/`observe_gate` 仅统计 `STRUCTURAL_BLOCKER`，证据不足、UNKNOWN/CANDIDATE、确定性修复与质量 WARNING 不消耗 `gate_retries`、不触发 `MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE`；`_gate_blocker_detail`、`block_modeling`、`finalize_modeling_task` 的 errors 只取结构性阻断。
   - 校验缓存：`_STAGE_STATE_KEYS` 纳入规范化产物（`assetDecisions`、`autoResolvedProcessingDecisions`、`businessObjectDecisionSummary`、`mappingDefinitions` 等），`VALIDATION_CACHE_VERSION` 升级为 `2026-08-19-gate-action-normalization-v2`，旧 FAILED 阶段缓存自动失效，确定性修复后的状态不会命中修复前缓存。
   - 新增 `tests/test_gate_action_normalization.py` 共 29 个回归测试，覆盖：动作分类、evidence 自动清理降级、confidence/决策重算、审计重建、FK/资产覆盖、关系/主实体/技术字段降级、描述与特殊字符 WARNING、malformed CSV 与重复编码仍 FAILED、非结构性问题不累计 gate retry、相同语义问题不触发 repeated safety valve、旧 FAILED 缓存不阻断规范化状态。更新 `test_semantic_finalize_upload_boundary.py`（无证据关系降级后 PASSED、审计重建、malformed 输出 FAILED）与 `test_v0001_rule_registry.py`（缺定义 WARNING、缺名称 ERROR）。
-  - 验证：完整测试集 280 通过（skipped=3），`py_compile` 与 `git diff --check` 通过。本次未部署。
+  - 验证：完整测试集 280 通过（skipped=3），`py_compile` 与 `git diff --check` 通过。已部署两个服务（commit `8860939`，web 47313 与 standalone 47314 均已重启，健康检查均 200，部署前确认两服务无活跃运行）。
