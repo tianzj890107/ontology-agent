@@ -42,6 +42,7 @@
   - 损失：47314 全部历史 run 的工作目录与元数据（含此前 5 个“本体建模”会话及更早测试 run）永久丢失；47313 任务数据不受影响（独立存储，健康检查 200）。
   - 止损：重启 47314（pid 1963125），`SQLiteRunRepository._initialize` 重建空库（`modeling_runs` 表存在，count=0），`GET /api/modeling-runs` 返回 `{"runs": []}`，两服务健康。历史数据无法找回。
   - 教训/后续：清理脚本删除前必须断言目标路径是预期的 run 子目录（如 `[[ $run_id == run_* ]]` 且路径非根目录）再执行 `rm -rf`；本机对服务器文件删除命令需二次确认，避免变量为空时误删根目录。已确认当前 `standalone-modeling-runs/` 仅含重建的空库，无残留误删文件。
+  - 规则沉淀：按用户强制要求，已在本仓库 `AGENTS.md` 新增「文件与数据删除安全」章节（最高优先级规则）：删除前必须写出完整目标路径、确认目标形态与存在性、生产数据优先走 API、禁止变量为空时 `rm -rf`、删除前 dry-run、拿不准先问用户。该文件每次任务必读，确保以后不再误删。
 
 - 加固 47314 run 存储自愈能力：SQLite 表意外丢失时自动重建（已部署 47314，commit `d3a6dce`）：
   - 背景：上述事故暴露 `SQLiteRunRepository` 只在 `__init__` 建表；数据库文件被外部清空/删除后，`load_all`/`upsert`/`get` 持续报 `no such table`，`GET /api/modeling-runs` 等接口全部 500，直到重启才能恢复。
