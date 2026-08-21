@@ -2288,6 +2288,7 @@ def main():
 
     engine = create_db_engine()
     result = {
+        "tableNames": [],
         "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "schema": source_schema,
         "schemas": selected_schemas,
@@ -2328,6 +2329,7 @@ def main():
                 ],
             })
     result["tables"] = tables
+    result["tableNames"] = sorted(table["table"] for table in tables)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print("wrote %d tables to %s" % (len(tables), output_path))
@@ -3728,7 +3730,10 @@ class Task:
                 "禁止把密码直接拼进 postgresql:// URL,因为密码可能包含 @、! 等特殊字符;"
                 "如果已有 extract_schema.py 语法错误或包含 ********,先修复/重写连接部分再执行;"
                 "数据库建模必须先执行 mission-input/extract_schema.py 提取表结构到 work/schema_extract.json，"
-                "并基于该文件建模;缺少表结构证据时禁止直接使用模板样例数据生成正式输出。"
+                "并基于该文件建模;缺少表结构证据时禁止直接使用模板样例数据生成正式输出;"
+                "schema_extract.json 的 tableNames 位于文件首部，先读取它获取全部表名清单，"
+                "再按需用 grep 按表名或列名定向查询单表定义，禁止反复整文件读取;"
+                "模板与规范 CSV 只需读取一次理解结构，不得重复读取同一文件。"
             )
         try:
             downloaded, errors = download_mission_files(minio_config(), safe, self.cwd)

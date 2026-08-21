@@ -1652,7 +1652,10 @@ class ModelingRunManager:
                     "禁止直接读取 input/.db_connection.json 的加密 password，也禁止手工拼接连接 URL；"
                     "数据库查询必须使用连接 helper 配置的 sourceSchema/search_path，不得默认查询 public；"
                     "数据库模式必须先执行 mission-input/extract_schema.py 提取表结构到 work/schema_extract.json，"
-                    "并基于该文件建模;缺少表结构证据时禁止导出正式 CSV。"
+                    "并基于该文件建模;缺少表结构证据时禁止导出正式 CSV;"
+                    "schema_extract.json 的 tableNames 位于文件首部，先读取它获取全部表名清单，"
+                    "再按需用 grep 按表名或列名定向查询单表定义，禁止反复整文件读取;"
+                    "模板与规范 CSV 只需读取一次理解结构，不得重复读取同一文件。"
                 )
 
             def emit(event: dict[str, Any]) -> None:

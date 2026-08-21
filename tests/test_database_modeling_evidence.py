@@ -94,6 +94,7 @@ class DatabaseModelingEvidenceTests(unittest.TestCase):
             content = extract.read_text(encoding="utf-8")
             self.assertIn("create_db_engine", content)
             self.assertIn("schema_extract.json", content)
+            self.assertIn("tableNames", content)
 
 
 if __name__ == "__main__":
