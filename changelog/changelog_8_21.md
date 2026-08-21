@@ -36,3 +36,9 @@
   - 变更：后端 `standalone_modeling_server.py` 为 `ModelingRun` 增加 `title` 字段（默认空），`create()` 接受 `title` 参数并规范化（空白视为空），`as_dict()`/`_load`/`_hydrate_repository_item`/`refresh_from_repository`/`get` 全链路读写 title，POST `/api/modeling-runs` 读取 `payload.title`；SQLite payload 快照自动携带该字段，无需 schema 迁移。前端 `main.jsx` 新会话卡片增加“任务名称（可选）”输入框（`standaloneTitle` state，不填时用建模要求作会话名），创建请求携带 `title`，会话列表按 title 显示；历史会话（无 title）继续走 要求/本体建模 降级，不强制改名。
   - 测试：新增 `test_create_with_title_persists_title_and_survives_reload`（title 保存、空白规范化、重载后保留）；`test_frontend_contract.py` 增加任务名称输入框与创建传参断言。相关测试 53 OK；完整测试集 336 OK（skipped=3）。
   - 部署：`2e3303a` 推送后部署两服务（部署前无活跃任务：47313 working=0、47314 runs 空）；47313 经 `deploy_server.sh` 重启（pid 1950093），47314 重启（pid 1950865）；两服务 `/` 均 200、47313 `/health` 200；服务器 `git rev-parse HEAD=2e3303a`；`frontend/dist` 含“任务名称（可选）”输入框产物；端到端验证 POST `/api/modeling-runs` 携带 `title=部署验证会话` 返回 title 正确，验证用 run 已清理。
+
+- ⚠️ 运维事故记录：47314 run 数据目录与 SQLite 数据库被误删，无备份不可恢复：
+  - 经过：验证 47314 会话命名功能时创建临时 run 做端到端测试，清理时先删除数据库行，随后执行 `rm -rf ".../standalone-modeling-runs/$run_id"` 删除 run 目录；`$run_id` 只在 python heredoc 中定义、bash 环境未导出，命令实际变成 `rm -rf ".../standalone-modeling-runs/"`（目标为整个 runs 根目录）。虽然 rm 因目录非空报错退出，但已递归删除目录下全部 run 工作目录（input/work/output、事件日志），SQLite 数据库也随之丢失（0 字节），无备份。
+  - 损失：47314 全部历史 run 的工作目录与元数据（含此前 5 个“本体建模”会话及更早测试 run）永久丢失；47313 任务数据不受影响（独立存储，健康检查 200）。
+  - 止损：重启 47314（pid 1963125），`SQLiteRunRepository._initialize` 重建空库（`modeling_runs` 表存在，count=0），`GET /api/modeling-runs` 返回 `{"runs": []}`，两服务健康。历史数据无法找回。
+  - 教训/后续：清理脚本删除前必须断言目标路径是预期的 run 子目录（如 `[[ $run_id == run_* ]]` 且路径非根目录）再执行 `rm -rf`；本机对服务器文件删除命令需二次确认，避免变量为空时误删根目录。已确认当前 `standalone-modeling-runs/` 仅含重建的空库，无残留误删文件。
