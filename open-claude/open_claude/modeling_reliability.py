@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from .modeling_csv_contract import canonical_filename
 from .modeling_rule_registry import (
     RuleFinding,
     logical_entity_main_flag,
@@ -695,14 +696,16 @@ def _issue(code: str, severity: str, message: str, *, artifact_type: str = "",
 # suggestion rather than an unreadable artifact.  They may stay WARNING even
 # when the underlying rule is HARD_FORMAL: the model element is auto-downgraded
 # (or excluded from the formal CSV) instead of failing the whole run.
+# Only genuine formal-eligibility downgrades stay non-blocking: the server
+# downgrades the state decision and the formal output is expected to exclude
+# the element.  Deterministic format/structure errors (missing required
+# fields, bad Y/N/enums/codes, duplicate codes, missing cardinality, M:N in a
+# formal relation CSV, wrong main-entity count, main flag without a CONFIRMED
+# business object) are STRUCTURAL_BLOCKER again; they must never ship inside
+# a PASSED formal CSV.
 _FORMAL_ELIGIBILITY_CODES = frozenset({
     "UNSUPPORTED_CONFIRMED_RELATION", "TRANSFORMATION_EVIDENCE_GATE",
     "UNSUPPORTED_STATUS_UPGRADE", "RELATION_DECISION_MISSING_FROM_FORMAL_OUTPUT",
-    "V0001_FORMAL_MAIN_ENTITY_COUNT", "V0001_FORMAL_LOGICAL_KEY_MISSING",
-    "V0001_FORMAL_CARDINALITY_MISSING", "V0001_CONFIRMED_CARDINALITY_MISSING",
-    "V0001_FORMAL_MANY_TO_MANY", "V0001_CONFIRMED_MANY_TO_MANY",
-    "V0001_MAIN_FLAG_WITHOUT_BUSINESS_OBJECT",
-    "V0001_MAIN_FLAG_WITHOUT_CONFIRMED_BUSINESS_OBJECT",
 })
 _DETERMINISTIC_NORMALIZATION_CODES = frozenset({
     "ASSET_PROCESSING_COVERAGE_MISSING", "INVALID_AGGREGATION_EDGE",
@@ -2627,7 +2630,7 @@ def validate_formal_relation_csv(blob: bytes, state: Mapping[str, Any] | None) -
         decision = decisions.get(relation_id)
         if decision is None:
             issues.append(ValidationIssue(
-                code="UNSUPPORTED_CONFIRMED_RELATION",
+                code="FORMAL_OUTPUT_INELIGIBLE_ROW",
                 severity="ERROR",
                 message=f"正式关系 {relation_id} 没有对应的关系决策和证据，不能进入正式关系 CSV",
                 artifact_type="ENTITY_RELATION",
@@ -2643,7 +2646,7 @@ def validate_formal_relation_csv(blob: bytes, state: Mapping[str, Any] | None) -
             evidence_ok = has_transformation_evidence(decision)
         if status != CONFIRMED or not evidence_ok:
             issues.append(ValidationIssue(
-                code="UNSUPPORTED_CONFIRMED_RELATION",
+                code="FORMAL_OUTPUT_INELIGIBLE_ROW",
                 severity="ERROR",
                 message=f"正式关系 {relation_id} 缺少足够证据，CANDIDATE/UNRESOLVED 不能写入正式关系 CSV",
                 artifact_type="ENTITY_RELATION",
@@ -3961,6 +3964,25 @@ _FORMAL_ARTIFACT_REQUIRED_HEADERS = {
     "logical_entities.csv": {"业务对象编码", "逻辑实体编码", "逻辑实体名称", "逻辑实体定义"},
     "business_attributes.csv": {"逻辑实体编码", "业务属性编码", "业务属性名称", "是否页面显示"},
     "entity_relations.csv": {"关系编码", "源逻辑实体编码", "目标逻辑实体编码", "关系分类"},
+    "entity_relationships.csv": {"关系编码", "源逻辑实体编码", "目标逻辑实体编码", "关系分类"},
+    "business_object_relations.csv": {"关系编码", "源业务对象编码", "源业务对象名称", "关系类型",
+                                      "关系中文名名称", "目标业务对象编码", "目标业务对象名称",
+                                      "关系基数", "关系描述"},
+    "business_object_relationships.csv": {"关系编码", "源业务对象编码", "源业务对象名称", "关系类型",
+                                          "关系中文名名称", "目标业务对象编码", "目标业务对象名称",
+                                          "关系基数", "关系描述"},
+    "object_relations.csv": {"关系编码", "源业务对象编码", "源业务对象名称", "关系类型",
+                             "关系中文名名称", "目标业务对象编码", "目标业务对象名称",
+                             "关系基数", "关系描述"},
+    "statuses.csv": {"业务对象编码", "业务对象名称", "状态编码", "状态中文名", "状态含义",
+                     "触发条件", "是否终态", "是否主终态"},
+    "status.csv": {"业务对象编码", "业务对象名称", "状态编码", "状态中文名", "状态含义",
+                   "触发条件", "是否终态", "是否主终态"},
+    "business_object_statuses.csv": {"业务对象编码", "业务对象名称", "状态编码", "状态中文名",
+                                     "状态含义", "触发条件", "是否终态", "是否主终态"},
+    "events.csv": {"事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"},
+    "event.csv": {"事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"},
+    "business_events.csv": {"事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"},
     "business_rules.csv": {"规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"},
     "rules.csv": {"规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"},
     "terms.csv": {"术语编码", "术语名称", "术语定义"},
@@ -3998,7 +4020,12 @@ _STAGE_OUTPUTS = {
     "LOGICAL_ENTITIES": {"logical_entities.csv"},
     "BUSINESS_ATTRIBUTES": {"business_attributes.csv"},
     "ENTITY_RELATIONS": {"entity_relations.csv", "entity_relationships.csv"},
-    "BUSINESS_OBJECTS": {"business_objects.csv"},
+    "BUSINESS_OBJECTS": {
+        "business_objects.csv", "business_object_relations.csv",
+        "business_object_relationships.csv", "object_relations.csv",
+        "statuses.csv", "status.csv", "business_object_statuses.csv",
+        "events.csv", "event.csv", "business_events.csv",
+    },
     "GOVERNANCE_AND_FINAL": {
         "business_rules.csv", "rules.csv", "metrics.csv", "indicator.csv",
         "indicators.csv", "atomic_indicators.csv", "composite_indicators.csv",
@@ -4069,7 +4096,10 @@ def _requested_stage_set(required_outputs: Iterable[str] | None) -> set[str]:
         active.add("BUSINESS_ATTRIBUTES")
     if requested & {"entity_relations.csv", "entity_relationships.csv", "business_objects.csv"}:
         active.add("ENTITY_RELATIONS")
-    if "business_objects.csv" in requested:
+    if (requested & {"business_objects.csv", "business_object_relations.csv",
+                      "business_object_relationships.csv", "object_relations.csv",
+                      "statuses.csv", "status.csv", "business_object_statuses.csv",
+                      "events.csv", "event.csv", "business_events.csv"}):
         active.add("BUSINESS_OBJECTS")
     return active
 
@@ -4299,6 +4329,182 @@ def _formal_output_issues(output_dir: Path, work_dir: Path,
     return issues
 
 
+def _formal_reference_index(output_dir: Path) -> dict[str, set[str]]:
+    """Collect formal codes from every contract CSV in the output directory."""
+    from open_claude.modeling_csv_contract import build_reference_index, contract_for
+    rows_by_file: dict[str, list[dict[str, Any]]] = {}
+    for path in sorted(output_dir.glob("*.csv")):
+        name = path.name.lower()
+        if contract_for(name) is None:
+            continue
+        try:
+            parsed = list(csv.reader(io.StringIO(path.read_bytes().decode("utf-8-sig"), newline="")))
+        except (OSError, UnicodeDecodeError, csv.Error):
+            continue
+        if not parsed or not parsed[0]:
+            continue
+        rows_by_file[name] = [dict(zip(parsed[0], row)) for row in parsed[1:]
+                              if row and any(_text(value) for value in row)]
+    return build_reference_index(rows_by_file)
+
+
+def _state_record_status(records: Iterable[Mapping[str, Any]], code: str,
+                         code_keys: Iterable[str]) -> str:
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        if _text(record.get("code") or record.get("id")) == code:
+            status = record.get("formalStatus") or record.get("decision") or record.get("status")
+            if status:
+                return _status(status)
+        for key in code_keys:
+            if _text(record.get(key)) == code:
+                status = record.get("formalStatus") or record.get("decision") or record.get("status")
+                if status:
+                    return _status(status)
+    return ""
+
+
+def _formal_eligibility_issues(output_dir: Path, state: Mapping[str, Any],
+                               requested_names: set[str]) -> list[ValidationIssue]:
+    """Block formal rows whose element decision is explicitly ineligible.
+
+    FORMAL_ELIGIBILITY downgrades (CANDIDATE/UNRESOLVED/REJECTED) are resolved
+    server-side on the state; the formal CSV must exclude those elements.  If
+    such a row is still present in a formal output, the artifact is not
+    eligible for PASSED delivery.  Business objects and entity relations have
+    their own dedicated decision-consistency checks; this covers logical
+    entities and business attributes, whose decisions live in the state.
+    """
+    issues: list[ValidationIssue] = []
+
+    def records_for(keys):
+        collected = []
+        for key in keys:
+            value = state.get(key)
+            if isinstance(value, Mapping):
+                value = list(value.values())
+            if isinstance(value, list):
+                collected.extend(item for item in value if isinstance(item, Mapping))
+        return collected
+
+    entity_records = records_for(("logicalEntityDecisions", "logical_entity_decisions", "entities"))
+    attribute_records = records_for(("businessAttributes", "business_attributes",
+                                     "attributeDecisions", "attribute_decisions"))
+    for name in sorted(requested_names):
+        path = output_dir / name
+        if not path.is_file():
+            continue
+        try:
+            parsed = list(csv.reader(io.StringIO(path.read_bytes().decode("utf-8-sig"), newline="")))
+        except (OSError, UnicodeDecodeError, csv.Error):
+            continue
+        if not parsed:
+            continue
+        header = parsed[0]
+        base = os.path.basename(name).lower()
+        if base in {"logical_entities.csv"}:
+            code_column = "逻辑实体编码"
+            records = entity_records
+            artifact_type = "LOGICAL_ENTITY"
+        elif base in {"business_attributes.csv"}:
+            code_column = "业务属性编码"
+            records = attribute_records
+            artifact_type = "BUSINESS_ATTRIBUTE"
+        else:
+            continue
+        if code_column not in header or not records:
+            continue
+        for line_no, row in enumerate(parsed[1:], 2):
+            if len(row) != len(header):
+                continue
+            code = _text(row[header.index(code_column)])
+            if not code:
+                continue
+            status = _state_record_status(records, code, ("logicalEntityCode", "logical_entity_code",
+                                                          "entityId", "entity_id", "attributeCode",
+                                                          "attribute_code", "业务属性编码"))
+            if status in {"CANDIDATE", "UNRESOLVED", "REJECTED"}:
+                issues.append(_issue(
+                    "FORMAL_OUTPUT_INELIGIBLE_ROW", "ERROR",
+                    f"正式 {artifact_type} {code} 已被降级为 {status}，不具备正式输出资格，必须从 {name} 排除",
+                    artifact_type=artifact_type, artifact_id=code,
+                    details={"decision": status, "artifact": name, "row": line_no}))
+    return issues
+
+
+_REFERENCE_SOURCE_FILES = {
+    "businessObjectCodes": "business_objects.csv",
+    "logicalEntityCodes": "logical_entities.csv",
+    "businessAttributeCodes": "business_attributes.csv",
+}
+_REFERENCE_KEYS_BY_FILE = {
+    "business_objects.csv": frozenset(),
+    "logical_entities.csv": frozenset({"businessObjectCodes"}),
+    "business_attributes.csv": frozenset({"logicalEntityCodes"}),
+    "entity_relations.csv": frozenset({"logicalEntityCodes", "businessAttributeCodes"}),
+    "entity_relationships.csv": frozenset({"logicalEntityCodes", "businessAttributeCodes"}),
+    "business_object_relations.csv": frozenset({"businessObjectCodes"}),
+    "business_object_relationships.csv": frozenset({"businessObjectCodes"}),
+    "object_relations.csv": frozenset({"businessObjectCodes"}),
+    "statuses.csv": frozenset({"businessObjectCodes"}),
+    "status.csv": frozenset({"businessObjectCodes"}),
+    "business_object_statuses.csv": frozenset({"businessObjectCodes"}),
+}
+
+
+def _cross_file_references_for(name: str, index: Mapping[str, set[str]],
+                               canonical_present: set[str]) -> Mapping[str, set[str]] | None:
+    """Return the reference index only when every referenced source is present.
+
+    A reference is only checked against the delivered formal set: if the
+    source file (business_objects/logical_entities/business_attributes) is
+    not among the requested outputs, the reference cannot be judged and the
+    check is skipped instead of reporting a false missing-reference error.
+    """
+    needed = _REFERENCE_KEYS_BY_FILE.get(canonical_filename(name), frozenset())
+    if not needed:
+        return None
+    for key in needed:
+        if _REFERENCE_SOURCE_FILES[key] not in canonical_present:
+            return None
+    return index
+
+
+def _formal_cross_file_issues(output_dir: Path, state: Mapping[str, Any],
+                              requested_names: set[str]) -> list[ValidationIssue]:
+    """Run cross-file reference and formal-eligibility checks once at finalize.
+
+    Reference existence is a deterministic rule from the shared CSV contract;
+    it needs the complete set of formal CSVs, so it can only run after all
+    requested files exist.  Eligibility checks verify that elements downgraded
+    to CANDIDATE/UNRESOLVED/REJECTED no longer appear in any formal CSV.
+    """
+    issues: list[ValidationIssue] = []
+    present = {name for name in requested_names if (output_dir / name).is_file()}
+    if not present:
+        return issues
+    index = _formal_reference_index(output_dir)
+    if not any(index.values()):
+        index = None
+    canonical_present = {canonical_filename(name) for name in present}
+    for name in sorted(present):
+        path = output_dir / name
+        try:
+            parsed = list(csv.reader(io.StringIO(path.read_bytes().decode("utf-8-sig"), newline="")))
+        except (OSError, UnicodeDecodeError, csv.Error):
+            continue
+        if not parsed or not parsed[0]:
+            continue
+        references = _cross_file_references_for(name, index, canonical_present) if index else None
+        findings = validate_formal_rows(name, parsed[0], parsed[1:], state, references=references)
+        for finding in findings:
+            if finding.code == "FORMAL_REFERENCE_NOT_FOUND":
+                issues.append(_registry_issue(finding))
+    issues.extend(_formal_eligibility_issues(output_dir, state, present))
+    return issues
+
+
 def finalize_semantic_model(work_dir: str | os.PathLike[str],
                             state: Mapping[str, Any] | None = None,
                             *, output_dir: str | os.PathLike[str] | None = None,
@@ -4425,6 +4631,13 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
         if formal_outputs:
             semantic_issues.extend(_formal_output_issues(output_path, target_dir, state,
                                                           formal_outputs, validate_artifact_schema))
+        # Cross-file reference existence and formal-eligibility exclusion run
+        # once here, after every requested artifact exists.  They are additive
+        # (references/eligibility only) so files that already passed their
+        # stage are not double-reported for per-row contract errors.
+        requested_names = {os.path.basename(str(item)).lower()
+                           for item in (required_outputs or ())}
+        semantic_issues.extend(_formal_cross_file_issues(output_path, state, requested_names))
     coverage = decision_audit_coverage(target_dir, state)
     if not coverage.get("complete"):
         audit_issues.append(_issue("DECISION_AUDIT_COVERAGE", "ERROR",

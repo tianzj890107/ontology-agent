@@ -107,7 +107,7 @@ class ModelingEvidenceGateTests(unittest.TestCase):
         self.assertTrue(any(issue.code == "MISSING_DERIVATION_LINEAGE"
                             and issue.severity == "WARNING" for issue in issues))
         issues = validate_formal_relation_csv(relation_csv("REL_AR_CASH"), state)
-        self.assertEqual([issue.code for issue in issues], ["UNSUPPORTED_CONFIRMED_RELATION"])
+        self.assertEqual([issue.code for issue in issues], ["FORMAL_OUTPUT_INELIGIBLE_ROW"])
         self.assertEqual(issues[0].as_dict()["fixClass"], "SEMANTIC_FIX")
         self.assertEqual(state["relationDecisions"][0]["status"], CANDIDATE)
 
@@ -132,7 +132,7 @@ class ModelingEvidenceGateTests(unittest.TestCase):
             "evidenceTypes": ["TABLE_NAME"],
         }]}
         issues = validate_formal_relation_csv(relation_csv("REL000002"), state)
-        self.assertEqual(issues[0].code, "UNSUPPORTED_CONFIRMED_RELATION")
+        self.assertEqual(issues[0].code, "FORMAL_OUTPUT_INELIGIBLE_ROW")
         self.assertFalse(issues[0].auto_fixable)
 
     def test_two_independent_moderate_sources_can_cross_gate(self):

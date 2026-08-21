@@ -13,6 +13,7 @@ import re
 from difflib import SequenceMatcher
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
+from open_claude.modeling_csv_contract import validate_row_contract
 
 
 FORMAL = "FORMAL"
@@ -616,52 +617,41 @@ def validate_v0001_state(state: Mapping[str, Any] | None) -> list[RuleFinding]:
 
 
 def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]],
-                         state: Mapping[str, Any] | None = None) -> list[RuleFinding]:
+                         state: Mapping[str, Any] | None = None,
+                         references: Mapping[str, set[str]] | None = None) -> list[RuleFinding]:
     """Validate only rows that are about to enter a formal CSV.
 
     This function never examines candidates as if they were formal rows.  It
     is called by final-output validation, not by the upload syntax path.
+
+    Deterministic per-row contract rules (required fields, booleans, enums,
+    codes, uniqueness, conditional structure) come from the shared
+    ``modeling_csv_contract`` registry so upload and finalize cannot drift.
+    The checks below add the state-dependent/eligibility judgments (formal
+    business-object decisions, main-flag ownership, logical keys) and the
+    semantic-quality WARNINGs that deliberately never block.
     """
     name = _text(filename).lower().split("/")[-1]
     findings = []
     data = [dict(zip(header, row)) for row in rows if row and any(_text(v) for v in row)]
+    artifact_type = _artifact_type_for(name)
+    for finding in validate_row_contract(filename, header, rows, references=references):
+        code, rule_number = _contract_rule_mapping(name, finding)
+        findings.append(_finding(code, finding.severity, finding.message, rule_number,
+                                 artifact_type, finding.artifact_id,
+                                 details={"field": finding.field, "row": finding.row}))
     if name == "business_objects.csv":
-        duplicates = _unique(data, ("业务对象编码",))
-        for value, _ in duplicates:
-            findings.append(_finding("V0001_DUPLICATE_FORMAL_CODE", ERROR,
-                                     f"正式业务对象编码 {value} 重复", 16, "BUSINESS_OBJECT", value))
+        # Empty definition is a deterministic format error handled by the
+        # contract (V0001_FORMAL_BUSINESS_OBJECT_DEFINITION_MISSING).  A
+        # present-but-weak definition stays a non-blocking quality WARNING.
         for row in data:
-            code = _text(row.get("业务对象编码"))
-            # A missing name makes the formal row structurally un-consumable.
-            # A missing definition is a description-quality WARNING handled by
-            # V0001_DESCRIPTION_MISSING below, never a structural blocker.
-            if not _text(row.get("业务对象名称")):
-                findings.append(_finding("V0001_FORMAL_BUSINESS_OBJECT_INCOMPLETE", ERROR,
-                                         f"正式业务对象 {code} 缺少名称", 17, "BUSINESS_OBJECT", code))
-        for value, _ in _unique(data, ("业务对象名称",)):
-            findings.append(_finding("V0001_DUPLICATE_BUSINESS_OBJECT_NAME", ERROR,
-                                     f"正式业务对象名称 {value} 重复", 13, "BUSINESS_OBJECT", value))
-        for row in data:
-            if _text(row.get("业务对象名称")) and not _text(row.get("业务对象定义")):
+            object_name = _text(row.get("业务对象名称"))
+            definition = _text(row.get("业务对象定义"))
+            if object_name and definition and definition == object_name:
                 findings.append(_finding("V0001_DESCRIPTION_MISSING", WARNING,
-                                         f"正式业务对象 {_text(row.get('业务对象编码'))} 缺少业务定义",
+                                         f"正式业务对象 {_text(row.get('业务对象编码'))} 的业务定义与名称完全相同，质量不足",
                                          17, "BUSINESS_OBJECT", _text(row.get("业务对象编码"))))
     elif name == "logical_entities.csv":
-        for value, _ in _unique(data, ("逻辑实体编码",)):
-            findings.append(_finding("V0001_DUPLICATE_FORMAL_CODE", ERROR,
-                                     f"正式逻辑实体编码 {value} 重复", 28, "LOGICAL_ENTITY", value))
-        for value, _ in _unique(data, ("逻辑实体名称",)):
-            findings.append(_finding("V0001_DUPLICATE_LOGICAL_ENTITY_NAME", ERROR,
-                                     f"正式逻辑实体名称 {value} 重复", 22, "LOGICAL_ENTITY", value))
-        groups = {}
-        for row in data:
-            key = _nullable_text(row.get("业务对象编码")) or _nullable_text(row.get("业务对象名称"))
-            groups.setdefault(key, []).append(row)
-        for key, group in groups.items():
-            if key and sum(_text(row.get("是否主逻辑实体")).upper() == "Y" for row in group) != 1:
-                findings.append(_finding("V0001_FORMAL_MAIN_ENTITY_COUNT", ERROR,
-                                         f"正式业务对象 {key} 必须且只能有一个主逻辑实体", 29,
-                                         "LOGICAL_ENTITY", key))
         confirmed_business_objects = _confirmed_business_object_codes(state)
         decision_records = _records(state or {}, ("businessObjectDecisions", "business_object_decisions")) \
             if isinstance(state, Mapping) else []
@@ -672,14 +662,9 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
             if main_flag != "Y":
                 continue
             if not business_object:
-                findings.append(_finding(
-                    "V0001_MAIN_FLAG_WITHOUT_BUSINESS_OBJECT", ERROR,
-                    f"逻辑实体 {entity_id or '(未命名)'} 未归属业务对象时不能为主逻辑实体",
-                    29, "LOGICAL_ENTITY", entity_id,
-                    details={"businessObjectCode": "", "mainFlag": "Y"},
-                ))
-            elif ((decision_records or confirmed_business_objects)
-                  and business_object not in confirmed_business_objects):
+                continue
+            if ((decision_records or confirmed_business_objects)
+                    and business_object not in confirmed_business_objects):
                 findings.append(_finding(
                     "V0001_MAIN_FLAG_WITHOUT_CONFIRMED_BUSINESS_OBJECT", ERROR,
                     f"逻辑实体 {entity_id or '(未命名)'} 归属的业务对象 {business_object} 不是 CONFIRMED，不能保留主逻辑实体标记",
@@ -711,9 +696,6 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
                                              f"正式逻辑实体 {entity_id} 没有逻辑主键", 30,
                                              "LOGICAL_ENTITY", entity_id))
     elif name == "business_attributes.csv":
-        for value, _ in _unique(data, ("业务属性编码",)):
-            findings.append(_finding("V0001_DUPLICATE_FORMAL_CODE", ERROR,
-                                     f"正式业务属性编码 {value} 重复", 35, "BUSINESS_ATTRIBUTE", value))
         for row in data:
             value = _text(row.get("业务属性名称"))
             if re.search(r"[&+/*-]", value):
@@ -722,26 +704,98 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
                                          "BUSINESS_ATTRIBUTE", value))
         findings.extend(duplicate_formal_attribute_name_findings(data))
     elif name in {"entity_relations.csv", "entity_relationships.csv"}:
-        for value, _ in _unique(data, ("关系编码",)):
-            findings.append(_finding("V0001_DUPLICATE_FORMAL_CODE", ERROR,
-                                     f"正式关系编码 {value} 重复", 48, "ENTITY_RELATION", value))
         for row in data:
             identifier = _text(row.get("关系编码"))
             cardinality = _text(row.get("关系基数"))
-            if not cardinality:
-                findings.append(_finding("V0001_FORMAL_CARDINALITY_MISSING", ERROR,
-                                         f"正式关系 {identifier} 缺少关系基数", 47,
-                                         "ENTITY_RELATION", identifier))
-            elif cardinality == "M:N":
+            if cardinality == "M:N":
                 findings.append(_finding("V0001_FORMAL_MANY_TO_MANY", ERROR,
                                          f"正式关系 {identifier} 不能直接使用 M:N，必须拆分关系实体", 49,
                                          "ENTITY_RELATION", identifier))
-    elif name in {"terms.csv", "business_terms.csv"}:
-        for value, _ in _unique(data, ("术语编码",)):
-            findings.append(_finding("V0001_DUPLICATE_FORMAL_CODE", ERROR,
-                                     f"正式术语编码 {value} 重复", 39, "TERM", value))
-    elif name in {"indicators.csv", "indicator.csv", "metrics.csv"}:
-        for value, _ in _unique(data, ("指标编码",)):
-            findings.append(_finding("V0001_DUPLICATE_FORMAL_CODE", ERROR,
-                                     f"正式指标编码 {value} 重复", 36, "INDICATOR", value))
     return findings
+
+
+_CONTRACT_REQUIRED_CODE_OVERRIDES = {
+    "business_objects.csv": {
+        "业务对象编码": "V0001_FORMAL_BUSINESS_OBJECT_INCOMPLETE",
+        "业务对象名称": "V0001_FORMAL_BUSINESS_OBJECT_INCOMPLETE",
+        "业务对象定义": "V0001_FORMAL_BUSINESS_OBJECT_DEFINITION_MISSING",
+    },
+    "entity_relations.csv": {
+        "关系基数": "V0001_FORMAL_CARDINALITY_MISSING",
+    },
+    "entity_relationships.csv": {
+        "关系基数": "V0001_FORMAL_CARDINALITY_MISSING",
+    },
+}
+
+_CONTRACT_RULE_NUMBERS = {
+    "business_objects.csv": 17,
+    "logical_entities.csv": 34,
+    "business_attributes.csv": 38,
+    "entity_relations.csv": 47,
+    "entity_relationships.csv": 47,
+    "business_object_relations.csv": 43,
+    "business_object_relationships.csv": 43,
+    "object_relations.csv": 43,
+    "statuses.csv": 10,
+    "status.csv": 10,
+    "business_object_statuses.csv": 10,
+    "events.csv": 12,
+    "event.csv": 12,
+    "business_events.csv": 12,
+    "business_rules.csv": 41,
+    "rules.csv": 41,
+    "terms.csv": 39,
+    "business_terms.csv": 39,
+    "metrics.csv": 36,
+    "indicator.csv": 36,
+    "indicators.csv": 36,
+    "integration_report.csv": 17,
+    "merged_elements.csv": 42,
+    "pending_elements.csv": 42,
+    "conflict_elements.csv": 42,
+    "missing_elements.csv": 42,
+}
+
+_CONTRACT_ARTIFACT_TYPES = {
+    "business_objects.csv": "BUSINESS_OBJECT",
+    "logical_entities.csv": "LOGICAL_ENTITY",
+    "business_attributes.csv": "BUSINESS_ATTRIBUTE",
+    "entity_relations.csv": "ENTITY_RELATION",
+    "entity_relationships.csv": "ENTITY_RELATION",
+    "business_object_relations.csv": "BUSINESS_OBJECT_RELATION",
+    "business_object_relationships.csv": "BUSINESS_OBJECT_RELATION",
+    "object_relations.csv": "BUSINESS_OBJECT_RELATION",
+    "statuses.csv": "STATUS",
+    "status.csv": "STATUS",
+    "business_object_statuses.csv": "STATUS",
+    "events.csv": "EVENT",
+    "event.csv": "EVENT",
+    "business_events.csv": "EVENT",
+    "business_rules.csv": "BUSINESS_RULE",
+    "rules.csv": "BUSINESS_RULE",
+    "terms.csv": "TERM",
+    "business_terms.csv": "TERM",
+    "metrics.csv": "INDICATOR",
+    "indicator.csv": "INDICATOR",
+    "indicators.csv": "INDICATOR",
+    "integration_report.csv": "OUTPUT",
+    "merged_elements.csv": "OUTPUT",
+    "pending_elements.csv": "OUTPUT",
+    "conflict_elements.csv": "OUTPUT",
+    "missing_elements.csv": "OUTPUT",
+}
+
+
+def _artifact_type_for(filename: str) -> str:
+    name = _text(filename).lower().split("/")[-1]
+    return _CONTRACT_ARTIFACT_TYPES.get(name, "OUTPUT")
+
+
+def _contract_rule_mapping(filename: str, finding) -> tuple[str, int]:
+    name = _text(filename).lower().split("/")[-1]
+    code = finding.code
+    if code == "FORMAL_CONTRACT_REQUIRED_FIELD":
+        code = (_CONTRACT_REQUIRED_CODE_OVERRIDES.get(name, {}).get(finding.field) or code)
+    rule_number = _CONTRACT_RULE_NUMBERS.get(name, 42)
+    return code, rule_number

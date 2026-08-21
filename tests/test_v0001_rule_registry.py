@@ -37,12 +37,22 @@ class V0001RuleRegistryTests(unittest.TestCase):
         rows = [["CO_CANDIDATE", "候选对象", "", "", ""]]
         self.assertEqual(validate_formal_rows("business_object_decisions.csv", header, rows), [])
 
-    def test_formal_business_object_missing_definition_is_warning(self):
+    def test_formal_business_object_empty_definition_is_structural(self):
+        # An empty definition is a deterministic format error: it cannot be
+        # shipped inside a PASSED formal CSV.  Only a present-but-weak
+        # definition stays a non-blocking quality WARNING.
         header = ["业务对象编码", "业务对象名称", "业务对象英文名", "业务对象定义", "数据类别"]
         rows = [["CO001", "正式对象", "", "", ""]]
         codes = {item.code for item in validate_formal_rows("business_objects.csv", header, rows)}
-        self.assertIn("V0001_DESCRIPTION_MISSING", codes)
-        self.assertNotIn("V0001_FORMAL_BUSINESS_OBJECT_INCOMPLETE", codes)
+        self.assertIn("V0001_FORMAL_BUSINESS_OBJECT_DEFINITION_MISSING", codes)
+        self.assertEqual(
+            [item.severity for item in validate_formal_rows("business_objects.csv", header, rows)],
+            ["ERROR"],
+        )
+        weak = validate_formal_rows("business_objects.csv", header,
+                                    [["CO001", "正式对象", "", "正式对象", ""]])
+        self.assertIn("V0001_DESCRIPTION_MISSING", {item.code for item in weak})
+        self.assertEqual([item.severity for item in weak], ["WARNING"])
 
     def test_formal_business_object_missing_name_is_structural(self):
         header = ["业务对象编码", "业务对象名称", "业务对象英文名", "业务对象定义", "数据类别"]

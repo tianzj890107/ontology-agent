@@ -93,6 +93,7 @@ from open_claude.modeling_reliability import (
     load_validation_report,
     semantic_validation_status,
 )
+from open_claude.modeling_csv_contract import CONTRACTS, validate_row_contract
 from open_claude.sandbox import is_within_root
 from open_claude.credential_crypto import (
     CredentialDecryptionError,
@@ -914,205 +915,43 @@ def normalize_modeling_context(value: Mapping[str, object] | None) -> dict:
 # Integration result CSV contract.  Keep this in the server as a final gate:
 # system-prompt instructions alone cannot prevent malformed CSV from being
 # uploaded and marked complete.
-_INTEGRATION_HEADERS = {
-    "business_objects.csv": ["业务对象编码", "业务对象名称", "业务对象英文名", "业务对象定义", "数据类别"],
-    "logical_entities.csv": ["业务对象编码", "业务对象名称", "逻辑实体编码", "逻辑实体名称", "逻辑实体英文名", "逻辑实体定义", "是否主逻辑实体", "数据类别"],
-    "business_attributes.csv": ["逻辑实体编码", "逻辑实体名称", "业务属性编码", "业务属性名称", "业务属性英文名称", "业务属性定义", "数据类型", "数据长度", "数据精度", "是否物理主键", "是否逻辑主键", "是否唯一", "是否非空", "是否页面显示", "是否层级编码", "是否层级名称"],
-    "entity_relations.csv": ["关系编码", "源逻辑实体编码", "源逻辑实体名称", "目标逻辑实体编码", "目标逻辑实体名称", "关系分类", "关系中文名称", "关系英文名称", "关系基数", "关系描述", "源业务属性编码", "源关联属性英文名", "源关联属性中文名", "目标业务属性编码", "目标关联属性英文名", "目标关联属性中文名"],
-    "business_object_relations.csv": ["关系编码", "源业务对象编码", "源业务对象名称", "关系类型", "关系英文名称", "关系中文名名称", "目标业务对象编码", "目标业务对象名称", "关系基数", "关系描述"],
-    "business_object_relationships.csv": ["关系编码", "源业务对象编码", "源业务对象名称", "关系类型", "关系英文名称", "关系中文名名称", "目标业务对象编码", "目标业务对象名称", "关系基数", "关系描述"],
-    "object_relations.csv": ["关系编码", "源业务对象编码", "源业务对象名称", "关系类型", "关系英文名称", "关系中文名名称", "目标业务对象编码", "目标业务对象名称", "关系基数", "关系描述"],
-    "statuses.csv": ["业务对象编码", "业务对象名称", "状态编码", "状态英文名", "状态中文名", "状态含义", "触发条件", "是否终态", "是否主终态"],
-    "status.csv": ["业务对象编码", "业务对象名称", "状态编码", "状态英文名", "状态中文名", "状态含义", "触发条件", "是否终态", "是否主终态"],
-    "business_object_statuses.csv": ["业务对象编码", "业务对象名称", "状态编码", "状态英文名", "状态中文名", "状态含义", "触发条件", "是否终态", "是否主终态"],
-    "events.csv": ["事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"],
-    "event.csv": ["事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"],
-    "business_events.csv": ["事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"],
-    "business_rules.csv": ["规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"],
-    "integration_report.csv": ["检核项", "问题类型", "涉及源模型", "处理结果", "说明"],
-    "merged_elements.csv": ["整合后名称", "元素类型", "原名称集合", "来源模型", "合并策略", "相似度"],
-    "pending_elements.csv": ["候选名称 A", "候选名称 B", "推荐名称", "元素类型", "来源模型", "相似度", "待确认原因"],
-    "conflict_elements.csv": ["元素名称", "冲突类型", "来源模型", "冲突描述", "来源内容"],
-    "missing_elements.csv": ["元素名称", "元素类型", "来源模型", "缺失说明"],
-}
-_INTEGRATION_RELATION_CATEGORIES = {"关联", "依赖", "继承", "组合", "聚合"}
-_INTEGRATION_CARDINALITIES = {"1:1", "1:N", "N:1", "M:N"}
-_PAGE_DISPLAY_VALUES = {"Y", "N"}
-_BUSINESS_ATTRIBUTE_BOOLEAN_FIELDS = (
-    "是否物理主键", "是否逻辑主键", "是否唯一", "是否非空",
-    "是否页面显示", "是否层级编码", "是否层级名称",
-)
-_LOGICAL_ENTITY_BOOLEAN_FIELDS = ("是否主逻辑实体",)
-_STATUS_BOOLEAN_FIELDS = ("是否终态", "是否主终态")
-_OBJECT_RELATION_TYPES = {
-    "组合", "聚合", "分类", "关联", "依赖", "隶属", "等价",
-    "组合关系", "聚合关系", "分类关系", "关联关系", "依赖关系", "隶属关系", "等价关系",
-}
-_MODELING_HEADERS = {
-    name: _INTEGRATION_HEADERS[name]
-    for name in ("business_objects.csv", "logical_entities.csv", "business_attributes.csv", "entity_relations.csv")
-}
-_MODELING_HEADERS["entity_relationships.csv"] = _INTEGRATION_HEADERS["entity_relations.csv"]
-_MODELING_HEADERS.update({
-    "terms.csv": ["术语编码", "术语名称", "别名", "英文名", "缩略语", "术语定义"],
-    "business_terms.csv": ["术语编码", "术语名称", "别名", "英文名", "缩略语", "术语定义"],
-    "metrics.csv": ["指标编码", "指标名称", "指标别名", "指标英文名", "指标定义", "计算公式", "统计口径", "指标类型", "来源业务对象", "来源逻辑实体", "来源业务属性", "聚合类型", "时间维度", "计算规则", "过滤条件"],
-    "indicator.csv": ["指标编码", "指标名称", "指标别名", "指标英文名", "指标定义", "计算公式", "统计口径", "指标类型", "来源业务对象", "来源逻辑实体", "来源业务属性", "聚合类型", "时间维度", "计算规则", "过滤条件"],
-    "business_rules.csv": ["规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"],
-    "rules.csv": ["规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"],
+# Formal CSV field contracts are declared once in ``modeling_csv_contract``.
+# The header maps below are thin projections of that single registry, so the
+# upload gate, integration gate and finalize gate share one rule set and
+# cannot drift.  Only the file-name membership differs between the two upload
+# paths (integration result files vs. modeling artifacts).
+_INTEGRATION_CONTRACT_NAMES = frozenset({
+    "business_objects.csv", "logical_entities.csv", "business_attributes.csv",
+    "entity_relations.csv", "business_object_relations.csv",
+    "business_object_relationships.csv", "object_relations.csv",
+    "statuses.csv", "status.csv", "business_object_statuses.csv",
+    "events.csv", "event.csv", "business_events.csv", "business_rules.csv",
+    "integration_report.csv", "merged_elements.csv", "pending_elements.csv",
+    "conflict_elements.csv", "missing_elements.csv",
 })
+_MODELING_CONTRACT_NAMES = frozenset({
+    "business_objects.csv", "logical_entities.csv", "business_attributes.csv",
+    "entity_relations.csv", "entity_relationships.csv",
+    "terms.csv", "business_terms.csv", "metrics.csv", "indicator.csv",
+    "business_rules.csv", "rules.csv",
+    "business_object_relations.csv", "business_object_relationships.csv",
+    "object_relations.csv", "statuses.csv", "status.csv",
+    "business_object_statuses.csv", "events.csv", "event.csv",
+    "business_events.csv",
+})
+_INTEGRATION_HEADERS = {name: list(contract.headers)
+                        for name, contract in CONTRACTS.items()
+                        if name in _INTEGRATION_CONTRACT_NAMES}
+_MODELING_HEADERS = {name: list(contract.headers)
+                     for name, contract in CONTRACTS.items()
+                     if name in _MODELING_CONTRACT_NAMES}
 
-_OBJECT_RELATION_HEADER = ["关系编码", "源业务对象编码", "源业务对象名称", "关系类型", "关系英文名称", "关系中文名名称", "目标业务对象编码", "目标业务对象名称", "关系基数", "关系描述"]
-_STATUS_HEADER = ["业务对象编码", "业务对象名称", "状态编码", "状态英文名", "状态中文名", "状态含义", "触发条件", "是否终态", "是否主终态"]
-_EVENT_HEADER = ["事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"]
-for _name in ("business_object_relations.csv", "business_object_relationships.csv", "object_relations.csv"):
-    _MODELING_HEADERS[_name] = _OBJECT_RELATION_HEADER
-for _name in ("statuses.csv", "status.csv", "business_object_statuses.csv"):
-    _MODELING_HEADERS[_name] = _STATUS_HEADER
-for _name in ("events.csv", "event.csv", "business_events.csv"):
-    _MODELING_HEADERS[_name] = _EVENT_HEADER
 
-
-def _page_display_errors(rows, header):
-    """Validate the template-3 page-display convention for business attributes."""
-    indexes = {name: index for index, name in enumerate(header)}
-    required = ("逻辑实体编码", "逻辑实体名称", "业务属性名称", "是否逻辑主键", "是否页面显示")
-    if any(name not in indexes for name in required):
-        return []
-    groups = {}
+def _row_contract_errors(name, rows):
+    """Run the shared deterministic per-row field contract on parsed rows."""
     errors = []
-    for line_no, row in enumerate(rows[1:], 2):
-        if not row or all(not str(value).strip() for value in row):
-            continue
-        # The outer CSV validator reports the width error; avoid masking it
-        # with an IndexError while checking a malformed short row here.
-        if len(row) < len(header):
-            continue
-        display = str(row[indexes["是否页面显示"]] or "").strip().upper()
-        if display not in _PAGE_DISPLAY_VALUES:
-            errors.append(f"第 {line_no} 行是否页面显示必须为 Y 或 N，不能留空")
-        entity_key = (str(row[indexes["逻辑实体编码"]]).strip()
-                      or str(row[indexes["逻辑实体名称"]]).strip())
-        groups.setdefault(entity_key, []).append((line_no, row))
-    for entity_rows in groups.values():
-        key_prefixes = set()
-        for _, row in entity_rows:
-            attr_name = str(row[indexes["业务属性名称"]] or "").strip()
-            primary = str(row[indexes["是否逻辑主键"]] or "").strip().upper() == "Y"
-            if primary and attr_name.endswith("编码"):
-                key_prefixes.add(attr_name[:-2])
-        expected_names = {f"{prefix}名称" for prefix in key_prefixes if prefix}
-        for line_no, row in entity_rows:
-            attr_name = str(row[indexes["业务属性名称"]] or "").strip()
-            actual = str(row[indexes["是否页面显示"]] or "").strip().upper()
-            expected = "Y" if attr_name in expected_names else "N"
-            if actual in _PAGE_DISPLAY_VALUES and actual != expected:
-                errors.append(f"第 {line_no} 行“{attr_name}”是否页面显示应为 {expected}")
-    return errors[:20]
-
-
-def _boolean_field_errors(rows, header, fields):
-    indexes = {name: index for index, name in enumerate(header)}
-    if any(name not in indexes for name in fields):
-        return []
-    errors = []
-    for line_no, row in enumerate(rows[1:], 2):
-        if not row or all(not str(value).strip() for value in row):
-            continue
-        if len(row) < len(header):
-            continue
-        for name in fields:
-            value = str(row[indexes[name]] or "").strip().upper()
-            if value not in _PAGE_DISPLAY_VALUES:
-                errors.append(f"第 {line_no} 行{name}必须为 Y 或 N，不能留空")
-    return errors[:20]
-
-
-def _business_attribute_boolean_errors(rows, header):
-    return _boolean_field_errors(rows, header, _BUSINESS_ATTRIBUTE_BOOLEAN_FIELDS)
-
-
-def _logical_entity_boolean_errors(rows, header):
-    errors = _boolean_field_errors(rows, header, _LOGICAL_ENTITY_BOOLEAN_FIELDS)
-    indexes = {name: index for index, name in enumerate(header)}
-    required = ("业务对象编码", "业务对象名称", "是否主逻辑实体")
-    if any(name not in indexes for name in required):
-        return errors
-    groups = {}
-    for line_no, row in enumerate(rows[1:], 2):
-        if not row or all(not str(value).strip() for value in row) or len(row) < len(header):
-            continue
-        key = (str(row[indexes["业务对象编码"]]).strip()
-               or str(row[indexes["业务对象名称"]]).strip())
-        if not key:
-            continue
-        groups.setdefault(key, []).append((line_no, row))
-    for key, entity_rows in groups.items():
-        primary_count = sum(
-            str(row[indexes["是否主逻辑实体"]] or "").strip().upper() == "Y"
-            for _, row in entity_rows
-        )
-        if primary_count != 1:
-            errors.append(f"业务对象“{key}”必须且只能有一个是否主逻辑实体=Y，实际 {primary_count} 个")
-    for line_no, row in enumerate(rows[1:], 2):
-        if not row or all(not str(value).strip() for value in row) or len(row) < len(header):
-            continue
-        business_object = str(row[indexes["业务对象编码"]] or "").strip().upper()
-        if business_object in {"NONE", "NULL", "N/A", "NA", "-"}:
-            business_object = ""
-        main_flag = str(row[indexes["是否主逻辑实体"]] or "").strip().upper()
-        if not business_object and main_flag == "Y":
-            errors.append(f"第 {line_no} 行未归属业务对象时是否主逻辑实体必须为 N")
-    return errors[:20]
-
-
-def _status_errors(rows, header):
-    errors = _boolean_field_errors(rows, header, _STATUS_BOOLEAN_FIELDS)
-    indexes = {name: index for index, name in enumerate(header)}
-    for line_no, row in enumerate(rows[1:], 2):
-        if not row or all(not str(value).strip() for value in row) or len(row) < len(header):
-            continue
-        terminal = str(row[indexes["是否终态"]] or "").strip().upper()
-        primary_terminal = str(row[indexes["是否主终态"]] or "").strip().upper()
-        if primary_terminal == "Y" and terminal != "Y":
-            errors.append(f"第 {line_no} 行是否主终态=Y 时是否终态也必须为 Y")
-    return errors[:20]
-
-
-def _object_relation_errors(rows, header):
-    indexes = {name: index for index, name in enumerate(header)}
-    errors = []
-    for line_no, row in enumerate(rows[1:], 2):
-        if not row or all(not str(value).strip() for value in row) or len(row) < len(header):
-            continue
-        relation_type = str(row[indexes["关系类型"]] or "").strip()
-        cardinality = str(row[indexes["关系基数"]] or "").strip()
-        if relation_type and relation_type not in _OBJECT_RELATION_TYPES:
-            errors.append(f"第 {line_no} 行关系类型“{relation_type}”不在模板 v0.0.1 字典中")
-        if cardinality and cardinality not in _INTEGRATION_CARDINALITIES:
-            errors.append(f"第 {line_no} 行关系基数“{cardinality}”不在字典 {_INTEGRATION_CARDINALITIES} 中")
-    return errors[:20]
-
-
-def _business_rule_code_errors(rows, header):
-    """Validate the v0.0.1 business-rule identifier contract."""
-    try:
-        code_index = header.index("规则编码")
-    except ValueError:
-        return []
-    errors = []
-    seen = {}
-    for line_no, row in enumerate(rows[1:], 2):
-        if not row or all(not str(value).strip() for value in row) or len(row) < len(header):
-            continue
-        code = str(row[code_index] or "").strip()
-        if not re.fullmatch(r"R\d{7}", code):
-            errors.append(f"第 {line_no} 行规则编码必须为 R + 7 位数字，例如 R0000001")
-            continue
-        if code in seen:
-            errors.append(f"第 {line_no} 行规则编码“{code}”与第 {seen[code]} 行重复")
-        else:
-            seen[code] = line_no
+    for finding in validate_row_contract(name, rows[0], rows[1:]):
+        errors.append(finding.message)
     return errors[:20]
 
 
@@ -1121,6 +960,10 @@ def validate_integration_csv(filename, blob):
 
     csv.reader is deliberately used instead of counting commas: quoted commas
     and quoted newlines are valid CSV, while unquoted ones must be rejected.
+    Every row is also checked against the shared v0.0.1 field contract
+    (required fields, Y/N booleans, enums, codes, uniqueness and conditional
+    structure) so deterministic format errors are rejected here and again at
+    finalize with the same rules.
     """
     name = os.path.basename(str(filename or "")).lower()
     expected = _INTEGRATION_HEADERS.get(name)
@@ -1144,34 +987,21 @@ def validate_integration_csv(filename, blob):
             continue
         if len(row) != width:
             errors.append(f"第 {line_no} 行应有 {width} 列，实际 {len(row)} 列；检查逗号字段是否使用双引号")
-            continue
-        if name == "entity_relations.csv":
-            category = row[expected.index("关系分类")].strip()
-            cardinality = row[expected.index("关系基数")].strip()
-            if category and category not in _INTEGRATION_RELATION_CATEGORIES:
-                errors.append(f"第 {line_no} 行关系分类“{category}”不在字典 {_INTEGRATION_RELATION_CATEGORIES} 中")
-            if cardinality and cardinality not in _INTEGRATION_CARDINALITIES:
-                errors.append(f"第 {line_no} 行关系基数“{cardinality}”不在字典 {_INTEGRATION_CARDINALITIES} 中")
-    if name == "business_attributes.csv":
-        errors.extend(_business_attribute_boolean_errors(rows, expected))
-        errors.extend(_page_display_errors(rows, expected))
-    elif name == "logical_entities.csv":
-        errors.extend(_logical_entity_boolean_errors(rows, expected))
-    elif name in {"statuses.csv", "status.csv", "business_object_statuses.csv"}:
-        errors.extend(_status_errors(rows, expected))
-    elif name in {"business_object_relations.csv", "business_object_relationships.csv", "object_relations.csv"}:
-        errors.extend(_object_relation_errors(rows, expected))
-    elif name == "business_rules.csv":
-        errors.extend(_business_rule_code_errors(rows, expected))
+    errors.extend(_row_contract_errors(name, rows))
     return errors[:20]
 
 
 def validate_modeling_csv(filename, blob, *, semantic_checks=True):
-    """Validate modeling CSV syntax, optionally applying semantic checks.
+    """Validate a modeling CSV against the shared v0.0.1 field contract.
 
-    Finalize uses the default strict mode. Artifact upload uses syntax-only
-    mode so users can upload results for review without the upload endpoint
-    deciding page-display, boolean, rule-code, or other business semantics.
+    Upload (semantic_checks=False) and finalize (True) callers run the same
+    deterministic per-row contract: required fields, Y/N booleans, enum and
+    integer formats, code patterns, in-file uniqueness and conditional
+    structure rules.  The parameter is retained for historical callers; it no
+    longer switches deterministic format rules on and off, because the upload
+    gate must reject exactly the same structural defects the finalize gate
+    blocks.  R1-R5 evidence, evidence sufficiency and cross-file decision
+    consistency stay out of this function and belong to the semantic gate.
     """
     name = os.path.basename(str(filename or "")).lower()
     expected = _MODELING_HEADERS.get(name)
@@ -1192,23 +1022,20 @@ def validate_modeling_csv(filename, blob, *, semantic_checks=True):
     for line_no, row in enumerate(rows[1:], 2):
         if row and any(str(value).strip() for value in row) and len(row) != width:
             errors.append(f"第 {line_no} 行应有 {width} 列，实际 {len(row)} 列；检查逗号字段是否使用双引号")
-    if semantic_checks:
-        if name == "business_attributes.csv":
-            errors.extend(_business_attribute_boolean_errors(rows, expected))
-            errors.extend(_page_display_errors(rows, expected))
-        elif name == "logical_entities.csv":
-            errors.extend(_logical_entity_boolean_errors(rows, expected))
-        elif name in {"statuses.csv", "status.csv", "business_object_statuses.csv"}:
-            errors.extend(_status_errors(rows, expected))
-        elif name in {"business_object_relations.csv", "business_object_relationships.csv", "object_relations.csv"}:
-            errors.extend(_object_relation_errors(rows, expected))
-        elif name in {"business_rules.csv", "rules.csv"}:
-            errors.extend(_business_rule_code_errors(rows, expected))
+    errors.extend(_row_contract_errors(name, rows))
     return errors[:20]
 
 
 def validate_modeling_upload_artifact(filename: str, blob: bytes, cwd: str) -> list[str]:
-    """Validate only basic file syntax; semantic judgment is not upload work."""
+    """Validate the deterministic per-row field contract before upload.
+
+    The upload entry point deliberately does not run R1-R5 evidence,
+    evidence-sufficiency or formal-eligibility semantics (those stay in the
+    semantic finalize gate), but it must reject the same deterministic
+    format/structure defects that finalize blocks: missing required fields,
+    bad Y/N/enum/integer/code values, in-file duplicates and conditional
+    structure violations.
+    """
     return validate_modeling_csv(filename, blob, semantic_checks=False)
 
 def parse_element_for_file(filename):

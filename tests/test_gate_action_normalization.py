@@ -311,7 +311,10 @@ class TechnicalAttributeTests(unittest.TestCase):
 
 
 class QualityWarningTests(unittest.TestCase):
-    def test_description_missing_does_not_block(self):
+    def test_empty_definition_is_a_structural_blocker(self):
+        # A completely empty business-object definition is a deterministic
+        # format error and must block, unlike weak-but-present definitions
+        # which stay QUALITY_WARNING.
         state = {"businessObjectDecisions": [bo_candidate("CO1")]}
         blob = ("业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
                 "CO1,确认对象,,,\n").encode("utf-8")
@@ -323,9 +326,25 @@ class QualityWarningTests(unittest.TestCase):
                 Path(root) / "mission-work", state, output_dir=output,
                 required_outputs=["business_objects.csv"],
                 context={"expectedFiles": ["business_objects.csv"], "taskType": "modeling"})
+            self.assertEqual(result["status"], "FAILED")
+            codes = {issue.code for issue in result["issues"]}
+            self.assertIn("V0001_FORMAL_BUSINESS_OBJECT_DEFINITION_MISSING", codes)
+
+    def test_weak_definition_stays_quality_warning(self):
+        # A definition that is present but adds no information is a quality
+        # WARNING and never consumes gate retries or blocks the run.
+        state = {"businessObjectDecisions": [bo_candidate("CO1")]}
+        blob = ("业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
+                "CO1,确认对象,,确认对象,\n").encode("utf-8")
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "mission-output"
+            output.mkdir(parents=True, exist_ok=True)
+            (output / "business_objects.csv").write_bytes(blob)
+            result = finalize_semantic_model(
+                Path(root) / "mission-work", state, output_dir=output,
+                required_outputs=["business_objects.csv"],
+                context={"expectedFiles": ["business_objects.csv"], "taskType": "modeling"})
             self.assertEqual(result["status"], "PASSED")
-            # The registry check runs at the BUSINESS_OBJECTS stage; the
-            # WARNING is recorded in the stage ledger and never blocks.
             stage_codes = {code for row in result["stages"]
                            for code in (row.get("issueCodes") or [])}
             self.assertIn("V0001_DESCRIPTION_MISSING", stage_codes)
