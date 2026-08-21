@@ -521,6 +521,7 @@ class ModelingRun:
     idempotency_key: str = ""
     status: str = "CREATED"
     source_mode: str = "NATURAL_LANGUAGE"
+    title: str = ""
     prompt: str = ""
     requested_artifacts: list[str] = field(default_factory=lambda: list(DEFAULT_ARTIFACTS))
     database_source_id: str = ""
@@ -554,6 +555,7 @@ class ModelingRun:
             "idempotencyKey": self.idempotency_key or None,
             "status": self.status,
             "sourceMode": self.source_mode,
+            "title": self.title,
             "prompt": self.prompt,
             "requestedArtifacts": self.requested_artifacts,
             "databaseSourceId": self.database_source_id or None,
@@ -652,6 +654,7 @@ class RunStore:
             idempotency_key=str(item.get("idempotencyKey") or ""),
             status=str(item.get("status", "CREATED")),
             source_mode=str(item.get("sourceMode", "NATURAL_LANGUAGE")),
+            title=str(item.get("title") or ""),
             prompt=str(item.get("prompt", "")),
             requested_artifacts=list(item.get("requestedArtifacts") or DEFAULT_ARTIFACTS),
             database_source_id=str(item.get("databaseSourceId") or ""),
@@ -693,6 +696,7 @@ class RunStore:
                     existing.status = str(item.get("status") or existing.status)
                     existing.error = str(item.get("error") or "")
                     existing.user_id = str(item.get("userId") or existing.user_id)
+                    existing.title = str(item.get("title") or existing.title)
                     existing.prompt = str(item.get("prompt") or existing.prompt)
                     existing.model = str(item.get("model") or existing.model)
                     existing.attempt_id = str(item.get("attemptId") or "")
@@ -743,6 +747,7 @@ class RunStore:
                     idempotency_key=str(item.get("idempotencyKey") or ""),
                     status=str(item.get("status", "CREATED")),
                     source_mode=str(item.get("sourceMode", "NATURAL_LANGUAGE")),
+                    title=str(item.get("title") or ""),
                     prompt=str(item.get("prompt", "")),
                     requested_artifacts=list(item.get("requestedArtifacts") or DEFAULT_ARTIFACTS),
                     database_source_id=str(item.get("databaseSourceId") or ""),
@@ -837,6 +842,7 @@ class RunStore:
         link.symlink_to(target, target_is_directory=True)
 
     def create(self, source_mode: str, prompt: str, artifacts: Any = None,
+               title: str = "",
                database: Any = None, database_source_id: Any = None,
                selected_tables: Any = None, selected_schemas: Any = None,
                user_id: str = "anonymous",
@@ -873,9 +879,11 @@ class RunStore:
             for alias, target in LEGACY_ALIASES.items():
                 self._ensure_alias(root, alias, target)
             normalized_prompt = str(prompt or "").strip() or DEFAULT_MODELING_PROMPT
+            normalized_title = str(title or "").strip()
             run = ModelingRun(run_id=run_id, root=str(root),
                               user_id=normalized_user, idempotency_key=normalized_key,
                               source_mode=str(source_mode or "NATURAL_LANGUAGE"),
+                              title=normalized_title,
                               prompt=normalized_prompt, requested_artifacts=requested,
                               database_source_id=source_id,
                               database=normalized_database)
@@ -940,6 +948,7 @@ class RunStore:
                 with run.state_lock:
                     run.status = str(snapshot.get("status") or run.status)
                     run.error = str(snapshot.get("error") or "")
+                    run.title = str(snapshot.get("title") or run.title)
                     run.prompt = str(snapshot.get("prompt") or run.prompt)
                     run.model = str(snapshot.get("model") or run.model)
                     run.attempt_id = str(snapshot.get("attemptId") or "")
@@ -2004,6 +2013,7 @@ class ModelingHandler(BaseHTTPRequestHandler):
                 run = self.manager.store.create(payload.get("sourceMode", "NATURAL_LANGUAGE"),
                                                  payload.get("prompt", ""),
                                                  payload.get("requestedArtifacts"),
+                                                 title=payload.get("title", ""),
                                                  database=database,
                                                  database_source_id=database_source_id,
                                                  selected_tables=payload.get("selectedTables"),

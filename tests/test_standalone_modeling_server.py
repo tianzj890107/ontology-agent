@@ -612,6 +612,21 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertEqual(run.prompt, DEFAULT_MODELING_PROMPT)
         self.assertIn("v0.0.1", run.prompt)
 
+    def test_create_with_title_persists_title_and_survives_reload(self):
+        run = self.store.create("DATABASE", "采购建模要求", title="采购域建模")
+        self.assertEqual(run.title, "采购域建模")
+        self.assertEqual(run.as_dict()["title"], "采购域建模")
+        blank = self.store.create("DATABASE", "无标题要求", title="   ")
+        self.assertEqual(blank.title, "")
+        reloaded_store = RunStore(self.tmp.name)
+        try:
+            reloaded = reloaded_store.runs.get(run.run_id)
+            self.assertIsNotNone(reloaded)
+            self.assertEqual(reloaded.title, "采购域建模")
+            self.assertEqual(reloaded.prompt, "采购建模要求")
+        finally:
+            reloaded_store.close_managers()
+
     def test_external_validate_is_rejected_while_execute_is_analyzing(self):
         manager = self._manager()
         started = threading.Event()
