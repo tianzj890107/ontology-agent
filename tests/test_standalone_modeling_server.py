@@ -627,6 +627,21 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         finally:
             reloaded_store.close_managers()
 
+    def test_repository_self_heals_when_database_file_is_wiped(self):
+        from open_claude.run_repository import SQLiteRunRepository
+        repo = SQLiteRunRepository(Path(self.tmp.name) / "wiped.sqlite3")
+        snapshot = {"runId": "run_1", "userId": "u1", "status": "CREATED",
+                    "updatedAt": 1.0, "title": "会话一"}
+        repo.upsert(snapshot)
+        self.assertEqual(repo.get("run_1")["runId"], "run_1")
+        # 事故场景：数据库文件被外部清空成 0 字节，表随之丢失。
+        Path(str(repo.path)).write_bytes(b"")
+        self.assertEqual(repo.load_all(), [])
+        self.assertIsNone(repo.get("run_1"))
+        # 自动重建后写入与读取恢复可用。
+        repo.upsert(snapshot)
+        self.assertEqual(repo.get("run_1")["runId"], "run_1")
+
     def test_external_validate_is_rejected_while_execute_is_analyzing(self):
         manager = self._manager()
         started = threading.Event()

@@ -62,7 +62,26 @@ class SQLiteRunRepository:
                 "ON modeling_runs(user_id, status)"
             )
 
+    def _with_schema_recovery(self, operation):
+        """Run one store operation, recreating the schema if the table is gone.
+
+        An externally deleted/corrupted database file must not leave every
+        modeling API request failing with ``no such table`` until a restart:
+        ``CREATE TABLE IF NOT EXISTS`` is idempotent, so re-initializing once
+        and retrying the operation self-heals the store in place.
+        """
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+            self._initialize()
+            return operation()
+
     def upsert(self, snapshot: dict[str, Any]) -> None:
+        self._with_schema_recovery(lambda: self._upsert(snapshot))
+
+    def _upsert(self, snapshot: dict[str, Any]) -> None:
         run_id = str(snapshot["runId"])
         payload = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
         with self._connection() as connection:
@@ -79,6 +98,9 @@ class SQLiteRunRepository:
             connection.commit()
 
     def load_all(self) -> list[dict[str, Any]]:
+        return self._with_schema_recovery(self._load_all)
+
+    def _load_all(self) -> list[dict[str, Any]]:
         with self._connection() as connection:
             rows = connection.execute(
                 "SELECT payload FROM modeling_runs ORDER BY updated_at, run_id").fetchall()
@@ -93,6 +115,9 @@ class SQLiteRunRepository:
         return result
 
     def get(self, run_id: str) -> dict[str, Any] | None:
+        return self._with_schema_recovery(lambda: self._get(run_id))
+
+    def _get(self, run_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT payload FROM modeling_runs WHERE run_id=?", (run_id,)).fetchone()
@@ -105,11 +130,20 @@ class SQLiteRunRepository:
         return value if isinstance(value, dict) else None
 
     def delete(self, run_id: str) -> None:
+        self._with_schema_recovery(lambda: self._delete(run_id))
+
+    def _delete(self, run_id: str) -> None:
         with self._connection() as connection:
             connection.execute("DELETE FROM modeling_runs WHERE run_id=?", (run_id,))
 
     def compare_and_swap(self, snapshot: dict[str, Any], *,
                          expected_status: str, expected_updated_at: float) -> bool:
+        return self._with_schema_recovery(
+            lambda: self._compare_and_swap(snapshot, expected_status=expected_status,
+                                           expected_updated_at=expected_updated_at))
+
+    def _compare_and_swap(self, snapshot: dict[str, Any], *,
+                          expected_status: str, expected_updated_at: float) -> bool:
         """Commit a state mutation only if no other process changed the run."""
         run_id = str(snapshot["runId"])
         payload = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)

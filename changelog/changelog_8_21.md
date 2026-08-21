@@ -42,3 +42,8 @@
   - 损失：47314 全部历史 run 的工作目录与元数据（含此前 5 个“本体建模”会话及更早测试 run）永久丢失；47313 任务数据不受影响（独立存储，健康检查 200）。
   - 止损：重启 47314（pid 1963125），`SQLiteRunRepository._initialize` 重建空库（`modeling_runs` 表存在，count=0），`GET /api/modeling-runs` 返回 `{"runs": []}`，两服务健康。历史数据无法找回。
   - 教训/后续：清理脚本删除前必须断言目标路径是预期的 run 子目录（如 `[[ $run_id == run_* ]]` 且路径非根目录）再执行 `rm -rf`；本机对服务器文件删除命令需二次确认，避免变量为空时误删根目录。已确认当前 `standalone-modeling-runs/` 仅含重建的空库，无残留误删文件。
+
+- 加固 47314 run 存储自愈能力：SQLite 表意外丢失时自动重建（已提交，提交后部署）：
+  - 背景：上述事故暴露 `SQLiteRunRepository` 只在 `__init__` 建表；数据库文件被外部清空/删除后，`load_all`/`upsert`/`get` 持续报 `no such table`，`GET /api/modeling-runs` 等接口全部 500，直到重启才能恢复。
+  - 变更：`open_claude/run_repository.py` 新增 `_with_schema_recovery`，所有公开操作（`upsert`/`load_all`/`get`/`delete`/`compare_and_swap`）捕获 `OperationalError: no such table` 后调用幂等的 `_initialize()` 重建表并重试一次；数据库文件被清空后无需重启即可自愈。
+  - 测试：新增 `test_repository_self_heals_when_database_file_is_wiped`（0 字节文件场景下 load_all/get/upsert 自动恢复）；完整测试集 337 OK（skipped=3）。
