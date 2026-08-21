@@ -4318,6 +4318,7 @@ def _formal_output_issues(output_dir: Path, work_dir: Path,
             issues.extend(_formal_artifact_schema_issues(name, blob))
         if name == "business_objects.csv":
             issues.extend(validate_formal_business_object_csv(blob, state))
+            issues.extend(_template_sample_copy_issues(work_dir, blob))
         elif name == "business_attributes.csv":
             issues.extend(validate_formal_attribute_inventory(blob, state, work_dir))
         elif name in {"entity_relations.csv", "entity_relationships.csv"}:
@@ -4346,6 +4347,83 @@ def _formal_reference_index(output_dir: Path) -> dict[str, set[str]]:
         rows_by_file[name] = [dict(zip(parsed[0], row)) for row in parsed[1:]
                               if row and any(_text(value) for value in row)]
     return build_reference_index(rows_by_file)
+
+
+def _template_sample_business_object_names(work_dir: Path) -> set[str]:
+    """Read the system-provided sample template's business-object names."""
+    input_dir = work_dir.parent / "mission-input"
+    if not input_dir.is_dir():
+        return set()
+    sample_dir = next((p for p in input_dir.glob("*含样例数据*") if p.is_dir()), None)
+    if sample_dir is None:
+        return set()
+    candidates = sorted(sample_dir.glob("02-*.csv"))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            parsed = list(csv.reader(io.StringIO(path.read_bytes().decode("utf-8-sig"), newline="")))
+        except (OSError, UnicodeDecodeError, csv.Error):
+            continue
+        if not parsed or not parsed[0]:
+            continue
+        header = parsed[0]
+        try:
+            column = next(index for index, name in enumerate(header)
+                          if "业务对象名称" in name or name.strip() == "business_object_name")
+        except StopIteration:
+            continue
+        names = {_text(row[column]) for row in parsed[1:]
+                 if len(row) > column and _text(row[column])}
+        if names:
+            return names
+    return set()
+
+
+def _template_sample_copy_issues(work_dir: Path, blob: bytes) -> list[ValidationIssue]:
+    """Block formal business objects that exactly copy the template sample."""
+    template_names = _template_sample_business_object_names(work_dir)
+    if not template_names:
+        return []
+    try:
+        parsed = list(csv.reader(io.StringIO(blob.decode("utf-8-sig"), newline="")))
+    except (UnicodeDecodeError, csv.Error):
+        return []
+    if not parsed or not parsed[0]:
+        return []
+    header = parsed[0]
+    try:
+        column = next(index for index, name in enumerate(header)
+                      if "业务对象名称" in name or name.strip() == "business_object_name")
+    except StopIteration:
+        return []
+    output_names = {_text(row[column]) for row in parsed[1:]
+                    if len(row) > column and _text(row[column])}
+    if output_names and output_names == template_names:
+        return [_issue(
+            "FORMAL_OUTPUT_COPIED_TEMPLATE_SAMPLE", "ERROR",
+            "正式业务对象与系统预置的含样例数据模板完全一致，疑似直接复制模板样例而非基于真实输入建模",
+            artifact_type="OUTPUT", artifact_id="business_objects.csv",
+            details={"templateObjects": sorted(template_names)}),
+        ]
+    return []
+
+
+def validate_database_modeling_evidence(work_dir: Path,
+                                        output_dir: Path) -> list[ValidationIssue]:
+    """Database-sourced runs must carry an extracted schema before final output."""
+    work = Path(work_dir)
+    input_dir = work.parent / "mission-input"
+    if not (input_dir / ".db_connection.json").is_file():
+        return []
+    if not (work / "schema_extract.json").is_file():
+        return [_issue(
+            "DATABASE_SCHEMA_EVIDENCE_MISSING", "ERROR",
+            "数据库建模必须先执行 mission-input/extract_schema.py 生成 work/schema_extract.json，"
+            "再基于该表结构建模并导出正式输出",
+            artifact_type="WORK", artifact_id="schema_extract.json",
+            details={"requiredFile": "work/schema_extract.json"})]
+    return []
 
 
 def _state_record_status(records: Iterable[Mapping[str, Any]], code: str,
@@ -4609,6 +4687,7 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
     audit_issues = [issue for issue in validate_decision_audits(target_dir, state)
                     if issue.artifact_id != "validation_report.json"]
     semantic_issues = semantic_validation_issues(state)
+    semantic_issues.extend(validate_database_modeling_evidence(target_dir, output_path))
     if output_dir is not None:
         # Each requested formal file was already checked at its own stage.
         # Only files without a successful, unchanged stage checkpoint are

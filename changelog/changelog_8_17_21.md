@@ -21,6 +21,7 @@
 - 门禁动作模型：问题统一分为 `STRUCTURAL_BLOCKER` / `DETERMINISTIC_NORMALIZATION` / `FORMAL_ELIGIBILITY` / `QUALITY_WARNING` 四类，阶段与最终状态只按结构性阻断判 FAILED；服务端确定性规范化 `normalize_modeling_state()`（资产覆盖自动补 UNKNOWN、弱 COMPOSITION 降级 REFERENCE、无证据/M:N CONFIRMED 关系降级 CANDIDATE、UNKNOWN→CONFIRMED 无证据升级拒绝、主逻辑实体缺失降级、证据循环清理、技术字段从正式输出排除等），幂等且审计留痕。
 - 证据与严重度：R1–R5 证据归类修正；规则/指标弱证据、资产覆盖缺失、聚合语义未知等由 ERROR 降为 WARNING（不触发 retry/blocked/safety valve）；规则决策状态门禁（`business_rules.csv` 仅 CONFIRMED 规则，`强制状态=UNKNOWN/NOT_ENFORCED` 可正式输出）；`V0001_DUPLICATE_FORMAL_NAME` 收敛为同逻辑实体属性重名 ERROR、跨实体同名放行；门禁自动修复次数 3→10，相同错误无新证据仍立即 BLOCKED；`VALIDATION_CACHE_VERSION` 升级使旧 FAILED 缓存失效重算。
 - 正式 CSV 门禁收紧（8-21）：新增集中式逐行字段契约注册表 `modeling_csv_contract.py`（25 个文件名含别名），上传与 finalize 共用同一 `validate_row_contract`；必填/布尔 Y/N/枚举/整数/编码/中英文名称分离/文件内唯一/条件结构规则/跨文件引用为确定性格式错误，恢复为 `STRUCTURAL_BLOCKER`；证据不足、定义质量等语义仍 WARNING；CANDIDATE/UNRESOLVED/REJECTED 行若仍出现在正式 CSV 报 `FORMAL_OUTPUT_INELIGIBLE_ROW` 阻断。
+- 数据库证据门禁（8-21）：`ensure_database_helpers()` 自动生成 `mission-input/extract_schema.py`（只读提取选中表结构到 `work/schema_extract.json`，复用 `create_db_engine`，支持 `selectedSchemas`/`selectedTables`）；47313/47314 系统提示均要求数据库建模先执行 `extract_schema.py`、缺少表结构证据时禁止直接使用模板样例数据生成正式输出；`validate_database_modeling_evidence()` 对 db 模式缺 `work/schema_extract.json` 报 `DATABASE_SCHEMA_EVIDENCE_MISSING`（STRUCTURAL_BLOCKER），上传模式跳过；`FORMAL_OUTPUT_COPIED_TEMPLATE_SAMPLE` 检测正式 `business_objects.csv` 与 `mission-input/*样例数据*/02-*.csv` 完全一致时阻断。修复 guangfeng/metaerp 两个 run 输出完全一致（9 业务对象/5 逻辑实体）的根因。
 - 主要文件：`open-claude/open_claude/modeling_reliability.py`、`modeling_rule_registry.py`、`modeling_csv_contract.py`、`open-claude/oc_codex_server.py`、`agent_knowledge/`、对应 tests。
 
 ## 3. DeepSeek thinking 400 全路径修复（8-19 ~ 8-20）
@@ -36,6 +37,7 @@
 - 47314 standalone 页面：七个产物中文标签、历史运行标题/时间统一（`title → prompt → 本体建模` 降级）、运行态自适应布局、思维链增量合并为思考阶段、文件面板默认展开、`BLOCKED` 状态灰色标签 + 对话流自动追加建议消息（可继续运行或直接下载产物）、“下载所选”修复（显式传 selected、session 刷新、DOM 挂载下载、失败逐项提示）。
 - Agent 错误展示友好化（8-21）：思维链/输出中的 `error`/`is_error` 不再显示红色感叹号，统一转为灰色提示（图标 `ℹ`、标题 `提示`、文案 `提示：{原因}`、done 显示“未完成（可继续执行）”）；任务列表 error 红点与 47314 FAILED Tag 改灰色；页面级原生错误（网络/401/接口失败）保留原样，后端协议与平台 FAILED 回调不变。
 - 47314 会话命名（8-21）：新会话可输入“任务名称”（`ModelingRun.title` 全链路持久化，SQLite payload 快照无需迁移），会话名按 任务名称 → 建模要求 → 本体建模 降级显示。
+- 状态展示改名（8-21）：`BLOCKED` 对外统一显示为 `EXECUTED`（历史列表与运行详情头部），内部状态码/状态机/继续运行判断仍为 `BLOCKED`，不影响已存 run 与恢复逻辑。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`open-claude/standalone_modeling_server.py`、对应 tests。
 
 ## 5. 配置、部署与运维（8-21）
@@ -47,5 +49,5 @@
 
 ## 验证与部署基线
 
-- 完整测试集由本周初 `117` 项增长至期末 `337` 项（skipped=3，macOS 无 bubblewrap），各专项定向测试、`py_compile`、`git diff --check`、前端 `npm run build` 均通过。
-- 本周所有功能修复均以同一 commit 部署 47313/47314，部署前确认两服务无活跃任务；最终服务器 HEAD 与 `origin/20260727` 同步，两服务 `/`、`/health` 200，启动日志无 Traceback。
+- 完整测试集由本周初 `117` 项增长至期末 `344` 项（skipped=3，macOS 无 bubblewrap），新增 `tests/test_database_modeling_evidence.py`（7 项）；各专项定向测试、`py_compile`、`git diff --check`、前端 `npm run build` 均通过。
+- 本周所有功能修复均以同一 commit 部署 47313/47314，部署前确认两服务无活跃任务；最终服务器 HEAD 与 `origin/20260727` 同步，两服务 `/`、`/health` 200，启动日志无 Traceback。8-21 建模证据门禁 + 前端改名 commit 已部署 47314（47313 部署同 commit 由用户确认后执行）。

@@ -2182,6 +2182,7 @@ def ensure_database_helpers(cwd, db_config_path):
     helper_dir = os.path.join(cwd, "mission-input")
     verify_path = os.path.join(helper_dir, "verify_database.py")
     helper_path = os.path.join(helper_dir, "db_connection.py")
+    extract_path = os.path.join(helper_dir, "extract_schema.py")
     helper = '''import json
 from pathlib import Path
 from sqlalchemy import URL, create_engine
@@ -2241,7 +2242,102 @@ with create_db_engine().connect() as conn:
     print(conn.execute(text("select current_user, current_database()" )).one())
     print("DATABASE_CONNECTION_OK")
 '''
-    for path, content in ((helper_path, helper), (verify_path, verify)):
+    extract = '''#!/usr/bin/env python3
+"""Read-only schema extraction for the selected database tables.
+
+Writes a JSON summary (tables/columns/types) to work/schema_extract.json by
+default, or to the path given as argv[1].  Uses db_connection.create_db_engine
+so the encrypted credential and sourceSchema/search_path stay inside the helper.
+"""
+import datetime
+import json
+import sys
+from pathlib import Path
+
+from db_connection import create_db_engine
+from sqlalchemy import text
+
+DEFAULT_OUTPUT = Path("work") / "schema_extract.json"
+
+
+def load_config():
+    cfg = json.loads(Path(__file__).with_name(".db_connection.json").read_text(encoding="utf-8"))
+    return cfg
+
+
+def main():
+    cfg = load_config()
+    output_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_OUTPUT
+    source_schema = str(cfg.get("sourceSchema") or "").strip()
+    selected_schemas = [str(s).strip() for s in (cfg.get("selectedSchemas") or []) if str(s).strip()]
+    if source_schema and source_schema not in selected_schemas:
+        selected_schemas.insert(0, source_schema)
+    if not selected_schemas and source_schema:
+        selected_schemas = [source_schema]
+    selected_tables = [str(t).strip() for t in (cfg.get("selectedTables") or []) if str(t).strip()]
+    wanted_pairs = None
+    if selected_tables:
+        wanted_pairs = []
+        for item in selected_tables:
+            if "." in item:
+                schema_name, table_name = item.split(".", 1)
+                wanted_pairs.append((schema_name.strip(), table_name.strip()))
+            else:
+                schema_name = selected_schemas[0] if selected_schemas else source_schema
+                wanted_pairs.append((schema_name, item.strip()))
+
+    engine = create_db_engine()
+    result = {
+        "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "schema": source_schema,
+        "schemas": selected_schemas,
+        "tables": [],
+    }
+    tables = []
+    with engine.connect() as conn:
+        schemas = sorted({pair[0] for pair in wanted_pairs}) if wanted_pairs else selected_schemas
+        if not schemas:
+            print("no schema selected", file=sys.stderr)
+            sys.exit(2)
+        rows = conn.execute(
+            text(
+                "SELECT table_schema, table_name FROM information_schema.tables "
+                "WHERE table_type = 'BASE TABLE' AND table_schema = ANY(:schemas) "
+                "ORDER BY table_schema, table_name"
+            ),
+            {"schemas": schemas},
+        ).fetchall()
+        for row in rows:
+            schema_name, table_name = row[0], row[1]
+            if wanted_pairs is not None and (schema_name, table_name) not in wanted_pairs:
+                continue
+            col_rows = conn.execute(
+                text(
+                    "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+                    "WHERE table_schema = :schema_name AND table_name = :table_name "
+                    "ORDER BY ordinal_position"
+                ),
+                {"schema_name": schema_name, "table_name": table_name},
+            ).fetchall()
+            tables.append({
+                "schema": schema_name,
+                "table": table_name,
+                "columns": [
+                    {"name": col[0], "type": col[1], "nullable": col[2] == "YES"}
+                    for col in col_rows
+                ],
+            })
+    result["tables"] = tables
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("wrote %d tables to %s" % (len(tables), output_path))
+
+
+if __name__ == "__main__":
+    main()
+'''
+    for path, content in ((helper_path, helper), (verify_path, verify),
+                          (extract_path, extract)):
         with open(path, "w", encoding="utf-8") as fh: fh.write(content)
         try: os.chmod(path, 0o700)
         except OSError: pass
@@ -3630,7 +3726,9 @@ class Task:
                 "该文件中的 password 是加密凭据，必须由 db_connection.py 在内存中解密;"
                 "查询必须使用 helper 已配置的 sourceSchema/search_path，不得默认查询 public;"
                 "禁止把密码直接拼进 postgresql:// URL,因为密码可能包含 @、! 等特殊字符;"
-                "如果已有 extract_schema.py 语法错误或包含 ********,先修复/重写连接部分再执行。"
+                "如果已有 extract_schema.py 语法错误或包含 ********,先修复/重写连接部分再执行;"
+                "数据库建模必须先执行 mission-input/extract_schema.py 提取表结构到 work/schema_extract.json，"
+                "并基于该文件建模;缺少表结构证据时禁止直接使用模板样例数据生成正式输出。"
             )
         try:
             downloaded, errors = download_mission_files(minio_config(), safe, self.cwd)

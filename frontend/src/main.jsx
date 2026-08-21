@@ -125,6 +125,10 @@ function formatRunCreatedAt(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function statusLabel(status) {
+  return status === "BLOCKED" ? "EXECUTED" : status;
+}
+
 async function standaloneApi(path, apiKey, options = {}, retrySession = true) {
   let response;
   try {
@@ -791,7 +795,7 @@ function StandaloneApp() {
     <div className="standalone-shell">
       <header className="standalone-header"><div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能建模</strong><Tag color="blue">47314 独立服务</Tag></div><Tag color="green">服务已连接</Tag></header>
       <div className={`standalone-layout ${run ? "standalone-layout-running" : ""}`}>
-        <aside className="standalone-history"><Button type="primary" block className="standalone-new-task" onClick={startNewTask}>＋ 新任务</Button><div className="standalone-section-title">历史运行</div>{runs.length ? <List size="small" dataSource={runs} renderItem={(item) => <List.Item role="button" tabIndex={0} className={run?.runId === item.runId ? "standalone-run-active" : "standalone-run"} onClick={() => selectRun(item.runId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRun(item.runId); } }}><div><strong>{standaloneRunTitle(item)}</strong><small>{formatRunCreatedAt(item.createdAt)} · {item.status}</small></div></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行记录" />}</aside>
+        <aside className="standalone-history"><Button type="primary" block className="standalone-new-task" onClick={startNewTask}>＋ 新任务</Button><div className="standalone-section-title">历史运行</div>{runs.length ? <List size="small" dataSource={runs} renderItem={(item) => <List.Item role="button" tabIndex={0} className={run?.runId === item.runId ? "standalone-run-active" : "standalone-run"} onClick={() => selectRun(item.runId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRun(item.runId); } }}><div><strong>{standaloneRunTitle(item)}</strong><small>{formatRunCreatedAt(item.createdAt)} · {statusLabel(item.status)}</small></div></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行记录" />}</aside>
         <main className="standalone-main">
           {!run && <div className="standalone-title"><div><h1>独立智能建模</h1><p>上传输入资料或连接已有数据库，完成建模并查看可追溯产物。</p></div></div>}
           {error && <Alert type="error" showIcon closable onClose={() => setError("")} message={error} />}
@@ -874,7 +878,7 @@ function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selected
     return base;
   }, [run.events, run.prompt, run.status]);
   return <section className="task-view standalone-agent-task-view">
-    <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{run.status}</Tag>{["FAILED", "BLOCKED"].includes(run.status) && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
+    <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{statusLabel(run.status)}</Tag>{["FAILED", "BLOCKED"].includes(run.status) && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
     <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
   </section>;
 }

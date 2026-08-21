@@ -1646,9 +1646,13 @@ class ModelingRunManager:
                     "本次运行没有平台 taskCode、回调或业务任务绑定。只处理当前 ModelingRun。"
                     "对外工作区使用 input/、work/、output/；内部 mission-* 目录只是安全别名。"
                     "所有审计和中间态写入 work/，正式交付文件写入 output/。"
+                    "含样例数据模板（含样例数据-sheets/*.csv）仅用于理解字段、编码和页面显示等填写示例，"
+                    "不是当前任务真实输入，不得把样例行复制到结果或据此新增建模对象;"
                     "数据库连接必须执行 input/verify_database.py 或导入 input/db_connection.py 的 create_db_engine；"
                     "禁止直接读取 input/.db_connection.json 的加密 password，也禁止手工拼接连接 URL；"
-                    "数据库查询必须使用连接 helper 配置的 sourceSchema/search_path，不得默认查询 public。"
+                    "数据库查询必须使用连接 helper 配置的 sourceSchema/search_path，不得默认查询 public；"
+                    "数据库模式必须先执行 mission-input/extract_schema.py 提取表结构到 work/schema_extract.json，"
+                    "并基于该文件建模;缺少表结构证据时禁止导出正式 CSV。"
                 )
 
             def emit(event: dict[str, Any]) -> None:
