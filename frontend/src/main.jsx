@@ -782,7 +782,7 @@ function StandaloneApp() {
     if (okCount > 0) messageApi.success(`已开始下载 ${okCount} 个文件`);
     if (failed.length) messageApi.error(`下载失败 ${failed.length} 个文件：${failed.map((path) => path.split("/").pop()).join("、")}`);
   };
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "default" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "default", BLOCKED: "default" }[run?.status] || "default";
   return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
     {contextHolder}
     <div className="standalone-shell">
@@ -855,7 +855,7 @@ function blockedAdviceText(run) {
 }
 
 function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "error", BLOCKED: "default" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "default", BLOCKED: "default" }[run?.status] || "default";
   const files = run?.files || [];
   // The standalone API persists every streamed thinking token. Reuse the
   // shared workbench normalization so one continuous reasoning block renders
@@ -1127,6 +1127,7 @@ function eventDuration(events, index) {
 
 function eventTitle(event) {
   const names = { Read: "读取文件", Write: "写入文件", Edit: "修改文件", Bash: "执行命令", Glob: "查找文件", Grep: "搜索内容", Agent: "调用子智能体", TaskCreate: "创建任务" };
+  if (event.type === "error" || event.is_error) return "提示";
   if (event.type === "thinking") return "思考中";
   if (event.type === "model_switch") return "模型切换";
   if (event.type === "tool_result") return "工具结果";
@@ -1143,7 +1144,7 @@ function eventStatus(event) {
 function eventDescription(event) {
   if (event.type === "thinking" || event.type === "text" || event.type === "assistant") return event.text || "";
   if (event.type === "tool_result") return String(event.content || "").slice(0, 1200);
-  if (event.type === "error") return event.error || "执行失败";
+  if (event.type === "error") return `提示：${event.error || "本轮执行未完成，可继续执行"}`;
   if (event.type === "approval_request") return `${event.summary || "需要确认"}${event.detail ? `：${event.detail}` : ""}`;
   if (event.type === "approval_result") return event.approved ? "已允许执行" : "已拒绝执行";
   if (event.type === "model_switch") return `${event.from || "当前模型"} → ${event.to || "备用模型"}（${event.reason || "自动切换"}）`;
@@ -1187,7 +1188,7 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
   const isTaskUpdate = event.type === "tool_use" && event.name === "TaskUpdate";
   const isCommand = event.type === "tool_use" && event.name === "Bash";
   const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.type === "error" || event.is_error ? "error" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : isReadTool ? "read-file" : isWriteTool ? "write-file" : isEditTool ? "edit-file" : isAudit ? "audit" : isTaskUpdate ? "task-update" : isCommand ? "command" : "tool-use";
-  const icon = event.type === "thinking" ? <ThinkingIcon /> : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "!" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : isReadTool ? <ReadFileIcon /> : isWriteTool || isEditTool ? <WriteFileIcon /> : isAudit ? <AuditIcon /> : isTaskUpdate ? <TaskUpdateIcon /> : isCommand ? <CommandIcon /> : "·";
+  const icon = event.type === "thinking" ? <ThinkingIcon /> : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "ℹ" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : isReadTool ? <ReadFileIcon /> : isWriteTool || isEditTool ? <WriteFileIcon /> : isAudit ? <AuditIcon /> : isTaskUpdate ? <TaskUpdateIcon /> : isCommand ? <CommandIcon /> : "·";
   const detail = eventDescription(event);
   const approved = event.type === "approval_request" && approvalResult?.approved === true;
   const durationLabel = durationMs != null && !loading ? event.type === "thinking" ? `已思考 ${formatDuration(durationMs)}` : formatDuration(durationMs) : "";
@@ -1284,7 +1285,7 @@ function EventFeed({ events, onApprove, files, onFile, busy = false }) {
       {events.map((event, index) => {
         if (event.type === "user") return <div className="user-message" key={`${index}-user`}>{event.text}</div>;
         if (["text", "assistant"].includes(event.type)) return <div className="assistant-message" key={`${index}-assistant`}><AssistantText text={event.text} /></div>;
-        if (event.type === "done") return <div className="done-note" key={`${index}-done`}>本轮执行结束 · {event.status || "完成"}</div>;
+        if (event.type === "done") return <div className="done-note" key={`${index}-done`}>{event.status === "error" ? "本轮执行结束 · 未完成（可继续执行）" : `本轮执行结束 · ${event.status || "完成"}`}</div>;
         const loading = busy && index === events.length - 1 && event.type === "thinking";
         const executionFinished = event.type === "approval_request" && events.slice(index + 1).some((candidate) => candidate.type === "done");
         return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} completed={executionFinished} durationMs={eventDuration(events, index)} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
