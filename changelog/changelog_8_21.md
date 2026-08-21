@@ -31,7 +31,8 @@
   - 验证：`npm run build` 成功；产物中无 `#b91c1c` 红色残留，灰色样式与提示文案已进入 `frontend/dist`。
   - 部署：`58ad07c`+`9456fa1` 推送后部署两服务（部署前无活跃任务：47313 working=0、47314 runs 空）；部署脚本服务器端测试曾因旧断言失败（断言红色 `!` 图标），已同步更新 `tests/test_frontend_contract.py` 为新灰色实现后通过（16 OK）；47313 经 `deploy_server.sh` 重启（pid 1795225），47314 重启（pid 1795966）；两服务 `/` 均 200，47313 `/health` 200；服务器 `git rev-parse HEAD=9456fa1`，`frontend/dist` 已含新产物（`index-CnzYGS2x.js`/`index-btbEKNUv.css`，含灰色 error 样式与提示文案），47314 日志含 timeout 配置。
 
-- 47314 建模会话命名：新会话可输入“任务名称”，会话名按 任务名称 → 建模要求 → 本体建模 降级显示（提交后部署）：
+- 47314 建模会话命名：新会话可输入“任务名称”，会话名按 任务名称 → 建模要求 → 本体建模 降级显示（已部署 47313/47314，commit `2e3303a`）：
   - 根因/背景：`ModelingRun` 此前没有 title 字段，创建接口不接收会话名；前端 `standaloneRunTitle` 已支持 title 优先，但五个历史会话的 prompt 都是内置建模指令，全部回退显示“本体建模”，无法区分。
   - 变更：后端 `standalone_modeling_server.py` 为 `ModelingRun` 增加 `title` 字段（默认空），`create()` 接受 `title` 参数并规范化（空白视为空），`as_dict()`/`_load`/`_hydrate_repository_item`/`refresh_from_repository`/`get` 全链路读写 title，POST `/api/modeling-runs` 读取 `payload.title`；SQLite payload 快照自动携带该字段，无需 schema 迁移。前端 `main.jsx` 新会话卡片增加“任务名称（可选）”输入框（`standaloneTitle` state，不填时用建模要求作会话名），创建请求携带 `title`，会话列表按 title 显示；历史会话（无 title）继续走 要求/本体建模 降级，不强制改名。
   - 测试：新增 `test_create_with_title_persists_title_and_survives_reload`（title 保存、空白规范化、重载后保留）；`test_frontend_contract.py` 增加任务名称输入框与创建传参断言。相关测试 53 OK；完整测试集 336 OK（skipped=3）。
+  - 部署：`2e3303a` 推送后部署两服务（部署前无活跃任务：47313 working=0、47314 runs 空）；47313 经 `deploy_server.sh` 重启（pid 1950093），47314 重启（pid 1950865）；两服务 `/` 均 200、47313 `/health` 200；服务器 `git rev-parse HEAD=2e3303a`；`frontend/dist` 含“任务名称（可选）”输入框产物；端到端验证 POST `/api/modeling-runs` 携带 `title=部署验证会话` 返回 title 正确，验证用 run 已清理。
