@@ -793,7 +793,7 @@ function StandaloneApp() {
   return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
     {contextHolder}
     <div className="standalone-shell">
-      <header className="standalone-header"><div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能建模</strong><Tag color="blue">47314 独立服务</Tag></div><Tag color="green">服务已连接</Tag></header>
+      <header className="standalone-header"><div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能建模</strong><Tag color="blue">v0.0.1</Tag></div><Tag color="green">服务已连接</Tag></header>
       <div className={`standalone-layout ${run ? "standalone-layout-running" : ""}`}>
         <aside className="standalone-history"><Button type="primary" block className="standalone-new-task" onClick={startNewTask}>＋ 新任务</Button><div className="standalone-section-title">历史运行</div>{runs.length ? <List size="small" dataSource={runs} renderItem={(item) => <List.Item role="button" tabIndex={0} className={run?.runId === item.runId ? "standalone-run-active" : "standalone-run"} onClick={() => selectRun(item.runId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRun(item.runId); } }}><div><strong>{standaloneRunTitle(item)}</strong><small>{formatRunCreatedAt(item.createdAt)} · {statusLabel(item.status)}</small></div></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行记录" />}</aside>
         <main className="standalone-main">

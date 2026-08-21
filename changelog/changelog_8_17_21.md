@@ -38,6 +38,7 @@
 - Agent 错误展示友好化（8-21）：思维链/输出中的 `error`/`is_error` 不再显示红色感叹号，统一转为灰色提示（图标 `ℹ`、标题 `提示`、文案 `提示：{原因}`、done 显示“未完成（可继续执行）”）；任务列表 error 红点与 47314 FAILED Tag 改灰色；页面级原生错误（网络/401/接口失败）保留原样，后端协议与平台 FAILED 回调不变。
 - 47314 会话命名（8-21）：新会话可输入“任务名称”（`ModelingRun.title` 全链路持久化，SQLite payload 快照无需迁移），会话名按 任务名称 → 建模要求 → 本体建模 降级显示。
 - 状态展示改名（8-21）：`BLOCKED` 对外统一显示为 `EXECUTED`（历史列表与运行详情头部），内部状态码/状态机/继续运行判断仍为 `BLOCKED`，不影响已存 run 与恢复逻辑。
+- 服务标识（8-21）：47314 页头蓝色标签由“47314 独立服务”改为“v0.0.1”，与当前输出契约版本保持一致。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`open-claude/standalone_modeling_server.py`、对应 tests。
 
 ## 5. 配置、部署与运维（8-21）
