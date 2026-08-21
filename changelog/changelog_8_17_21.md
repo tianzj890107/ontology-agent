@@ -50,4 +50,4 @@
 ## 验证与部署基线
 
 - 完整测试集由本周初 `117` 项增长至期末 `344` 项（skipped=3，macOS 无 bubblewrap），新增 `tests/test_database_modeling_evidence.py`（7 项）；各专项定向测试、`py_compile`、`git diff --check`、前端 `npm run build` 均通过。
-- 本周所有功能修复均以同一 commit 部署 47313/47314，部署前确认两服务无活跃任务；最终服务器 HEAD 与 `origin/20260727` 同步，两服务 `/`、`/health` 200，启动日志无 Traceback。8-21 建模证据门禁 + 前端改名 commit 已部署 47314（47313 部署同 commit 由用户确认后执行）。
+- 本周所有功能修复均以同一 commit 部署 47313/47314，部署前确认两服务无活跃任务；最终服务器 HEAD 与 `origin/20260727` 同步，两服务 `/`、`/health` 200，启动日志无 Traceback。8-21 建模证据门禁 + 前端改名 commit `a0ebef6` 已部署 47313/47314（部署前确认 47313 的 `22dba975bd5e` 仅为重启前残留 `working` 快照，重启恢复逻辑已转为 `idle`）。
