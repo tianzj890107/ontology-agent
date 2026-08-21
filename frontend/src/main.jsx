@@ -126,7 +126,9 @@ function formatRunCreatedAt(value) {
 }
 
 function statusLabel(status) {
-  return status === "BLOCKED" ? "EXECUTED" : status;
+  if (status === "BLOCKED") return "EXECUTED";
+  if (status === "ANALYZING") return "EXECUTING";
+  return status;
 }
 
 async function standaloneApi(path, apiKey, options = {}, retrySession = true) {
