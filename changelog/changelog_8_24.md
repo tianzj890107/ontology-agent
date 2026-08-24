@@ -33,3 +33,10 @@
 - 前端 `AssistantText` 新增 `:::details` 折叠块渲染（复用现有迷你 Markdown 解析，内部段落/列表/表格均可正常渲染），新增 `.assistant-details` 折叠区样式；`frontend/dist` 已随构建更新。
 - 验证：`npm run build`（vite 构建通过）；`.venv/bin/python -m unittest tests.test_frontend_contract` 通过（8 项）；服务器 `git pull --ff-only` 后两服务已重启至 `12100b1`，47313/47314 的 `/`、`/health` 均 200，启动日志均含 `provider transport timeouts: connect=5s read=600s write=600s pool=600s`，两服务实际返回的新 bundle 均含“暂停详情”折叠标记。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`changelog/changelog_8_24.md`。
+
+### 4. 独立建模默认模型固定为 qwen3.8-27b
+
+- 修复 47314 打开历史 run 时用该 run 的历史模型（如 `qwen3.7-plus`）覆盖当前选择的问题；现在任何人刷新浏览器或重新进入页面，模型都固定取服务端默认 `qwen3.8-27b`，不再恢复 run 的历史模型，仅用户在当前会话显式选择才会改变。
+- 前端移除打开 run、缓存命中、run 创建后的 `setStandaloneModel(run.model)` 恢复逻辑，组合框展示不再回退到 `run.model`。
+- 验证：`npm run build`（vite 构建通过）；`.venv/bin/python -m unittest tests.test_frontend_contract` 通过（8 项）；`git diff --check` 通过；已部署 47313/47314 至 `a7fb0b0`，两服务 `/`、`/health` 均 200，启动日志均含 transport timeouts 行，`/api/modeling-models` 默认返回 `qwen3.8-27b`（24 个模型），线上实际返回的新 bundle 已不含 run 模型恢复逻辑。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/`、`changelog/changelog_8_24.md`。
