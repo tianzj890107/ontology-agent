@@ -852,10 +852,12 @@ function blockedAdviceText(run) {
   return [
     "【建模已暂停】",
     "",
-    "当前产物其实已经基本完成：模型已生成 work/output 中的建模结果文件，这些结果现在就可以下载使用。",
-    "",
+    ":::details 暂停详情（点击展开）",
     `暂停原因：${reasonText}。`,
     blockerLine,
+    ":::",
+    "",
+    "当前产物其实已经基本完成：模型已生成 work/output 中的建模结果文件，这些结果现在就可以下载使用。",
     "",
     "你可以这样处理：",
     "1. 点击上方“继续运行”，让模型基于当前产物继续修复并重新校验；",
@@ -1255,31 +1257,44 @@ function markdownTableRow(line) {
 }
 
 function AssistantText({ text }) {
-  const lines = String(text || "").split("\n");
-  const blocks = [];
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    const trimmed = line.trim();
-    if (!trimmed) { index += 1; continue; }
-    if (/^```/.test(trimmed)) {
-      const code = []; index += 1;
-      while (index < lines.length && !/^```/.test(lines[index].trim())) code.push(lines[index++]);
-      if (index < lines.length) index += 1;
-      blocks.push(<pre className="markdown-code" key={`code-${index}`}><code>{code.join("\n")}</code></pre>); continue;
+  const source = String(text || "").split("\n");
+  const renderLines = (lines) => {
+    const blocks = [];
+    let index = 0;
+    while (index < lines.length) {
+      const line = lines[index];
+      const trimmed = line.trim();
+      if (!trimmed) { index += 1; continue; }
+      if (/^```/.test(trimmed)) {
+        const code = []; index += 1;
+        while (index < lines.length && !/^```/.test(lines[index].trim())) code.push(lines[index++]);
+        if (index < lines.length) index += 1;
+        blocks.push(<pre className="markdown-code" key={`code-${index}`}><code>{code.join("\n")}</code></pre>); continue;
+      }
+      if (/^\|/.test(trimmed) && index + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[index + 1])) {
+        const head = markdownTableRow(line); index += 2; const rows = [];
+        while (index < lines.length && /^\s*\|/.test(lines[index])) rows.push(markdownTableRow(lines[index++]));
+        blocks.push(<table className="markdown-table" key={`table-${index}`}><thead><tr>{head.map((cell, cellIndex) => <th key={cellIndex}>{inlineMarkdown(cell)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{head.map((_, cellIndex) => <td key={cellIndex}>{inlineMarkdown(row[cellIndex] || "")}</td>)}</tr>)}</tbody></table>); continue;
+      }
+      if (/^#{1,3}\s/.test(trimmed)) { blocks.push(<h3 key={`heading-${index}`}>{inlineMarkdown(trimmed.replace(/^#{1,3}\s*/, ""))}</h3>); index += 1; continue; }
+      if (/^[-*]\s/.test(trimmed)) { const items = []; while (index < lines.length && /^\s*[-*]\s/.test(lines[index])) items.push(lines[index++].replace(/^\s*[-*]\s+/, "")); blocks.push(<ul key={`list-${index}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{inlineMarkdown(item)}</li>)}</ul>); continue; }
+      if (/^:::/.test(trimmed)) {
+        if (trimmed !== ":::") {
+          const title = trimmed.replace(/^:::(?:details)?\s*/, "") || "详情（点击展开）";
+          index += 1; const inner = [];
+          while (index < lines.length && !/^:::/.test(lines[index].trim())) inner.push(lines[index++]);
+          if (index < lines.length) index += 1;
+          blocks.push(<details className="assistant-details" key={`details-${index}`}><summary>{title}</summary>{renderLines(inner)}</details>);
+        } else index += 1;
+        continue;
+      }
+      const paragraph = [line]; index += 1;
+      while (index < lines.length && lines[index].trim() && !/^```|^#{1,3}\s|^\s*[-*]\s|^\s*\||^:::/.test(lines[index])) paragraph.push(lines[index++]);
+      blocks.push(<p key={`paragraph-${index}`}>{inlineMarkdown(paragraph.join("\n"))}</p>);
     }
-    if (/^\|/.test(trimmed) && index + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[index + 1])) {
-      const head = markdownTableRow(line); index += 2; const rows = [];
-      while (index < lines.length && /^\s*\|/.test(lines[index])) rows.push(markdownTableRow(lines[index++]));
-      blocks.push(<table className="markdown-table" key={`table-${index}`}><thead><tr>{head.map((cell, cellIndex) => <th key={cellIndex}>{inlineMarkdown(cell)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{head.map((_, cellIndex) => <td key={cellIndex}>{inlineMarkdown(row[cellIndex] || "")}</td>)}</tr>)}</tbody></table>); continue;
-    }
-    if (/^#{1,3}\s/.test(trimmed)) { blocks.push(<h3 key={`heading-${index}`}>{inlineMarkdown(trimmed.replace(/^#{1,3}\s*/, ""))}</h3>); index += 1; continue; }
-    if (/^[-*]\s/.test(trimmed)) { const items = []; while (index < lines.length && /^\s*[-*]\s/.test(lines[index])) items.push(lines[index++].replace(/^\s*[-*]\s+/, "")); blocks.push(<ul key={`list-${index}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{inlineMarkdown(item)}</li>)}</ul>); continue; }
-    const paragraph = [line]; index += 1;
-    while (index < lines.length && lines[index].trim() && !/^```|^#{1,3}\s|^\s*[-*]\s|^\s*\|/.test(lines[index])) paragraph.push(lines[index++]);
-    blocks.push(<p key={`paragraph-${index}`}>{inlineMarkdown(paragraph.join("\n"))}</p>);
-  }
-  return <div className="assistant-text">{blocks}</div>;
+    return blocks;
+  };
+  return <div className="assistant-text">{renderLines(source)}</div>;
 }
 
 function EventFeed({ events, onApprove, files, onFile, busy = false }) {
