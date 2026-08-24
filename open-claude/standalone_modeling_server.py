@@ -1440,8 +1440,6 @@ class ModelingRunManager:
                     details={"maxQueuedRuns": self.max_queued_runs})
             return_status = run.status if run.status in {"FAILED", "BLOCKED"} else "INPUT_READY"
             changes = {"error": ""}
-            if prompt is not None:
-                changes["prompt"] = str(prompt)
             if model is not None:
                 changes["model"] = requested_model
             self.store.transition_and_update(
@@ -1450,6 +1448,8 @@ class ModelingRunManager:
             self.execution_modes[run.run_id] = (conversational, return_status)
             self.execution_prompts[run.run_id] = str(prompt or "").strip()
             self.threads[run.run_id] = _RunHandle()
+        if prompt is not None and str(prompt).strip():
+            self.store.append_event(run, "user", text=str(prompt).strip())
         self.store.append_event(run, "run_queued", maxActiveRuns=self.max_active_runs)
         with self.scheduler_wakeup:
             self.scheduler_wakeup.notify_all()

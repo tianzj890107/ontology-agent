@@ -407,6 +407,31 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertEqual(run.resume_session_id, "session-resume")
         self.assertEqual(run.status, "SUCCEEDED")
 
+    def test_continue_persists_user_event_and_keeps_original_prompt(self):
+        manager = self._manager()
+        manager.stop_event.set()
+        manager.scheduler_thread.join(timeout=1)
+        run = self.store.create("DATABASE", "原始提示")
+        self.store.transition(run, "BLOCKED", error="modeling execution blocked")
+        manager.execute(run, "继续修复门禁问题")
+        self.assertEqual(run.status, "QUEUED")
+        self.assertEqual(run.prompt, "原始提示")
+        user_events = [event for event in run.events if event["type"] == "user"]
+        self.assertEqual(len(user_events), 1)
+        self.assertEqual(user_events[0]["text"], "继续修复门禁问题")
+        self.assertEqual(run.events[0]["type"], "user")
+        self.assertEqual(run.events[1]["type"], "run_queued")
+
+    def test_continue_without_user_text_skips_user_event(self):
+        manager = self._manager()
+        manager.stop_event.set()
+        manager.scheduler_thread.join(timeout=1)
+        run = self.store.create("DATABASE", "原始提示")
+        self.store.transition(run, "BLOCKED", error="modeling execution blocked")
+        manager.execute(run)
+        self.assertEqual(run.status, "QUEUED")
+        self.assertNotIn("user", [event["type"] for event in run.events])
+
     def test_shared_repair_code_between_47313_and_47314(self):
         # The standalone service and the web workbench must run the exact
         # same DeepSeek repair layer: the standalone worker drives the shared
