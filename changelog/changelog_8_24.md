@@ -24,6 +24,7 @@
 - 两个服务的默认模型统一为 `qwen3.8-27b`；未显式配置、配置过期或无效时优先回退到该模型，仅当自定义目录不包含它时才回退到目录首项。
 - 同步本地运行配置与 `.env.example`，真实团队密钥仍只保留在未提交的 `.env`；补充 24 模型数量、失败模型排除和默认模型回归测试。
 - 验证：`python -m unittest tests.test_team_config` 通过（3 项）；隔离加载确认 47313/47314 均返回 24 个模型且默认 `qwen3.8-27b`；`git diff --check` 通过。完整 `tests.test_standalone_modeling_server` 因既有用例触发真实后台任务、清理阶段等待执行线程而中止，未计为通过。
+- 已部署提交 `8a70629`：服务器 19 项部署相关测试通过，47313/47314 重启后健康检查均为 200，两个模型接口均返回默认 `qwen3.8-27b`、24 个模型且不含上述 4 个失败模型。依赖同步曾因服务器访问 PyPI 的 TLS 故障失败，本次无依赖变化，最终使用已通过测试的现有共享 venv 启动。
 - 主要文件：`open-claude/open_claude/config.py`、`.env.example`、`open-claude/README.md`、`tests/test_team_config.py`、本地 `.env`。
 
 ### 3. 建模暂停提示改为可折叠详情（按要求未部署）
