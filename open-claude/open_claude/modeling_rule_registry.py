@@ -13,7 +13,10 @@ import re
 from difflib import SequenceMatcher
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
-from open_claude.modeling_csv_contract import validate_row_contract
+from open_claude.modeling_csv_contract import (
+    logical_entity_assignment_statuses,
+    validate_row_contract,
+)
 
 
 FORMAL = "FORMAL"
@@ -635,7 +638,12 @@ def validate_formal_rows(filename: str, header: list[str], rows: list[list[str]]
     findings = []
     data = [dict(zip(header, row)) for row in rows if row and any(_text(v) for v in row)]
     artifact_type = _artifact_type_for(name)
-    for finding in validate_row_contract(filename, header, rows, references=references):
+    # Conditional business-object fields in logical_entities.csv are judged
+    # against the audit state, never inferred from an empty CSV cell.
+    assignment_statuses = (logical_entity_assignment_statuses(state)
+                           if isinstance(state, Mapping) else None)
+    for finding in validate_row_contract(filename, header, rows, references=references,
+                                         assignment_statuses=assignment_statuses):
         code, rule_number = _contract_rule_mapping(name, finding)
         findings.append(_finding(code, finding.severity, finding.message, rule_number,
                                  artifact_type, finding.artifact_id,

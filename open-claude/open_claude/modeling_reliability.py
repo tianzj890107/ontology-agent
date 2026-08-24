@@ -23,7 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .modeling_csv_contract import canonical_filename
+from .modeling_csv_contract import (
+    canonical_filename,
+    logical_entity_assignment_status,
+)
 from .modeling_rule_registry import (
     RuleFinding,
     logical_entity_main_flag,
@@ -141,7 +144,7 @@ METRIC_AGGREGATION_SEMANTICS = frozenset({
     "ADDITIVE", "SEMI_ADDITIVE", "NON_ADDITIVE", "RATIO_OF_SUMS",
     "WEIGHTED_AVERAGE", "SNAPSHOT", "UNKNOWN",
 })
-LE_ASSIGNMENT_STATUSES = frozenset({"ASSIGNED", "UNASSIGNED", "UNRESOLVED"})
+LE_ASSIGNMENT_STATUSES = frozenset({"ASSIGNED", "NOT_APPLICABLE", "UNASSIGNED", "UNRESOLVED"})
 
 DECISION_AUDIT_TEMPLATE_VERSION = "v0.0.1"
 
@@ -1433,6 +1436,44 @@ def apply_assignment_normalization(state: Mapping[str, Any] | None) -> int:
     return changed
 
 
+def apply_not_applicable_normalization(state: Mapping[str, Any] | None) -> int:
+    """In-place deterministic fixes for explicit NOT_APPLICABLE entities.
+
+    Only entities that explicitly declare NOT_APPLICABLE AND carry the audit
+    evidence (non-business-object classification/reason/evidence) are fixed:
+    the main flag becomes N and wrongly filled business-object code/name are
+    cleared.  A cleared code that references a REJECTED candidate is preserved
+    on a dedicated audit field for the rejection linkage.  An empty code never
+    derives NOT_APPLICABLE here, and UNRESOLVED is never converted.
+    """
+    if not isinstance(state, Mapping):
+        return 0
+    rejected_codes = {item.candidate_code for item in business_object_decision_records(state)
+                      if item.decision == REJECTED}
+    changed = 0
+    for entity in _iter_entity_records(state):
+        if _assignment_status(entity) != "NOT_APPLICABLE":
+            continue
+        if not _not_applicable_evidence(entity):
+            continue
+        for key in _MAIN_FLAG_KEYS:
+            if key in entity:
+                entity[key] = "N"
+        code = _text(_first_value(entity, ("businessObjectCode", "business_object_code",
+                                           "业务对象编码")))
+        if not code:
+            continue
+        if code in rejected_codes:
+            entity.setdefault("rejectedBusinessObjectCode", code)
+            entity.setdefault("对应否决业务对象编码", code)
+        for key in ("businessObjectCode", "business_object_code", "业务对象编码"):
+            entity.pop(key, None)
+        for key in ("businessObjectName", "business_object_name", "业务对象名称"):
+            entity.pop(key, None)
+        changed += 1
+    return changed
+
+
 def apply_decision_summary_recompute(state: Mapping[str, Any] | None) -> None:
     """In-place: recompute the BO decision summary from canonical records."""
     if not isinstance(state, Mapping):
@@ -1519,6 +1560,7 @@ def normalize_modeling_state(state: Mapping[str, Any] | None) -> dict[str, Any]:
     summary["fkCoverageDefaults"] = apply_fk_coverage_defaults(state)
     summary["mappingDuplicatesRemoved"] = apply_mapping_dedup(state)
     summary["assignmentDowngrades"] = apply_assignment_normalization(state)
+    summary["notApplicableNormalizations"] = apply_not_applicable_normalization(state)
     summary["technicalAttributesExcluded"] = apply_technical_attribute_exclusion(state)
     apply_decision_summary_recompute(state)
     return summary
@@ -1705,10 +1747,70 @@ _RULE_EVIDENCE_MARKERS = {
                      "identifierfields", "documentstructure", "entitystructure", "repeatable",
                      "instantiable", "instancefields"),
         "negative": ("固定码表", "固定枚举", "静态有限值域", "有限值域", "固定值域",
-                     "不可产生业务实例", "不能产生业务实例", "仅枚举", "纯字典", "静态参考值"),
+                     "不可产生业务实例", "不能产生业务实例", "仅枚举", "纯字典", "静态参考值",
+                     "不可实例化", "无法实例化", "不能实例化", "不能形成可区分", "无法形成可区分",
+                     "没有可区分实例", "无独立实例", "纯查询结果", "聚合结果", "统计展示",
+                     "计算派生"),
     },
 }
 _ROW_COUNT_KEYS = {"rowcount", "recordcount", "instancecount", "samplecount", "数据行数", "实例数"}
+
+# ---- 证据一致性门禁（低过拟合） ----
+# 反证词组只在证据文本中匹配，绝不匹配候选名称、表名或数据类别本身；
+# 单个强反证或两个以上弱反证视为“明确反证”；证据中出现报告实例/规则版本等
+# 例外生命周期证据时放行，避免误杀可治理的规则定义和报告实例。
+_STRONG_COUNTER_MARKERS = (
+    "固定码表", "固定枚举", "静态有限值域", "固定值域", "静态参考值",
+    "不可实例化", "无法实例化", "不能实例化",
+    "纯查询结果", "聚合结果", "统计展示", "统计结果", "计算派生", "纯派生",
+    "无独立实例", "没有独立实例", "仅展示", "数据呈现形式", "展示快照",
+    "不能独立创建", "不可独立创建", "不能独立维护", "不可独立维护",
+    "不能独立管理", "不可独立管理", "没有可区分实例", "依赖父对象", "仅从属", "必须依赖父",
+)
+_WEAK_COUNTER_MARKERS = (
+    "码值有限", "码值数量有限", "有限值域", "可预置",
+    "仅分类", "仅标签", "分类标签", "仅作分类", "仅分类参考", "纯字典", "仅枚举",
+    "无业务行为", "没有业务行为", "无独立业务行为",
+    "无独立生命周期", "没有独立生命周期", "无生命周期", "静态值域", "仅查询",
+    "基础数据", "规则数据", "参考数据", "报告报表数据",
+)
+_COUNTER_QUALIFIER_PREFIXES = (
+    "不是", "并非", "不因", "不代表", "不能仅因", "不得仅凭", "不直接", "不得",
+    "不能仅凭", "只触发复核", "需要综合判断", "不构成", "不表示", "不能单凭",
+    "不单独", "不得仅因", "不允许仅因", "不应仅因", "不只是", "不仅仅",
+)
+_R5_INSTANTIATION_MARKERS = (
+    "业务编号", "业务编码", "业务主键", "业务标识", "单据结构", "主数据结构",
+    "实体结构", "可实例化", "可重复创建", "重复创建", "实例标识", "可区分实例",
+    "可产生业务实例", "记录结构", "可新增", "businesskey", "businessidentifier",
+    "stableidentifier", "documentstructure", "entitystructure", "repeatable",
+    "instantiable", "instancefields",
+)
+_INSTANTIATION_EXCEPTION_MARKERS = (
+    "报告编号", "报告期间", "报告期", "独立编制", "编制、审批、发布、归档",
+    "审批、发布、归档", "规则编号", "规则版本", "独立版本", "版本化",
+    "版本、审批、发布、生效、停用", "审批、发布、生效、停用", "可版本化", "生效、停用",
+)
+# 候选性质中与“业务对象”结构性互斥的类别：分类/标签型参考数据、规则组件或
+# 配置、报表定义/视图、派生分析结果。候选性质只是分析维度，但若模型同时给出
+# 这些性质与 R5=PASS/CONFIRMED，属于结构化矛盾，服务端必须阻断。
+_NON_BUSINESS_OBJECT_KINDS = frozenset({
+    "REFERENCE_DATA", "RULE_COMPONENT_OR_CONFIGURATION",
+    "REPORT_DEFINITION_OR_VIEW", "DERIVED_ANALYTICAL_RESULT",
+})
+# 规范明确的基础数据、规则数据、参考数据、报告报表数据四类非业务对象类别。
+# 类别本身只作为证据组合中的弱反证信号参与判定，不单独形成结论。
+_NON_BUSINESS_OBJECT_CATEGORIES = frozenset({"基础数据", "规则数据", "参考数据", "报告报表数据"})
+_KIND_KEYS = ("candidateKind", "candidate_kind", "候选性质")
+_CATEGORY_KEYS = ("数据类别", "dataCategory", "data_category")
+_WEAK_EVIDENCE_TYPES = frozenset({
+    "TABLE_NAME", "COLUMN_NAME", "FIELD_SEMANTICS", "DATA_PATTERN", "ROW_COUNT",
+    "SAMPLE_DATA", "QUERY_EXECUTION", "MODULE_MEMBERSHIP", "PRIMARY_KEY",
+    "SURROGATE_KEY", "TIMESTAMP_FIELD",
+})
+_NAME_CATEGORY_SIGNALS = (
+    "表名", "命名为", "名称相似", "仅凭名称", "仅依据名称", "数据类别", "分类为", "类别为",
+)
 
 
 def _rule_corpus(record: Mapping[str, Any], rule: str, nested: Mapping[str, Any],
@@ -1759,6 +1861,25 @@ def _rule_has_zero_rows(record: Mapping[str, Any], nested: Mapping[str, Any]) ->
     return False
 
 
+def _marker_hit(corpus: str, marker: str) -> bool:
+    """True when the marker occurs in the corpus, ignoring negated forms.
+
+    “不可实例化”“不可重复创建”“无业务编号”等否定形态不得被对应正向标记误匹配；
+    直接前导“不/无/非”以及“不可”组合（如“不可重复创建”中的“重复创建”）都被视为否定。
+    """
+    if marker not in corpus:
+        return False
+    position = corpus.find(marker)
+    if position == 0:
+        return True
+    previous = corpus[position - 1]
+    if previous in ("不", "无", "非"):
+        return False
+    if previous == "可" and position >= 2 and corpus[position - 2] == "不":
+        return False
+    return True
+
+
 def infer_business_object_rule_status(rule: str, evidence: str, *,
                                       negative_evidence: str = "",
                                       record: Mapping[str, Any] | None = None,
@@ -1780,11 +1901,12 @@ def infer_business_object_rule_status(rule: str, evidence: str, *,
     positive_corpus = corpus
     for marker in profile["negative"]:
         positive_corpus = positive_corpus.replace(marker.lower(), "")
-    positive = any(marker.lower() in positive_corpus for marker in profile["positive"])
+    positive = any(_marker_hit(positive_corpus, marker.lower())
+                   for marker in profile["positive"])
     if rule == "r5" and _rule_has_zero_rows(record, nested):
         # 0 rows is not a conclusion.  Keep PASS available only when the
         # corpus also contains structural/instantiation evidence.
-        positive = positive and any(marker.lower() in corpus for marker in (
+        positive = positive and any(_marker_hit(corpus, marker.lower()) for marker in (
             "业务编号", "业务编码", "业务主键", "业务标识", "单据结构", "主数据结构",
             "实体结构", "可实例化", "可重复创建", "重复创建", "实例标识",
             "可产生业务实例", "记录结构", "businesskey", "businessidentifier",
@@ -2090,6 +2212,141 @@ def validate_business_object_evidence_isolation(state: Mapping[str, Any] | None)
                                          f"{candidate} 的 {rule_name.upper()} 目前只有 {evidence_kind}，证据不足但不构成结构错误",
                                          artifact_type="BUSINESS_OBJECT", artifact_id=candidate,
                                          details={"evidenceType": evidence_kind}))
+    return issues
+
+
+def _counter_evidence_markers(corpus: str) -> tuple[str, ...]:
+    """Match counter-evidence phrases inside evidence text only.
+
+    Sentences containing qualifiers such as “不能仅因…否决” are ignored so
+    that rule exceptions (master data, rule versions, report instances) are
+    not misread as counter-evidence.  Negated forms like “不可预置” do not
+    count as the weak marker “可预置”.
+    """
+    matched: list[str] = []
+    lowered = _text(corpus).lower()
+    for sentence in re.split(r"[。；;\n]", lowered):
+        if not sentence:
+            continue
+        if any(token in sentence for token in _COUNTER_QUALIFIER_PREFIXES):
+            continue
+        for marker in _STRONG_COUNTER_MARKERS:
+            if marker in sentence and marker not in matched:
+                matched.append(marker)
+        for marker in _WEAK_COUNTER_MARKERS:
+            if marker not in sentence or marker in matched:
+                continue
+            position = sentence.find(marker)
+            if position > 0 and sentence[position - 1] == "不":
+                continue
+            matched.append(marker)
+    return tuple(matched)
+
+
+def _explicit_counter_evidence(corpus: str) -> bool:
+    markers = _counter_evidence_markers(corpus)
+    strong = sum(1 for marker in markers if marker in _STRONG_COUNTER_MARKERS)
+    weak = sum(1 for marker in markers if marker in _WEAK_COUNTER_MARKERS)
+    return strong >= 1 or weak >= 2
+
+
+def _rule_evidence_types(raw: Any) -> set[str]:
+    if not isinstance(raw, Mapping):
+        return set()
+    result: set[str] = set()
+    raw_types = raw.get("evidenceTypes") or raw.get("evidence_types") or raw.get("types")
+    if isinstance(raw_types, str):
+        raw_types = [raw_types]
+    if isinstance(raw_types, (list, tuple, set)):
+        result.update(_key(item) for item in raw_types if _text(item))
+    evidence_values = raw.get("evidence")
+    if isinstance(evidence_values, Mapping):
+        evidence_values = [evidence_values]
+    if isinstance(evidence_values, list):
+        for evidence in evidence_values:
+            if not isinstance(evidence, Mapping):
+                continue
+            kind = _key(evidence.get("type") or evidence.get("evidenceType") or evidence.get("kind"))
+            if kind:
+                result.add(kind)
+    return result
+
+
+def validate_business_object_evidence_consistency(state: Mapping[str, Any] | None) -> list[ValidationIssue]:
+    """Reject PASS/CONFIRMED decisions contradicted by explicit evidence.
+
+    This is the low-overfitting evidence-consistency gate: keywords only
+    locate evidence inside the evidence corpus, never inside candidate names,
+    table names or the data category field.  A single strong counter marker
+    or two weak ones block an inconsistent PASS; report instances and rule
+    versions with their own lifecycle evidence stay exempt.  Candidates with
+    no counter-evidence but whose R5 PASS rests only on names/tables/category
+    are blocked from formal output.
+    """
+    if not isinstance(state, Mapping):
+        return []
+    issues: list[ValidationIssue] = []
+    for record in _business_object_candidate_values(state):
+        code = _text(_first_value(record, ("candidateCode", "candidateId", "businessObjectId",
+                                            "code", "id", "候选业务对象编码")))
+        r5_raw = _rule_field(record, "r5")
+        r5_decision = _rule_decision(record, "r5")
+        r3_decision = _rule_decision(record, "r3")
+        nested5 = r5_raw if isinstance(r5_raw, Mapping) else {}
+        corpus = _rule_corpus(record, "r5", nested5, r5_decision.evidence,
+                              r5_decision.negative_evidence)
+        for key in ("candidateKind", "instantiationProfile", "候选性质", "实例化画像"):
+            value = record.get(key)
+            if value not in (None, ""):
+                corpus += "；" + _evidence_summary(value)
+        kind = _key(_first_value(record, _KIND_KEYS))
+        if kind in _NON_BUSINESS_OBJECT_KINDS and r5_decision.status == "PASS":
+            issues.append(_issue(
+                "CONFIRMED_WITH_NON_BUSINESS_OBJECT_KIND", "ERROR",
+                f"业务对象 {code} 的候选性质为 {kind}（规范明确为非业务对象类别），"
+                "R5 仍为 PASS，不得进入正式 business_objects.csv",
+                artifact_type="BUSINESS_OBJECT", artifact_id=code,
+                details={"candidateKind": kind, "rule": "R5"}))
+        category = _text(_first_value(record, _CATEGORY_KEYS))
+        if category in _NON_BUSINESS_OBJECT_CATEGORIES:
+            corpus += "；" + category
+        if not corpus.strip():
+            continue
+        markers = _counter_evidence_markers(corpus)
+        if _explicit_counter_evidence(corpus):
+            if not any(marker in corpus for marker in _INSTANTIATION_EXCEPTION_MARKERS):
+                if r5_decision.status == "PASS":
+                    issues.append(_issue(
+                        "R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE", "ERROR",
+                        f"业务对象 {code} 的 R5 为 PASS，但证据明确包含反证（{'、'.join(markers)}），"
+                        "不得保留 CONFIRMED",
+                        artifact_type="BUSINESS_OBJECT", artifact_id=code,
+                        details={"counterEvidence": markers, "rule": "R5"}))
+                independence = tuple(marker for marker in markers if marker in (
+                    "依赖父对象", "仅从属", "必须依赖父", "不能独立创建", "不可独立创建",
+                    "不能独立维护", "不可独立维护", "不能独立管理", "不可独立管理",
+                    "没有可区分实例", "无独立实例"))
+                if r3_decision.status == "PASS" and independence:
+                    issues.append(_issue(
+                        "R3_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE", "ERROR",
+                        f"业务对象 {code} 的 R3 为 PASS，但证据明确表明其不能独立创建/维护"
+                        f"（{'、'.join(independence)}），不得保留 CONFIRMED",
+                        artifact_type="BUSINESS_OBJECT", artifact_id=code,
+                        details={"counterEvidence": independence, "rule": "R3"}))
+            continue
+        if r5_decision.status == "PASS":
+            has_instantiation = any(marker in corpus for marker in _R5_INSTANTIATION_MARKERS)
+            weak_types = _rule_evidence_types(nested5)
+            name_category_only = bool(weak_types and weak_types.issubset(_WEAK_EVIDENCE_TYPES))
+            name_category_only = name_category_only or any(
+                signal in corpus for signal in _NAME_CATEGORY_SIGNALS)
+            if not has_instantiation and name_category_only:
+                issues.append(_issue(
+                    "R5_PASS_WITHOUT_INSTANTIATION_EVIDENCE", "ERROR",
+                    f"业务对象 {code} 的 R5 为 PASS，但正向证据只来自名称/表名/数据类别，"
+                    "缺少真实实例化证据，不能进入正式 business_objects.csv",
+                    artifact_type="BUSINESS_OBJECT", artifact_id=code,
+                    details={"rule": "R5"}))
     return issues
 
 
@@ -2679,6 +2936,7 @@ def semantic_validation_issues(state: Mapping[str, Any] | None) -> list[Validati
     # read-only; it never upgrades a candidate or invents missing evidence.
     issues.extend(validate_business_object_decisions(state))
     issues.extend(validate_business_object_evidence_isolation(state))
+    issues.extend(validate_business_object_evidence_consistency(state))
     issues.extend(business_rule_validation_issues(state))
     issues.extend(validate_rule_decisions(state))
     issues.extend(validate_indicator_decisions(state))
@@ -3081,12 +3339,13 @@ def _indicator_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _assignment_status(entity: Mapping[str, Any]) -> str:
-    raw = _key(_first_value(entity, ("businessObjectAssignmentStatus",
-                                     "business_object_assignment_status", "assignmentStatus")))
-    if raw in LE_ASSIGNMENT_STATUSES:
-        return raw
-    code = _text(_first_value(entity, ("businessObjectCode", "business_object_code")))
-    return "ASSIGNED" if code else "UNRESOLVED"
+    """Derive the audit assignment status for one logical entity.
+
+    Explicit statuses (including the new NOT_APPLICABLE) win; legacy records
+    without a status fall back to their business-object code.  An empty code
+    never derives NOT_APPLICABLE by itself.
+    """
+    return logical_entity_assignment_status(entity)
 
 
 def _logical_entity_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -3488,26 +3747,137 @@ def _read_csv_file(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+_MAIN_FLAG_KEYS = (
+    "mainFlag", "main_flag", "isMain", "is_main", "mainEntity",
+    "main_entity", "是否主逻辑实体",
+)
+_NOT_APPLICABLE_CATEGORY_KEYS = (
+    "nonBusinessObjectCategory", "non_business_object_category",
+    "exclusionCategory", "exclusion_category",
+    "非业务对象类别", "排除类别", "category",
+)
+_NOT_APPLICABLE_REASON_KEYS = (
+    "exclusionReason", "exclusion_reason", "nonBusinessObjectReason",
+    "non_business_object_reason", "排除原因", "非业务对象原因", "reason",
+)
+_NOT_APPLICABLE_EVIDENCE_KEYS = (
+    "exclusionEvidence", "exclusion_evidence", "nonBusinessObjectEvidence",
+    "non_business_object_evidence", "排除证据", "非业务对象证据", "evidence",
+)
+
+
+def _raw_main_flag(entity: Mapping[str, Any]) -> str:
+    for key in _MAIN_FLAG_KEYS:
+        if key in entity and _text(entity.get(key)):
+            return "Y" if _key(entity.get(key)) in {"Y", "YES", "TRUE", "1"} else "N"
+    return "N"
+
+
+def _not_applicable_evidence(entity: Mapping[str, Any]) -> str:
+    category = _text(_first_value(entity, _NOT_APPLICABLE_CATEGORY_KEYS))
+    reason = _text(_first_value(entity, _NOT_APPLICABLE_REASON_KEYS))
+    evidence = _text(_first_value(entity, _NOT_APPLICABLE_EVIDENCE_KEYS))
+    return "；".join(value for value in (category, reason, evidence) if value)
+
+
 def validate_logical_entity_assignments(state: Mapping[str, Any] | None) -> list[ValidationIssue]:
+    """Validate the ASSIGNED / NOT_APPLICABLE / UNRESOLVED audit statuses.
+
+    ASSIGNED entities must reference a formal CONFIRMED business object.
+    NOT_APPLICABLE entities must leave the business-object fields empty, must
+    not be main entities, must carry a non-business-object classification,
+    reason and evidence, and must link to a REJECTED candidate decision (or an
+    equivalent auditable rejection).  UNRESOLVED keeps its confirmation
+    requirements and is never silently converted.
+    """
     if not isinstance(state, Mapping):
         return []
-    confirmed_codes = {item.candidate_code for item in business_object_decision_records(state)
-                       if item.decision == CONFIRMED}
+    decisions = business_object_decision_records(state)
+    confirmed_codes = {item.candidate_code for item in decisions if item.decision == CONFIRMED}
+    rejected_codes = {item.candidate_code for item in decisions if item.decision == REJECTED}
+    rejected_members: dict[str, list[str]] = {}
+    for item in decisions:
+        if item.decision != REJECTED:
+            continue
+        for entity_id in item.member_entity_ids:
+            rejected_members.setdefault(entity_id, []).append(item.candidate_code)
     issues: list[ValidationIssue] = []
-    for row in _logical_entity_rows(state):
-        status = row["business_object_assignment_status"]
-        if status == "ASSIGNED" and row["business_object_code"] not in confirmed_codes:
-            issues.append(_issue("INVALID_BUSINESS_OBJECT_ASSIGNMENT", "ERROR",
-                                 f"逻辑实体 {row['logical_entity']} 未引用正式 CONFIRMED Business Object",
-                                 artifact_type="LOGICAL_ENTITY", artifact_id=row["logical_entity"]))
-        if status == "UNASSIGNED" and not row["missing_evidence"]:
-            issues.append(_issue("MISSING_UNASSIGNED_REASON", "WARNING",
-                                 f"逻辑实体 {row['logical_entity']} 标为 UNASSIGNED 但没有原因",
-                                 artifact_type="LOGICAL_ENTITY", artifact_id=row["logical_entity"]))
-        if status == "UNRESOLVED" and not row["missing_evidence"]:
-            issues.append(_issue("MISSING_ASSIGNMENT_EVIDENCE", "WARNING",
-                                 f"逻辑实体 {row['logical_entity']} 归属未解析但没有缺失证据说明",
-                                 artifact_type="LOGICAL_ENTITY", artifact_id=row["logical_entity"]))
+    seen: set[str] = set()
+    for entity in _iter_entity_records(state):
+        identifier = _entity_id(entity)
+        if not identifier or identifier in seen:
+            continue
+        seen.add(identifier)
+        status = _assignment_status(entity)
+        code = _text(_first_value(entity, ("businessObjectCode", "business_object_code",
+                                           "业务对象编码")))
+        name = _text(_first_value(entity, ("businessObjectName", "business_object_name",
+                                           "业务对象名称")))
+        main_flag = _raw_main_flag(entity)
+        if status == "ASSIGNED":
+            if not code:
+                issues.append(_issue("MISSING_BUSINESS_OBJECT_ASSIGNMENT", "ERROR",
+                                     f"逻辑实体 {identifier} 状态为 ASSIGNED 但缺少业务对象编码",
+                                     artifact_type="LOGICAL_ENTITY", artifact_id=identifier))
+            elif code not in confirmed_codes:
+                issues.append(_issue("INVALID_BUSINESS_OBJECT_ASSIGNMENT", "ERROR",
+                                     f"逻辑实体 {identifier} 未引用正式 CONFIRMED Business Object",
+                                     artifact_type="LOGICAL_ENTITY", artifact_id=identifier,
+                                     details={"businessObjectCode": code,
+                                              "confirmedBusinessObjects": sorted(confirmed_codes)}))
+            continue
+        if status == "NOT_APPLICABLE":
+            if main_flag == "Y":
+                issues.append(_issue("NOT_APPLICABLE_MAIN_FLAG", "ERROR",
+                                     f"逻辑实体 {identifier} 为非业务对象逻辑实体（NOT_APPLICABLE），"
+                                     "是否主逻辑实体必须为 N",
+                                     artifact_type="LOGICAL_ENTITY", artifact_id=identifier))
+            if code or name:
+                issues.append(_issue("NOT_APPLICABLE_WITH_BUSINESS_OBJECT", "ERROR",
+                                     f"逻辑实体 {identifier} 为非业务对象逻辑实体（NOT_APPLICABLE），"
+                                     "业务对象编码/名称必须留空",
+                                     artifact_type="LOGICAL_ENTITY", artifact_id=identifier,
+                                     details={"businessObjectCode": code,
+                                              "businessObjectName": name}))
+            evidence = _not_applicable_evidence(entity)
+            if not evidence:
+                issues.append(_issue("NOT_APPLICABLE_MISSING_AUDIT_EVIDENCE", "ERROR",
+                                     f"逻辑实体 {identifier} 标为 NOT_APPLICABLE，"
+                                     "但缺少非业务对象分类、排除原因或证据",
+                                     artifact_type="LOGICAL_ENTITY", artifact_id=identifier))
+            declared_rejected = _text(_first_value(entity, (
+                "rejectedBusinessObjectCode", "rejected_business_object_code",
+                "对应否决业务对象编码", "rejectedCandidateCode")))
+            linked = bool(declared_rejected and declared_rejected in rejected_codes) or bool(
+                code and code in rejected_codes) or bool(rejected_members.get(identifier))
+            if not linked:
+                issues.append(_issue("NOT_APPLICABLE_WITHOUT_REJECTED_DECISION", "ERROR",
+                                     f"逻辑实体 {identifier} 标为 NOT_APPLICABLE，"
+                                     "但没有对应的 REJECTED 业务对象候选决策或等价审计记录",
+                                     artifact_type="LOGICAL_ENTITY", artifact_id=identifier))
+            continue
+        if status == "UNASSIGNED":
+            missing = _text(_first_value(entity, ("missingEvidence", "missing_evidence",
+                                                  "unassignedReason", "assignmentReason")))
+            if not missing:
+                issues.append(_issue("MISSING_UNASSIGNED_REASON", "WARNING",
+                                     f"逻辑实体 {identifier} 标为 UNASSIGNED 但没有原因",
+                                     artifact_type="LOGICAL_ENTITY", artifact_id=identifier))
+            continue
+        if status == "UNRESOLVED":
+            if main_flag == "Y":
+                issues.append(_issue("UNRESOLVED_MAIN_FLAG", "ERROR",
+                                     f"逻辑实体 {identifier} 归属未解析（UNRESOLVED），"
+                                     "是否主逻辑实体必须为 N",
+                                     artifact_type="LOGICAL_ENTITY", artifact_id=identifier))
+            missing = _text(_first_value(entity, ("missingEvidence", "missing_evidence",
+                                                  "unassignedReason", "assignmentReason",
+                                                  "unknownReason", "unknown_reason")))
+            if not missing:
+                issues.append(_issue("MISSING_ASSIGNMENT_EVIDENCE", "WARNING",
+                                     f"逻辑实体 {identifier} 归属未解析但没有缺失证据说明",
+                                     artifact_type="LOGICAL_ENTITY", artifact_id=identifier))
+            continue
     return issues
 
 
@@ -4178,6 +4548,7 @@ def _stage_specific_issues(stage: str, work_dir: Path, output_dir: Path,
     if stage == "BUSINESS_OBJECTS":
         issues.extend(validate_business_object_decisions(state))
         issues.extend(validate_business_object_evidence_isolation(state))
+        issues.extend(validate_business_object_evidence_consistency(state))
     if stage == "GOVERNANCE_AND_FINAL":
         issues.extend(business_rule_validation_issues(state))
         issues.extend(validate_rule_decisions(state))

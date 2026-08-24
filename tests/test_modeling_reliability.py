@@ -16,6 +16,7 @@ from open_claude.modeling_reliability import (  # noqa: E402
     CONFIRMED,
     EXTENSION,
     REFERENCE,
+    REJECTED,
     UNRESOLVED,
     BUSINESS_OBJECT_DECISION_HEADERS,
     BusinessRuleType,
@@ -23,10 +24,15 @@ from open_claude.modeling_reliability import (  # noqa: E402
     aggregation_components,
     analyze_aggregation,
     apply_aggregation_downgrades,
+    apply_not_applicable_normalization,
     business_object_decision_records,
     derive_business_object_decision,
+    finalize_semantic_model,
     infer_business_object_rule_status,
+    is_structural_blocker,
+    normalize_modeling_state,
     validate_business_object_decisions,
+    validate_business_object_evidence_consistency,
     business_rule_validation_issues,
     validate_business_rule,
     validate_formal_business_object_csv,
@@ -34,6 +40,7 @@ from open_claude.modeling_reliability import (  # noqa: E402
     semantic_validation_issues,
     validate_formal_relation_csv,
     validate_modeling_stages,
+    validate_logical_entity_assignments,
     VALIDATION_CACHE_VERSION,
 )
 
@@ -887,6 +894,448 @@ class V0001DuplicateNameGateTests(unittest.TestCase):
             self.assertGreater(validate.call_count, 5)
             self.assertTrue(any(event.get("stage") == "INPUT_CONTEXT"
                                 for event in third["events"]))
+
+
+class BusinessObjectEvidenceConsistencyTests(unittest.TestCase):
+    """规则 12（可实例化）的低过拟合证据一致性门禁正反例。
+
+    覆盖：固定码表拒绝、主数据/0 行放行、规则配置行拒绝、规则定义放行、
+    SQL 聚合视图拒绝、报告实例放行、名称含“报告”降 CANDIDATE、
+    正反证据冲突保持 UNKNOWN、finalization 阻断、两服务共享同一门禁。
+    """
+
+    @staticmethod
+    def _candidate(code, name, r5_status="PASS", r5_evidence="直接来源", *,
+                   r5_types=None):
+        r5 = {"status": r5_status, "evidence": r5_evidence}
+        if r5_types:
+            r5["evidenceTypes"] = list(r5_types)
+        record = {
+            "candidateCode": code, "candidateName": name,
+            "memberEntityIds": ["LE001"], "confidence": "80",
+            **{f"r{i}": {"status": "PASS",
+                         "evidence": "有明确业务用途、稳定编号、独立生命周期和状态字段"}
+               for i in range(1, 5)},
+            "r5": r5,
+        }
+        return {"businessObjectDecisions": [record]}
+
+    @staticmethod
+    def _unknown_r5(code, name, r5_evidence, *, conflicts=""):
+        record = {
+            "candidateCode": code, "candidateName": name,
+            "memberEntityIds": ["LE001"], "confidence": "90",
+            **{f"r{i}": {"status": "PASS", "evidence": "直接来源"} for i in range(1, 5)},
+            "r5": {"status": "UNKNOWN", "evidence": r5_evidence},
+        }
+        if conflicts:
+            record["conflicts"] = conflicts
+        return {"businessObjectDecisions": [record]}
+
+    def test_fixed_code_table_reference_data_is_rejected(self):
+        # 固定采购需求类型码表：有限、预置、仅分类、无业务行为 → R5 FAIL / REJECTED
+        self.assertEqual(infer_business_object_rule_status(
+            "r5", "固定码表，值域有限且可预置，仅分类标签，无业务行为"), "FAIL")
+        decision = business_object_decision_records(self._unknown_r5(
+            "CO_TYPE", "采购需求类型",
+            "固定码表，值域有限且可预置，仅分类标签，无业务行为"))[0]
+        self.assertEqual(decision.rules[4].status, "FAIL")
+        self.assertEqual(decision.decision, REJECTED)
+
+    def test_low_row_count_governed_master_data_is_not_rejected(self):
+        # 可持续新增且独立治理的主数据：即使当前行数很少，也不能仅因数量有限而拒绝
+        state = {"businessObjectDecisions": [{
+            "candidateCode": "CO_MD", "candidateName": "供应商主数据",
+            "memberEntityIds": ["LE001"], "confidence": "70", "rowCount": 3,
+            **{f"r{i}": {"status": "PASS", "evidence": "直接来源"} for i in range(1, 5)},
+            "r5": {"status": "UNKNOWN", "rowCount": 3,
+                   "evidence": "当前样本仅 3 行，但由业务持续新增，有稳定业务编号、"
+                               "主数据结构和可重复创建语义"},
+        }]}
+        decision = business_object_decision_records(state)[0]
+        self.assertEqual(decision.rules[4].status, "PASS")
+        self.assertEqual(decision.decision, CONFIRMED)
+        self.assertEqual(validate_business_object_evidence_consistency(state), [])
+
+    def test_zero_rows_with_stable_structure_do_not_fail_r5(self):
+        # 0 行业务表但具有稳定业务编号和可重复创建结构：0 行不能单独导致 R5 FAIL
+        zero = {"businessObjectDecisions": [{
+            "candidateCode": "CO_ZERO", "candidateName": "零行主数据",
+            "memberEntityIds": ["LE001"], "confidence": "70", "rowCount": 0,
+            **{f"r{i}": {"status": "PASS", "evidence": "直接来源"} for i in range(1, 5)},
+            "r5": {"status": "UNKNOWN", "rowCount": 0,
+                   "evidence": "当前数据 0 行，但存在稳定业务编号、主数据结构和可重复创建语义"},
+        }]}
+        decision = business_object_decision_records(zero)[0]
+        self.assertEqual(decision.rules[4].status, "PASS")
+        self.assertEqual(validate_business_object_evidence_consistency(zero), [])
+
+    def test_rule_configuration_row_is_not_a_business_object(self):
+        # 规则条件配置行：无独立编号、版本和生命周期，不得成为业务对象
+        self.assertEqual(infer_business_object_rule_status(
+            "r5", "规则条件配置行，无独立编号、版本和生命周期，不能形成可区分实例"), "FAIL")
+        decision = business_object_decision_records(self._unknown_r5(
+            "CO_RULE_CFG", "规则条件配置行",
+            "规则条件配置行，无独立编号、版本和生命周期，不能形成可区分实例"))[0]
+        self.assertEqual(decision.rules[4].status, "FAIL")
+        self.assertEqual(decision.decision, REJECTED)
+
+    def test_governed_rule_definition_can_pass(self):
+        # 有编号、版本、审批、发布、生效和停用的规则定义：不能被“规则”关键字误杀
+        state = self._candidate(
+            "CO_RULE_DEF", "采购规则定义", r5_evidence=(
+                "规则定义有独立规则编号、规则版本，支持版本化、审批、发布、生效和停用流程"))
+        decision = business_object_decision_records(state)[0]
+        self.assertEqual(decision.rules[4].status, "PASS")
+        self.assertEqual(decision.decision, CONFIRMED)
+        self.assertEqual(validate_business_object_evidence_consistency(state), [])
+
+    def test_sql_aggregate_view_is_rejected(self):
+        # SQL 聚合报表/数据库视图：纯派生展示、无独立实例 → R5 FAIL
+        self.assertEqual(infer_business_object_rule_status(
+            "r5", "SQL 聚合视图，纯查询结果、统计展示，无独立实例"), "FAIL")
+        decision = business_object_decision_records(self._unknown_r5(
+            "CO_VIEW", "采购统计视图",
+            "SQL 聚合视图，纯查询结果、统计展示，无独立实例"))[0]
+        self.assertEqual(decision.rules[4].status, "FAIL")
+        self.assertEqual(decision.decision, REJECTED)
+
+    def test_report_instance_with_lifecycle_can_pass(self):
+        # 有报告编号、报告期、编制、审批、发布、归档的报告实例：不能被“报告”关键字误杀
+        state = self._candidate(
+            "CO_REPORT_INST", "年度风险评估报告", r5_evidence=(
+                "该次报告有唯一报告编号、报告期间，以及编制、审批、发布、归档独立生命周期"))
+        decision = business_object_decision_records(state)[0]
+        self.assertEqual(decision.rules[4].status, "PASS")
+        self.assertEqual(decision.decision, CONFIRMED)
+        self.assertEqual(validate_business_object_evidence_consistency(state), [])
+
+    def test_report_name_without_evidence_is_candidate_not_rejected(self):
+        # 名称包含“报告”但证据不足 → UNKNOWN/CANDIDATE，而不是直接 REJECTED
+        state = self._unknown_r5("CO_REPORT_NAME", "采购报告",
+                                 "名称包含报告，缺少实例化证据")
+        decision = business_object_decision_records(state)[0]
+        self.assertEqual(decision.rules[4].status, "UNKNOWN")
+        self.assertEqual(decision.decision, CANDIDATE)
+        self.assertEqual(validate_business_object_evidence_consistency(state), [])
+        self.assertFalse(any(
+            issue.code == "R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE"
+            for issue in semantic_validation_issues(state)))
+
+    def test_name_keyword_only_triggers_review_not_rejection(self):
+        # 名称含“字典/类型/规则/报表”只触发复核，不直接决定结论
+        for name in ("采购需求类型字典", "折扣规则表", "月度统计报表"):
+            state = self._unknown_r5(
+                "CO_N" + str(abs(hash(name)) % 1000), name,
+                "仅名称提示可能为码表/规则/报表，缺少实例化证据")
+            decision = business_object_decision_records(state)[0]
+            self.assertEqual(decision.rules[4].status, "UNKNOWN")
+            self.assertEqual(decision.decision, CANDIDATE)
+            self.assertEqual(validate_business_object_evidence_consistency(state), [])
+
+    def test_conflicting_category_and_behavior_evidence_is_unknown(self):
+        # 数据类别与行为证据冲突：保留 UNKNOWN 和冲突说明，不硬阻断
+        state = self._unknown_r5(
+            "CO_CONFLICT", "冲突候选",
+            "固定码表但可新增业务实例，正反证据冲突",
+            conflicts="固定码表 vs 可新增业务实例")
+        decision = business_object_decision_records(state)[0]
+        self.assertEqual(decision.rules[4].status, "UNKNOWN")
+        self.assertEqual(decision.decision, CANDIDATE)
+        self.assertTrue(decision.conflicts)
+        self.assertEqual(validate_business_object_evidence_consistency(state), [])
+
+    def test_finalization_gate_blocks_inconsistent_confirmed(self):
+        # 反证明确仍保留 PASS/CONFIRMED：finalization gate 必须阻断
+        state = self._candidate(
+            "CO_FIXED", "采购需求类型",
+            r5_evidence="该表是固定码表，码值数量有限且可预置，仅分类标签，无业务行为")
+        with tempfile.TemporaryDirectory() as root:
+            result = finalize_semantic_model(Path(root) / "mission-work", state)
+        self.assertEqual(result["status"], "FAILED")
+        blockers = [issue for issue in result["issues"]
+                    if issue.code == "R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE"]
+        self.assertEqual(len(blockers), 1)
+        self.assertTrue(is_structural_blocker(blockers[0]))
+
+    def test_47313_and_47314_reach_identical_conclusions(self):
+        # 47313 与 47314 对相同 modeling_state 得到一致结论（共享同一门禁）
+        import oc_codex_server
+        self.assertIs(oc_codex_server.semantic_validation_issues,
+                      reliability.semantic_validation_issues)
+        self.assertIs(oc_codex_server.finalize_semantic_model,
+                      reliability.finalize_semantic_model)
+        state = self._candidate(
+            "CO_FIXED", "采购需求类型",
+            r5_evidence="该表是固定码表，值域有限且可预置，仅分类标签，无业务行为")
+        web_issues = oc_codex_server.semantic_validation_issues(state)
+        self.assertIn("R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE",
+                      {issue.code for issue in web_issues})
+        with tempfile.TemporaryDirectory() as root:
+            standalone_result = oc_codex_server.finalize_semantic_model(
+                Path(root) / "mission-work", state)
+        self.assertEqual(standalone_result["status"], "FAILED")
+        self.assertIn("R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE",
+                      {issue.code for issue in standalone_result["issues"]})
+
+
+class NotApplicableAssignmentTests(unittest.TestCase):
+    """非业务对象逻辑实体（NOT_APPLICABLE）与 ASSIGNED/UNRESOLVED 归属门禁。"""
+
+    @staticmethod
+    def _confirmed_bo(code="BO0001", entity="LE0001"):
+        return {
+            "candidateCode": code, "candidateName": "采购订单",
+            "memberEntityIds": [entity], "confidence": "80", "decision": "CONFIRMED",
+            **{f"r{i}": {"status": "PASS",
+                         "evidence": "有明确业务用途、稳定编号、独立生命周期和状态字段"}
+               for i in range(1, 5)},
+            "r5": {"status": "PASS",
+                   "evidence": "由业务活动持续产生，有稳定业务编号和可重复创建的单据结构"},
+        }
+
+    @staticmethod
+    def _rejected_bo(code, entity, category_evidence):
+        return {
+            "candidateCode": code, "candidateName": "非业务对象候选",
+            "memberEntityIds": [entity], "confidence": "60", "decision": "REJECTED",
+            **{f"r{i}": {"status": "PASS", "evidence": "直接来源"} for i in range(1, 4)},
+            "r4": {"status": "UNKNOWN", "evidence": "无独立生命周期证据"},
+            "r5": {"status": "FAIL", "evidence": category_evidence},
+        }
+
+    @staticmethod
+    def _not_applicable_entity(entity_id, *, category="基础数据", code=None):
+        item = {
+            "entityId": entity_id,
+            "businessObjectAssignmentStatus": "NOT_APPLICABLE",
+            "mainFlag": "N",
+            "nonBusinessObjectCategory": category,
+            "exclusionReason": "固定码表，值域有限且可预置，仅分类标签，无业务行为",
+            "exclusionEvidence": "来源表码值数量有限且上线前预置，无业务行为与独立生命周期",
+        }
+        if code:
+            item["rejectedBusinessObjectCode"] = code
+        return item
+
+    @staticmethod
+    def _finalize_with_outputs(state, outputs):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            work = root / "mission-work"
+            output = root / "mission-output"
+            output.mkdir()
+            for name, header, rows in outputs:
+                with (output / name).open("w", encoding="utf-8", newline="") as handle:
+                    csv.writer(handle, lineterminator="\n").writerows([header] + rows)
+            result = finalize_semantic_model(
+                work, state, output_dir=output,
+                required_outputs=[name for name, _, _ in outputs])
+            with (work / "logical_entity_decisions.csv").open(
+                    encoding="utf-8-sig") as handle:
+                logical_entity_audit = list(csv.DictReader(handle))
+            with (work / "business_object_decisions.csv").open(
+                    encoding="utf-8-sig") as handle:
+                business_object_audit = list(csv.DictReader(handle))
+            return result, logical_entity_audit, business_object_audit
+
+    def test_four_non_business_object_categories_pass_finalize(self):
+        # 基础数据/规则数据/参考数据/报告报表数据对应的非业务对象逻辑实体：
+        # 编码/名称留空、主标志 N、NOT_APPLICABLE、有分类/原因/证据和 REJECTED
+        # 决策时，最终门禁通过，且不产生任何占位业务对象。
+        for category, r5_evidence in (
+            ("基础数据", "固定码表，值域有限且可预置，仅分类标签，无业务行为"),
+            ("规则数据", "规则条件配置行，无独立编号、版本和生命周期，不能形成可区分实例"),
+            ("参考数据", "分类/标签型参考数据，值域有限且可预置，仅作分类参考，无业务行为"),
+            ("报告报表数据", "报表模板/查询定义/统计展示快照，无独立业务实例"),
+        ):
+            with self.subTest(category=category):
+                state = {
+                    "businessObjectDecisions": [
+                        self._confirmed_bo(),
+                        self._rejected_bo("BO_REJ", "LE0002", r5_evidence),
+                    ],
+                    "entities": [
+                        {"entityId": "LE0001", "businessObjectCode": "BO0001", "isMain": "Y"},
+                        self._not_applicable_entity("LE0002", category=category, code="BO_REJ"),
+                    ],
+                }
+                outputs = [
+                    ("business_objects.csv",
+                     ["业务对象编码", "业务对象名称", "业务对象英文名", "业务对象定义", "数据类别"],
+                     [["BO0001", "采购订单", "purchase_order", "采购订单相关业务对象定义", "事务数据"]]),
+                    ("logical_entities.csv",
+                     ["业务对象编码", "业务对象名称", "逻辑实体编码", "逻辑实体名称",
+                      "逻辑实体英文名", "逻辑实体定义", "是否主逻辑实体", "数据类别"],
+                     [["BO0001", "采购订单", "LE0001", "采购订单实体", "purchase_order_entity",
+                       "采购订单业务实体定义", "Y", "事务数据"],
+                      ["", "", "LE0002", "采购需求类型", "purchase_requirement_type",
+                       "采购需求类型码表逻辑实体", "N", category]]),
+                ]
+                result, logical_entity_audit, business_object_audit = \
+                    self._finalize_with_outputs(state, outputs)
+                self.assertEqual(
+                    result["status"], "PASSED",
+                    [issue.as_dict() for issue in result["issues"]])
+                self.assertIn("NOT_APPLICABLE",
+                              {row["业务对象归属状态"] for row in logical_entity_audit})
+                self.assertIn("REJECTED",
+                              {row["最终决策"] for row in business_object_audit})
+
+    def test_confirmed_four_category_candidate_is_blocked(self):
+        # 候选性质为互斥非业务对象类别仍 R5=PASS/CONFIRMED → 必须阻断
+        state = {"businessObjectDecisions": [{
+            "candidateCode": "CO_KIND", "candidateName": "采购需求类型",
+            "candidateKind": "REFERENCE_DATA", "confidence": "80",
+            "memberEntityIds": ["LE1"],
+            **{f"r{i}": {"status": "PASS", "evidence": "直接来源"} for i in range(1, 5)},
+            "r5": {"status": "PASS", "evidence": "存在业务编号可区分实例"},
+        }]}
+        issues = semantic_validation_issues(state)
+        self.assertIn("CONFIRMED_WITH_NON_BUSINESS_OBJECT_KIND",
+                      {issue.code for issue in issues})
+        # 数据类别=基础数据 + 码表证据组合仍 PASS → 证据一致性门禁阻断
+        state2 = {"businessObjectDecisions": [{
+            "candidateCode": "CO_CAT", "candidateName": "采购需求类型",
+            "数据类别": "基础数据", "confidence": "80", "memberEntityIds": ["LE1"],
+            **{f"r{i}": {"status": "PASS", "evidence": "直接来源"} for i in range(1, 5)},
+            "r5": {"status": "PASS", "evidence": "码值数量有限且可预置，仅分类标签"},
+        }]}
+        issues2 = semantic_validation_issues(state2)
+        self.assertIn("R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE",
+                      {issue.code for issue in issues2})
+        self.assertTrue(all(is_structural_blocker(issue)
+                            for issue in issues + issues2))
+
+    def test_not_applicable_main_flag_is_blocked(self):
+        entity = self._not_applicable_entity("LE1", code="BO_REJ")
+        entity["mainFlag"] = "Y"
+        state = {"entities": [entity],
+                 "businessObjectDecisions": [
+                     self._rejected_bo("BO_REJ", "LE1",
+                                       "固定码表，值域有限且可预置，仅分类标签，无业务行为")]}
+        issues = semantic_validation_issues(state)
+        self.assertIn("NOT_APPLICABLE_MAIN_FLAG", {issue.code for issue in issues})
+        self.assertIn("V0001_MAIN_FLAG_WITHOUT_BUSINESS_OBJECT",
+                      {issue.code for issue in issues})
+
+    def test_not_applicable_with_business_object_code_is_blocked(self):
+        state = {"entities": [{
+            "entityId": "LE1", "businessObjectAssignmentStatus": "NOT_APPLICABLE",
+            "businessObjectCode": "BO_X", "mainFlag": "N",
+            "nonBusinessObjectCategory": "基础数据",
+            "exclusionReason": "固定码表", "exclusionEvidence": "来源表码值可预置",
+        }],
+            "businessObjectDecisions": [
+                self._rejected_bo("BO_X", "LE1",
+                                  "固定码表，值域有限且可预置，仅分类标签，无业务行为")]}
+        issues = semantic_validation_issues(state)
+        self.assertIn("NOT_APPLICABLE_WITH_BUSINESS_OBJECT",
+                      {issue.code for issue in issues})
+
+    def test_not_applicable_missing_audit_evidence_is_blocked(self):
+        state = {"entities": [{
+            "entityId": "LE1", "businessObjectAssignmentStatus": "NOT_APPLICABLE",
+            "mainFlag": "N", "rejectedBusinessObjectCode": "BO_REJ",
+        }],
+            "businessObjectDecisions": [
+                self._rejected_bo("BO_REJ", "LE1",
+                                  "固定码表，值域有限且可预置，仅分类标签，无业务行为")]}
+        issues = semantic_validation_issues(state)
+        self.assertIn("NOT_APPLICABLE_MISSING_AUDIT_EVIDENCE",
+                      {issue.code for issue in issues})
+
+    def test_not_applicable_without_rejected_decision_is_blocked(self):
+        state = {"entities": [self._not_applicable_entity("LE1")]}
+        issues = semantic_validation_issues(state)
+        self.assertIn("NOT_APPLICABLE_WITHOUT_REJECTED_DECISION",
+                      {issue.code for issue in issues})
+
+    def test_assigned_without_code_is_blocked(self):
+        state = {"entities": [{"entityId": "LE1",
+                               "businessObjectAssignmentStatus": "ASSIGNED",
+                               "mainFlag": "N"}]}
+        issues = semantic_validation_issues(state)
+        self.assertIn("MISSING_BUSINESS_OBJECT_ASSIGNMENT",
+                      {issue.code for issue in issues})
+
+    def test_assigned_referencing_non_confirmed_object_is_blocked(self):
+        cases = {
+            "CANDIDATE": {"r5": {"status": "UNKNOWN", "evidence": "缺少实例化证据"},
+                          "confirmationQuestion": "请确认实例化证据"},
+            "REJECTED": {},
+        }
+        for label, override in cases.items():
+            record = self._rejected_bo("BO_X", "LE1",
+                                       "固定码表，值域有限且可预置，仅分类标签，无业务行为")
+            record.update(override)
+            state = {"entities": [{
+                "entityId": "LE1", "businessObjectAssignmentStatus": "ASSIGNED",
+                "businessObjectCode": "BO_X", "mainFlag": "N"}],
+                "businessObjectDecisions": [record]}
+            with self.subTest(label=label):
+                issues = semantic_validation_issues(state)
+                self.assertIn("INVALID_BUSINESS_OBJECT_ASSIGNMENT",
+                              {issue.code for issue in issues})
+        missing = {"entities": [{
+            "entityId": "LE1", "businessObjectAssignmentStatus": "ASSIGNED",
+            "businessObjectCode": "BO_MISSING", "mainFlag": "N"}]}
+        issues = semantic_validation_issues(missing)
+        self.assertIn("INVALID_BUSINESS_OBJECT_ASSIGNMENT",
+                      {issue.code for issue in issues})
+
+    def test_unresolved_is_never_auto_converted_to_not_applicable(self):
+        state = {"entities": [{
+            "entityId": "LE1", "businessObjectAssignmentStatus": "UNRESOLVED",
+            "missingEvidence": "缺少来源证据", "confirmationQuestion": "请确认归属",
+        }]}
+        normalize_modeling_state(state)
+        entity = state["entities"][0]
+        self.assertEqual(entity["businessObjectAssignmentStatus"], "UNRESOLVED")
+        self.assertNotIn("NOT_APPLICABLE", entity.values())
+        self.assertEqual(apply_not_applicable_normalization(state), 0)
+
+    def test_legacy_entity_without_status_is_not_derived_not_applicable(self):
+        state = {"entities": [{"entityId": "LE2"}]}
+        normalize_modeling_state(state)
+        self.assertNotEqual(state["entities"][0].get("businessObjectAssignmentStatus"),
+                            "NOT_APPLICABLE")
+        issues = validate_logical_entity_assignments(state)
+        self.assertIn("MISSING_ASSIGNMENT_EVIDENCE", {issue.code for issue in issues})
+        self.assertNotIn("NOT_APPLICABLE_WITHOUT_REJECTED_DECISION",
+                         {issue.code for issue in issues})
+
+    def test_not_applicable_auto_fix_only_with_evidence(self):
+        # 有充分证据时：主标志 N、错误编码被清除并保留否决关联
+        state = {"businessObjectDecisions": [
+            self._rejected_bo("BO_REJ", "LE1",
+                              "固定码表，值域有限且可预置，仅分类标签，无业务行为")],
+            "entities": [{
+                "entityId": "LE1", "businessObjectAssignmentStatus": "NOT_APPLICABLE",
+                "businessObjectCode": "BO_REJ", "mainFlag": "Y",
+                "nonBusinessObjectCategory": "基础数据",
+                "exclusionReason": "固定码表", "exclusionEvidence": "来源表码值可预置",
+            }]}
+        self.assertEqual(apply_not_applicable_normalization(state), 1)
+        entity = state["entities"][0]
+        self.assertEqual(entity.get("mainFlag"), "N")
+        self.assertNotIn("businessObjectCode", entity)
+        self.assertEqual(entity.get("rejectedBusinessObjectCode"), "BO_REJ")
+
+    def test_47313_and_47314_share_not_applicable_gate(self):
+        import oc_codex_server
+        self.assertIs(oc_codex_server.semantic_validation_issues,
+                      reliability.semantic_validation_issues)
+        self.assertIs(oc_codex_server.finalize_semantic_model,
+                      reliability.finalize_semantic_model)
+        state = {"entities": [self._not_applicable_entity("LE1", code="BO_REJ")],
+                 "businessObjectDecisions": [
+                     self._rejected_bo("BO_REJ", "LE1",
+                                       "固定码表，值域有限且可预置，仅分类标签，无业务行为")]}
+        web = oc_codex_server.semantic_validation_issues(state)
+        standalone = reliability.semantic_validation_issues(state)
+        self.assertEqual([issue.code for issue in web],
+                         [issue.code for issue in standalone])
 
 
 if __name__ == "__main__":

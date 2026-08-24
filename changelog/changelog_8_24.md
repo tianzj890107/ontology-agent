@@ -88,3 +88,15 @@
 - 验证：`python -m unittest tests.test_standalone_modeling_server tests.test_frontend_contract` 通过，`python -m unittest discover -s tests` 361 项通过（3 项跳过）；`npm run build`（vite 构建通过）；`py_compile` 与 `git diff --check` 通过。
 - 部署：已部署 47313/47314（服务器直连 github 超时，沿用本地 bundle+scp；本次改 `standalone_modeling_server.py` 与前端 dist，不在依赖指纹内，venv 无需重装），两服务 `/`、`/health` 均 200，启动日志均含 transport timeouts 行，模型接口默认仍为 `Qwen/Qwen3-80B-AWQ`；`run_6ed2452ad3c447c1a2bfb4edbaff76a7` 未改动状态，可直接按“继续运行”或提问恢复。
 - 主要文件：`frontend/src/main.jsx`、`frontend/dist/*`、`open-claude/standalone_modeling_server.py`、`tests/test_standalone_modeling_server.py`、`tests/test_frontend_contract.py`、`changelog/changelog_8_24.md`。
+
+### 10. 四类非业务对象不识别为业务对象：逻辑实体归属状态门禁
+
+- 规范：以最新第 12 条内容为准修订构建链固定文件名 `rules/数据模型建模规范v0.0.1.xlsx`（权威源为未跟踪的用户新文件 `rules/数据模型建模规范-v.0.0.1.xlsx`，不长期保留两个仅标点不同的副本）。明确基础数据、规则数据、参考数据、报告报表数据不得识别为业务对象，但仍是合法逻辑实体；可独立创建/版本化/审批/发布/生效/停用/审计的规则定义或规则版本、有唯一报告编号和独立生命周期的报告实例、可治理主数据等例外保留。明确“不是业务对象”不等于“不是逻辑实体”，对应逻辑实体归属状态为 `NOT_APPLICABLE`，禁止创建 `BO0000`、`BO99999`、`非业务对象逻辑实体` 等占位业务对象。第 33 条归属唯一规则兼容 `NOT_APPLICABLE`。运行 `scripts/build_agent_knowledge.py` 重建运行时知识，`agent_knowledge/modeling|integration/*v0.0.1.md` 均同步新规则（构建可重复、无额外漂移）。
+- 归属状态：逻辑实体内部归属统一为 `ASSIGNED`（编码/名称必填且必须引用本次 CONFIRMED 业务对象、有且唯一主实体）/ `NOT_APPLICABLE`（编码/名称必须为空、主标志 `N`、必须带非业务对象分类/排除原因/证据并关联对应 REJECTED 候选决策）/ `UNRESOLVED`（证据不足，编码/名称为空、主标志 `N`、必须保留确认问题，不得伪装 `NOT_APPLICABLE`）。空编码且无审计状态时是结构错误，绝不自动推断 `NOT_APPLICABLE`。
+- CSV 契约：`modeling_csv_contract.py` 将 `logical_entities.csv` 的业务对象编码/名称改为条件必填（新增 `assignment_status_aware`、归属状态推断与 `FORMAL_CONTRACT_ASSIGNMENT_STATUS_MISSING`/`ASSIGNMENT_CONFLICT` 错误码）；`modeling_rule_registry.validate_formal_rows` 与服务端上传/缓存校验从 `modeling_state.json` 读取归属状态关联校验；未声明业务对象编码/名称/主标志列的简化 CSV 不做归属判定，保持 header-aware 兼容，不影响既有简化产物流程。
+- 门禁：`modeling_reliability.py` 重写 `validate_logical_entity_assignments`（`NOT_APPLICABLE` 主标志 `Y`、填写编码/名称、缺审计证据、无对应 REJECTED 决策均阻断；`ASSIGNED` 缺编码或引用非 CONFIRMED 阻断；`UNRESOLVED` 主标志 `Y` 阻断）；候选性质/数据类别证据一致性新增 `CONFIRMED_WITH_NON_BUSINESS_OBJECT_KIND` 与 `R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE`（STRUCTURAL_BLOCKER 阻断正式输出，不做名称/表名/数据类别一刀切）；新增 `apply_not_applicable_normalization` 确定性自动修复（仅在有充分审计证据时把主标志 `Y→N`、清空错误编码/名称），禁止占位业务对象、禁止“门禁通过后二次清洗”。
+- 提示词：47313/47314 共用 `build_modeling_instructions`，明确四类非业务对象判定、`NOT_APPLICABLE` 输出规范、禁止占位 `BO`、证据不足用 `UNRESOLVED`、输出前校验正式 CSV 与内部审计状态一致。
+- 测试：`tests/test_modeling_reliability.py` 新增 `NotApplicableAssignmentTests`（12 项），覆盖四类非业务对象逻辑实体 finalize 通过、四类候选仍 CONFIRMED 阻断、`NOT_APPLICABLE` 主标志/编码/缺证据/无 REJECTED 阻断、`ASSIGNED` 缺编码/引用非 CONFIRMED 阻断、`UNRESOLVED` 保留确认问题等。
+- 验证：`python -m unittest discover -s tests` 373 项通过（3 项跳过；`tests.test_standalone_modeling_server` 50 项单独运行通过）；`python -m py_compile` 与 `git diff --check` 通过；知识构建脚本重复运行无新增漂移。
+- 未部署、未提交、未推送。
+- 主要文件：`rules/数据模型建模规范v0.0.1.xlsx`、`agent_knowledge/modeling|integration/*v0.0.1.md`、`open-claude/open_claude/modeling_csv_contract.py`、`open-claude/open_claude/modeling_rule_registry.py`、`open-claude/open_claude/modeling_reliability.py`、`open-claude/oc_codex_server.py`、`tests/test_modeling_reliability.py`、`changelog/changelog_8_24.md`。
