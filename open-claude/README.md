@@ -137,7 +137,7 @@ works as well as `claude-opus-4-8`:
 
 When `LLM_PROVIDER=team`, both the web workbench and standalone modeling service expose the model IDs from
 `TEAM_MODELS` and uses `TEAM_MODEL` only when it is one of those IDs. An invalid
-or stale `TEAM_MODEL` safely falls back to `qwen3.8-27b` when available, then to
+or stale `TEAM_MODEL` safely falls back to `Qwen/Qwen3-80B-AWQ` when available, then to
 the first configured team model.
 
 Outside team mode, any unrecognized value is passed through unchanged, so you can
@@ -192,7 +192,7 @@ Each provider reads its key from its own env var(s), or from an `api_keys` map i
 | `DEEPSEEK_API_KEY` | DeepSeek key | — |
 | `TEAM_API_KEY` | Shared company team gateway key | — |
 | `TEAM_BASE_URL` | Company gateway OpenAI-compatible base URL | `http://172.16.10.34:4000/v1` |
-| `TEAM_MODEL` | Default model from `TEAM_MODELS` | `qwen3.8-27b` |
+| `TEAM_MODEL` | Default model from `TEAM_MODELS` | `Qwen/Qwen3-80B-AWQ` |
 | `TEAM_MODELS` | Comma-separated verified team model catalogue | 24 configured IDs |
 | `<PROVIDER>_BASE_URL` | Override a provider's base URL | (per-provider default) |
 | `CLAUDE_MODEL` | Model to use (alias or full ID) | `claude-opus-4-8` |

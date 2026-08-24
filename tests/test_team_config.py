@@ -9,7 +9,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TeamModelConfigTests(unittest.TestCase):
-    def test_builtin_team_catalogue_contains_only_verified_models_and_defaults_to_qwen38(self):
+    def test_builtin_team_catalogue_contains_only_verified_models_and_defaults_to_qwen3_80b(self):
         env = os.environ.copy()
         env.update({
             "PYTHONPATH": str(ROOT / "open-claude"),
@@ -27,7 +27,7 @@ class TeamModelConfigTests(unittest.TestCase):
             [sys.executable, "-c", script], cwd=ROOT, env=env,
             check=True, capture_output=True, text=True,
         )
-        self.assertEqual(result.stdout.splitlines(), ["qwen3.8-27b", "24", "[]"])
+        self.assertEqual(result.stdout.splitlines(), ["Qwen/Qwen3-80B-AWQ", "24", "[]"])
 
     def test_team_default_model_must_be_in_exposed_catalogue(self):
         env = os.environ.copy()
