@@ -55,3 +55,12 @@
 - README 默认模型说明与团队配置回归测试同步更新；目录仍为 24 个模型，未显式配置、配置过期或无效时优先回退到 80B，仅当自定义目录不含它时才回退到目录首项。
 - 验证：`tests.test_team_config` + `tests.test_frontend_contract` 共 11 项本地通过；已部署 47313/47314 至 `55cd46d`（与第 5 条同批），两服务 `/`、`/health` 均 200，启动日志均含 transport timeouts 行，`/api/meta`（47313）与 `/api/modeling-models`（47314，带 `X-Modeling-API-Key`）均返回默认 `Qwen/Qwen3-80B-AWQ`、24 个模型。
 - 主要文件：`open-claude/open_claude/config.py`、`.env.example`、`open-claude/README.md`、`tests/test_team_config.py`、本地与服务器 `.env`、`changelog/changelog_8_24.md`。
+
+### 7. 续跑意图误判修复：执行指令优先于疑问词判定
+
+- 修复 `is_conversational_turn` 把带“是什么”的续跑指令误判成提问的问题：用户输入「上一个问题是什么来着 反正你接着上一个问题继续做」时，47314 把该回合按问答处理，只流式回复统计数字，随后 `restore_after_question` 把 run 恢复成执行前的 FAILED，界面表现为“跑完却 failed”。
+- `open-claude/oc_codex_server.py` 在疑问词判定之前新增执行指令优先规则：`(?:继续|接着).{0,16}(?:做|执行|跑|生成|处理|修复|修改|建模|完成|导出|识别)`、`重新(?:做|执行|跑|生成|处理|修复|修改|建模|导出|识别)`、`^(?:请|帮我|麻烦你).{0,12}…` 执行动词；命中即按建模执行回合处理。“为什么执行失败”“怎么建模”“帮我看看”“先说说这个项目”等纯咨询仍保持问答。
+- 补充 5 条回归断言（含线上真实触发文本）；`tests.test_ontology_knowledge` + `tests.test_frontend_contract` 共 16 项通过，`git diff --check` 通过。
+- 部署：已部署 47313/47314 至 `8194cc2`（服务器直连 github 超时，沿用 bundle+scp；本次仅改 `oc_codex_server.py`，不在依赖指纹内，venv 无需重装），两服务 `/`、`/health` 均 200，启动日志均含 transport timeouts 行，模型接口默认仍为 `Qwen/Qwen3-80B-AWQ`。
+- 运维：`run_6ed2452ad3c447c1a2bfb4edbaff76a7` 状态由 FAILED 重置为 INPUT_READY（服务端 `RunStore.transition`，API 复核通过）。该 run 的 FAILED 真实原因是第 3 轮建模续跑（08-24 10:59:28）撞团队网关预算上限（`Budget has been exceeded! Current cost: 30.35, Max budget: 30.0`）；第 4 轮被误判为问答。正式语义校验显示产物仍不合格（`logical_entities.csv` 第 16、26–44 行业务对象编码/名称为空；LE000001/009/011/013/016/019/024 的 `mainFlag=Y` 无 CONFIRMED 业务对象），因此不置 SUCCEEDED，重置为可续跑状态，待网关预算恢复后以明确建模指令重跑。
+- 主要文件：`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`、`changelog/changelog_8_24.md`。
