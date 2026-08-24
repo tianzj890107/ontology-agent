@@ -11,3 +11,9 @@
 
 ## 2026-08-24
 
+### 1. Git 部署线路问题处理（本地推送 / 服务器拉取）
+
+- 本地 git push 直连 `github.com` 失败（SSH 解析/路由需走 `127.0.0.1:7890` 代理，直连超时）；改用 GitHub SSH-over-443（`ssh.github.com:443`）+ `nc -X connect -x 127.0.0.1:7890` 代理成功推送，无需修改 remote。
+- 服务器 `git fetch` 受 `https_proxy=http://172.16.10.34:7890` 影响 TLS 握手失败；绕过代理直连后 fetch/merge 正常，服务器 HEAD 与 `origin/20260727` 同步为 `413c221`。
+- 两服务运行代码不受影响（本次仅 changelog/运维动作），`/health` 保持 200。
+- 主要文件：`changelog/changelog_8_24.md`。
