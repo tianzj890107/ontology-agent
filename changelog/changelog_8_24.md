@@ -27,9 +27,9 @@
 - 已部署提交 `8a70629`：服务器 19 项部署相关测试通过，47313/47314 重启后健康检查均为 200，两个模型接口均返回默认 `qwen3.8-27b`、24 个模型且不含上述 4 个失败模型。依赖同步曾因服务器访问 PyPI 的 TLS 故障失败，本次无依赖变化，最终使用已通过测试的现有共享 venv 启动。
 - 主要文件：`open-claude/open_claude/config.py`、`.env.example`、`open-claude/README.md`、`tests/test_team_config.py`、本地 `.env`。
 
-### 3. 建模暂停提示改为可折叠详情（按要求未部署）
+### 3. 建模暂停提示改为可折叠详情
 
 - 47314 运行被门禁/安全阀暂停时，思维链末尾的暂停节点正式输出只保留【建模已暂停】、当前产物说明与继续运行指引；暂停原因和未通过的门禁校验项收进“暂停详情（点击展开）”折叠区，默认隐藏、点击展开。
 - 前端 `AssistantText` 新增 `:::details` 折叠块渲染（复用现有迷你 Markdown 解析，内部段落/列表/表格均可正常渲染），新增 `.assistant-details` 折叠区样式；`frontend/dist` 已随构建更新。
-- 验证：`npm run build`（vite 构建通过）；`.venv/bin/python -m unittest tests.test_frontend_contract` 通过（8 项）；`git diff --check` 通过。按要求本次未部署 47313/47314。
+- 验证：`npm run build`（vite 构建通过）；`.venv/bin/python -m unittest tests.test_frontend_contract` 通过（8 项）；服务器 `git pull --ff-only` 后两服务已重启至 `12100b1`，47313/47314 的 `/`、`/health` 均 200，启动日志均含 `provider transport timeouts: connect=5s read=600s write=600s pool=600s`，两服务实际返回的新 bundle 均含“暂停详情”折叠标记。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`changelog/changelog_8_24.md`。
