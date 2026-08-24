@@ -1359,6 +1359,17 @@ def is_conversational_turn(text: object, *, explicit_start: bool = False) -> boo
     )
     if any(re.search(pattern, value, flags=re.IGNORECASE) for pattern in acknowledgement_patterns):
         return True
+    # 明确的“继续/接着做/重新生成”指令即使夹杂疑问词也按执行回合处理，
+    # 避免“上一个问题是什么来着 反正你接着上一个问题继续做”这类续跑指令
+    # 因为带“是什么”而被误判成提问，导致建模续跑退化成问答回合。
+    continuation_patterns = (
+        r"(?:继续|接着).{0,16}(?:做|执行|跑|生成|处理|修复|修改|建模|完成|导出|识别)",
+        r"重新(?:做|执行|跑|生成|处理|修复|修改|建模|导出|识别)",
+        r"^(?:请|帮我|麻烦你).{0,12}(?:重新|继续|直接)(?:做|执行|跑|生成|处理|修复|修改|建模|完成|导出|识别)",
+        r"^(?:请|帮我|麻烦你).{0,12}(?:生成|修改|修复|执行|建模|识别|剔除|处理|导出)",
+    )
+    if any(re.search(pattern, value, flags=re.IGNORECASE) for pattern in continuation_patterns):
+        return False
     # 中文问句常常没有问号，覆盖常见疑问词/句式，同时避免把“怎么
     # 生成/如何执行/怎么建模”这类明确的任务指令误判为执行请求。
     if re.search(r"(?:为什么|是什么|什么是|哪个|哪些|是否|能否|可以吗|怎么回事|发生了什么|能不能|多少|几张|如何查看|怎么看|告诉我|解释一下|怎么(?:办|回事|配置|连接|查看|操作|使用|建模|分析|执行|生成)|如何(?:配置|连接|操作|使用|建模|分析|执行|生成))", value):
