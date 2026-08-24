@@ -23,6 +23,7 @@ import {
 } from "antd";
 import "./styles.css";
 import { formatDisplayValue, isNumericDisplayValue } from "./numberFormat.js";
+import { appendStreamEvent, eventKey, mergeEvents, nextCursor } from "./eventSync.js";
 
 const MISSION = window.__MISSION__?.taskCode ? window.__MISSION__ : null;
 const STANDALONE = Boolean(window.__STANDALONE_MODELING__);
@@ -259,7 +260,9 @@ function StandaloneApp() {
   // must not briefly replace a persisted chain with an empty array.
   const standaloneEventCacheRef = useRef(new Map());
   const olderEventsLoadingRef = useRef(new Set());
-  const pollInFlightRef = useRef(false);
+  // Per-run poll lock: a poll for run A must never block or release a poll
+  // for run B after the user switches sessions.
+  const pollInFlightRef = useRef(new Map());
   const continueInFlightRef = useRef(false);
   const standaloneFileInputRef = useRef(null);
   const standaloneFeedPrependAnchorRef = useRef(null);
@@ -418,14 +421,20 @@ function StandaloneApp() {
     }
     const total = Number(eventPayload.eventTotal ?? summary.eventsCount) || latestEvents.length;
     const start = Number(eventPayload.eventStart ?? Math.max(0, total - latestEvents.length));
-    eventCursorRef.current.set(runId, Number(summary.eventsCount) || total);
+    // Cursor = next unread absolute seq, taken from the server's journal
+    // position instead of a locally counted length.
+    eventCursorRef.current.set(runId, nextCursor(eventPayload, latestEvents));
     eventWindowRef.current.set(runId, { start, total });
+    // Merge rather than replace: the persisted cache may already hold a fuller
+    // window than the tail request, and re-selecting a run must never shrink
+    // or duplicate the visible chain.
+    const mergedEvents = mergeEvents(cachedEvents, latestEvents, `run:${runId}`);
     const result = {
       ...summary,
       files: Array.isArray(summary.files) ? summary.files : [],
-      events: latestEvents,
+      events: mergedEvents,
     };
-    standaloneEventCacheRef.current.set(runId, latestEvents);
+    standaloneEventCacheRef.current.set(runId, mergedEvents);
     if (selectedRunIdRef.current === runId) setRun(result);
     scheduleIdle(async () => {
       // The file tree is a single cheap request; populate the panel first so
@@ -465,10 +474,10 @@ function StandaloneApp() {
             };
           }
           setRun((current) => current?.runId === runId
-            ? { ...current, events: [...older, ...(current.events || [])] }
+            ? { ...current, events: mergeEvents(older, current.events || [], `run:${runId}`) }
             : current);
           const cached = standaloneEventCacheRef.current.get(runId) || [];
-          standaloneEventCacheRef.current.set(runId, [...older, ...cached]);
+          standaloneEventCacheRef.current.set(runId, mergeEvents(older, cached, `run:${runId}`));
           await waitForNextPaint();
           const renderedFeed = document.querySelector(".standalone-agent-feed");
           if (renderedFeed && beforeHeight) {
@@ -502,13 +511,13 @@ function StandaloneApp() {
     void loadRun(runId);
   };
   const refreshRun = async (runId) => {
-    if (!runId || selectedRunIdRef.current !== runId || pollInFlightRef.current) return null;
+    if (!runId || selectedRunIdRef.current !== runId || pollInFlightRef.current.has(runId)) return null;
     // Do not let the first status poll abort the detail request before its
     // historical event window has been fetched. This race was most visible
     // for BLOCKED runs, which otherwise showed only the header and never sent
     // the `/events` request until Continue was clicked.
     if (!eventWindowRef.current.has(runId)) return null;
-    pollInFlightRef.current = true;
+    pollInFlightRef.current.set(runId, true);
     const request = beginRunRequest();
     const encodedId = encodeURIComponent(runId);
     try {
@@ -535,20 +544,27 @@ function StandaloneApp() {
         void loadRun(runId, false);
         return summary;
       }
-      // Advance by the number actually received. New events produced after
-      // the summary request remain for the next poll instead of being skipped
-      // or appended twice.
-      eventCursorRef.current.set(runId, cursor + delta.length);
+      // Advance the cursor to the server-absolute next-read position. The
+      // client never computes `cursor + delta.length` alone because filtered
+      // or truncated windows could skip or repeat events.
+      eventCursorRef.current.set(runId, nextCursor(events, delta));
       const window = eventWindowRef.current.get(runId);
-      if (window) eventWindowRef.current.set(runId, { ...window, total: window.total + delta.length });
+      const reportedTotal = Number(events.eventTotal);
+      if (window) {
+        eventWindowRef.current.set(runId, {
+          ...window,
+          total: Number.isFinite(reportedTotal) ? reportedTotal : window.total + delta.length,
+        });
+      }
       setRun((current) => {
         if (current?.runId !== runId) return current;
         const currentEvents = Array.isArray(current.events) ? current.events : [];
         // A status refresh must never erase a journal that is still loading.
         // If the server reports history but this poll has no delta, retain the
-        // visible chain and let the detail loader finish it.
+        // visible chain and let the detail loader finish it. Any real delta is
+        // merged idempotently by event identity (runId + seq).
         const nextEvents = delta.length || !summary.eventsCount
-          ? [...currentEvents, ...delta]
+          ? mergeEvents(currentEvents, delta, `run:${runId}`)
           : currentEvents;
         standaloneEventCacheRef.current.set(runId, nextEvents);
         return { ...summary, files: current.files || [], events: nextEvents };
@@ -556,7 +572,7 @@ function StandaloneApp() {
       updateRunSummary(summary);
       return summary;
     } finally {
-      pollInFlightRef.current = false;
+      pollInFlightRef.current.delete(runId);
     }
   };
   const startNewTask = () => {
@@ -630,7 +646,7 @@ function StandaloneApp() {
       const created = await standaloneApi("/api/modeling-runs", "", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
-      if (created.error) { setError(created.error); return; }
+      if (standaloneRequestFailed(created)) { setError(created.error); return; }
       selectedRunIdRef.current = created.runId;
       // The create response is metadata only; do not treat eventsCount as a
       // client read cursor because it does not contain the event payload.
@@ -641,13 +657,15 @@ function StandaloneApp() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...(standaloneModel ? { model: standaloneModel } : {}), intent: "execute" }),
       });
-      if (started.error) {
+      if (standaloneRequestFailed(started)) {
         setError(started.error);
         return;
       }
       // /execute may finish or become BLOCKED before this response arrives.
       // Reload the persisted event window so already-produced thinking is not
-      // skipped by initializing the cursor from a summary-only response.
+      // skipped by initializing the cursor from a summary-only response. The
+      // 202 payload is summary-only (no event array), so events always come
+      // from the journal route.
       eventCursorRef.current.delete(started.runId);
       setRun(started);
       setRuns((current) => current.map((item) => item.runId === started.runId ? { ...item, ...started } : item));
@@ -674,7 +692,10 @@ function StandaloneApp() {
           intent: "auto",
         }),
       });
-      if (started.error) {
+      // HTTP 202 is an accepted-status response: `started.error` is the
+      // run's domain state (e.g. a previous FAILED/BLOCKED reason), not an
+      // API/transport failure. Only a real 4xx/5xx response rejects here.
+      if (standaloneRequestFailed(started)) {
         setError(started.error);
         return;
       }
@@ -683,8 +704,17 @@ function StandaloneApp() {
       // so only pull the delta instead of reloading the whole journal window.
       // The full window is re-established only when this browser never loaded
       // it (e.g. the run was continued from another client).  Preserve the
-      // already-rendered file tree until the next refresh replaces it.
-      setRun({ ...started, files: Array.isArray(run.files) ? run.files : [] });
+      // already-rendered file tree and event chain until refresh replaces it.
+      setRun((current) => {
+        if (current?.runId !== started.runId) {
+          return { ...started, files: Array.isArray(run.files) ? run.files : [] };
+        }
+        return {
+          ...started,
+          files: Array.isArray(current.files) ? current.files : [],
+          events: current.events,
+        };
+      });
       setRuns((current) => current.map((item) => item.runId === started.runId
         ? { ...item, ...started } : item));
       if (eventWindowRef.current.has(started.runId)) {
@@ -722,7 +752,7 @@ function StandaloneApp() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ files: await readFiles(standalonePendingFiles) }),
         });
-        if (result.error) { setError(result.error); return; }
+        if (standaloneRequestFailed(result)) { setError(result.error); return; }
         setStandalonePendingFiles([]);
       } catch (requestError) {
         setError(requestError?.message || "上传文件失败");
@@ -868,18 +898,35 @@ function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selected
   // shared workbench normalization so one continuous reasoning block renders
   // as one node instead of dozens of token-sized "思考中" nodes.
   const events = useMemo(() => {
-    const base = [
-      { type: "user", text: run.prompt || "开始智能建模" },
-      ...normalizeEvents({ events: run.events || [] }),
-    ];
+    const scope = `run:${run.runId}`;
+    const journal = mergeEvents([], run.events || [], scope);
+    const normalized = normalizeEvents({ events: journal });
+    const base = [...normalized];
+    // The initial prompt is synthesized only when the journal has no formal
+    // user event (a fresh run). Continued runs persist their own user events,
+    // so the synthetic bubble must not duplicate them.
+    const hasUserEvent = normalized.some((event) => event.type === "user");
+    if (!hasUserEvent) {
+      base.unshift({
+        type: "user",
+        text: run.prompt || "开始智能建模",
+        _key: `prompt:${run.runId}`,
+      });
+    }
     if (run?.status === "BLOCKED") {
-      base.push({ type: "assistant", text: blockedAdviceText(run) });
+      // Deterministic client-derived notice. Its stable `_key` means refresh,
+      // status polls and history backfill can never render a second copy.
+      base.push({
+        type: "assistant",
+        text: blockedAdviceText(run),
+        _key: `blocked-advice:${run.runId}`,
+      });
     }
     return base;
-  }, [run.events, run.prompt, run.status]);
+  }, [run.events, run.prompt, run.status, run.runId]);
   return <section className="task-view standalone-agent-task-view">
     <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{statusLabel(run.status)}</Tag>{["FAILED", "BLOCKED", "CANCELLED"].includes(run.status) && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
-    <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
+    <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} scope={`run:${run.runId}`} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
   </section>;
 }
 
@@ -1293,7 +1340,7 @@ function AssistantText({ text }) {
   return <div className="assistant-text">{renderLines(source)}</div>;
 }
 
-function EventFeed({ events, onApprove, files, onFile, busy = false }) {
+function EventFeed({ events, onApprove, files, onFile, busy = false, scope = "events" }) {
   const lastEvent = events[events.length - 1];
   const waitingForNextEvent = busy && !["done", "error", "approval_request"].includes(lastEvent?.type);
   const approvalResults = events.reduce((result, event) => {
@@ -1303,12 +1350,15 @@ function EventFeed({ events, onApprove, files, onFile, busy = false }) {
   return (
     <div className="feed-list">
       {events.map((event, index) => {
-        if (event.type === "user") return <div className="user-message" key={`${index}-user`}>{event.text}</div>;
-        if (["text", "assistant"].includes(event.type)) return <div className="assistant-message" key={`${index}-assistant`}><AssistantText text={event.text} /></div>;
-        if (event.type === "done") return <div className="done-note" key={`${index}-done`}>{event.status === "error" ? "本轮执行结束 · 未完成（可继续执行）" : `本轮执行结束 · ${event.status || "完成"}`}</div>;
+        // React keys use the same event identity as the merge (task/run + seq
+        // or clientMessageId); array indexes are only the legacy fallback.
+        const key = eventKey(event, scope, index);
+        if (event.type === "user") return <div className="user-message" key={key}>{event.text}</div>;
+        if (["text", "assistant"].includes(event.type)) return <div className="assistant-message" key={key}><AssistantText text={event.text} /></div>;
+        if (event.type === "done") return <div className="done-note" key={key}>{event.status === "error" ? "本轮执行结束 · 未完成（可继续执行）" : `本轮执行结束 · ${event.status || "完成"}`}</div>;
         const loading = busy && index === events.length - 1 && event.type === "thinking";
         const executionFinished = event.type === "approval_request" && events.slice(index + 1).some((candidate) => candidate.type === "done");
-        return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} completed={executionFinished} durationMs={eventDuration(events, index)} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={`${index}-${event.id || event.type}`} />;
+        return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} completed={executionFinished} durationMs={eventDuration(events, index)} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={key} />;
       })}
       {waitingForNextEvent && lastEvent?.type !== "thinking" && (
         <ThoughtEvent event={{ type: "thinking", text: "" }} files={files} onFile={onFile} loading />
@@ -1547,6 +1597,9 @@ function App() {
   const autoApproveRef = useRef(autoApprove);
   const approvalInFlightRef = useRef(new Set());
   const activeTaskIdRef = useRef("");
+  // Busy is request-scoped: an old request's `finally` must not clear the
+  // busy flag of a newer request started after a session switch/retry.
+  const busyRequestRef = useRef(0);
   const logWindowRef = useRef(new Map());
   const olderLogLoadingRef = useRef(new Set());
   const previewImageUrlRef = useRef("");
@@ -1675,7 +1728,9 @@ function App() {
               epoch: feedScrollEpochRef.current,
             };
           }
-          setEvents((current) => activeTaskIdRef.current === task.id ? [...older, ...current] : current);
+          setEvents((current) => activeTaskIdRef.current === task.id
+            ? mergeEvents(older, current, `task:${task.id}`)
+            : current);
           await waitForNextPaint();
           const renderedFeed = feedRef.current;
           if (renderedFeed && beforeHeight) {
@@ -1712,7 +1767,9 @@ function App() {
     const logTotal = Number(result.logTotal ?? recentEvents.length);
     logWindowRef.current.set(current.id, { start: logStart, total: logTotal, generation: Date.now() });
     activeTaskIdRef.current = current.id;
-    setActive(current); setEvents(recentEvents); setView("task"); setText("");
+    setActive(current);
+    setEvents(mergeEvents([], recentEvents, `task:${current.id}`));
+    setView("task"); setText("");
     if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, current.id);
     // 页面刷新或重新打开历史会话时，审批请求可能已经在服务端挂起，
     // 不会再次经过 SSE；自动确认开启时要主动恢复这类请求。
@@ -1793,12 +1850,9 @@ function App() {
   };
 
   const appendEvent = (event) => setEvents((previous) => {
-    event = stampEvent(event);
-    if (event.type === "text" || event.type === "thinking") {
-      const last = previous[previous.length - 1];
-      if (last?.type === event.type) return [...previous.slice(0, -1), { ...last, text: `${last.text || ""}${event.text || ""}` }];
-    }
-    return [...previous, event];
+    const stamped = stampEvent(event);
+    const taskId = activeTaskIdRef.current || active?.id || "";
+    return appendStreamEvent(previous, stamped, `task:${taskId}`);
   });
 
   const approve = async (id, approved, taskOverride = null) => {
@@ -1837,14 +1891,22 @@ function App() {
     // An explicit new request is a user action that should start at the latest
     // message even if the previous turn was left scrolled up.
     feedPinnedRef.current = true;
-    setBusy(true); appendEvent({ type: "user", text: displayMessage });
+    const taskId = task.id;
+    const requestId = (busyRequestRef.current = busyRequestRef.current + 1);
+    // Optimistic bubble carries a clientMessageId so the server-persisted user
+    // event (echoed back on the stream with the same id) replaces it instead
+    // of duplicating it on refresh.
+    const clientMessageId = `cm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    setBusy(true); appendEvent({ type: "user", text: displayMessage, clientMessageId });
+    const finishBusy = () => { if (busyRequestRef.current === requestId) setBusy(false); };
     let response;
     try {
-      response = await fetch(`/api/tasks/${task.id}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ message: content, displayMessage, startTask, intent }) });
-    } catch (error) { appendEvent({ type: "error", error: error.message }); setBusy(false); return; }
-    if (!response.ok || !response.body) { appendEvent({ type: "error", error: `请求失败(${response.status})` }); setBusy(false); return; }
+      response = await fetch(`/api/tasks/${taskId}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId }) });
+    } catch (error) { if (busyRequestRef.current === requestId) appendEvent({ type: "error", error: error.message }); finishBusy(); return; }
+    if (!response.ok || !response.body) { if (busyRequestRef.current === requestId) appendEvent({ type: "error", error: `请求失败(${response.status})` }); finishBusy(); return; }
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
     const consume = (chunk) => {
+      if (activeTaskIdRef.current !== taskId) return;
       buffer += decoder.decode(chunk, { stream: true });
       const packets = buffer.split("\n\n"); buffer = packets.pop() || "";
       packets.forEach((packet) => {
@@ -1854,15 +1916,20 @@ function App() {
           const event = JSON.parse(line.slice(6));
           appendEvent(event);
           if (event.type === "approval_request" && autoApproveRef.current) approve(event.id, true, task);
-          if (event.type === "done") setBusy(false);
+          if (event.type === "done") finishBusy();
         } catch { /* ignore malformed SSE packet */ }
       });
     };
-    try { while (true) { const { value, done } = await reader.read(); if (done) break; consume(value); } if (buffer) consume(new Uint8Array()); } catch (error) { appendEvent({ type: "error", error: error.message }); }
-    setBusy(false);
+    try {
+      while (true) { const { value, done } = await reader.read(); if (done) break; consume(value); }
+      if (buffer) consume(new Uint8Array());
+    } catch (error) {
+      if (activeTaskIdRef.current === taskId && busyRequestRef.current === requestId) appendEvent({ type: "error", error: error.message });
+    }
+    finishBusy();
     const refreshedTasks = await loadTasks();
     const refreshed = refreshedTasks.find((item) => item.id === task.id);
-    if (refreshed) setActive((previous) => previous && previous.id === refreshed.id ? { ...previous, ...refreshed } : previous);
+    if (refreshed && activeTaskIdRef.current === taskId) setActive((previous) => previous && previous.id === refreshed.id ? { ...previous, ...refreshed } : previous);
     await loadFiles(task);
   };
 
@@ -2013,7 +2080,7 @@ function App() {
       <main className="main-content">
         {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
           <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{isMissionTask && active?.platformStatus !== "FAILED" && <Button type={active?.platformStatus === "COMPLETED" ? "default" : "primary"} icon={active?.platformStatus === "COMPLETED" ? <TaskEditIcon /> : <TaskCompleteIcon />} loading={platformActionLoading} disabled={busy || active?.status === "working" || minioUploading || (active?.platformStatus !== "COMPLETED" && active?.completionReady === false)} title={active?.platformStatus !== "COMPLETED" && active?.completionReady === false ? "请先上传全部任务结果" : ""} onClick={changePlatformStatus}>{active?.platformStatus === "COMPLETED" ? "修改" : "完成"}</Button>}<Button icon={<TaskFilesIcon />} onClick={() => { setFilesOpen(true); loadFiles(); }}>文件</Button></header>
-          <div ref={feedRef} className="feed" onScroll={handleFeedScroll}><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} /></div>
+          <div ref={feedRef} className="feed" onScroll={handleFeedScroll}><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} scope={`task:${active?.id || "task"}`} /></div>
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} autoApprove={autoApprove} onToggleAutoApprove={toggleAutoApprove} showAutoApprove={isMissionTask} /></div>
         </section>}
       </main>

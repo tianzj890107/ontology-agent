@@ -1443,7 +1443,10 @@ class ModelingRunManager:
             # A conversational question on a FAILED/BLOCKED run keeps its
             # failure/block reason so the restored state still explains why
             # the modeling stopped; only a real continuation clears it.
-            changes = {} if conversational else {"error": ""}
+            # A question asked from CANCELLED restores to INPUT_READY, so the
+            # stale "cancelled by user" error must not leak into the new turn.
+            changes = ({} if (conversational and return_status in {"FAILED", "BLOCKED"})
+                       else {"error": ""})
             if model is not None:
                 changes["model"] = requested_model
             self.store.transition_and_update(
@@ -1985,9 +1988,15 @@ class ModelingHandler(BaseHTTPRequestHandler):
                         start = max(0, min(total, int((query.get("since") or ["0"])[0])))
                         end = total
                     events = list(run.events[start:end])
+                # Cursor contract: `since` and `before` are absolute positions
+                # into the append-only journal. `nextCursor`/`eventEnd` is the
+                # next unread seq, so the client never relies on
+                # `cursor + delta.length` alone.
                 self._send(200, {"runId": run.run_id, "events": events,
-                                 "eventStart": start, "eventTotal": total,
-                                 "eventHasMore": start > 0})
+                                 "eventStart": start, "eventEnd": end,
+                                 "eventTotal": total,
+                                 "eventHasMore": start > 0,
+                                 "nextCursor": end})
             else:
                 query = parse_qs(parsed.query)
                 include_events = (query.get("includeEvents", ["true"])[0].lower()
@@ -2057,10 +2066,13 @@ class ModelingHandler(BaseHTTPRequestHandler):
             elif action == "execute":
                 intent = str(payload.get("intent") or "auto").strip().lower()
                 self.manager.execute(run, payload.get("prompt"), payload.get("model"), intent)
-                self._send(202, run.as_dict())
+                # 202 responses are status summaries only. The full event
+                # journal is read exclusively through /events?since= so the
+                # client cannot double-apply the same snapshot as a delta.
+                self._send(202, run.as_dict(include_events=False))
             elif action == "cancel":
                 self.manager.store.request_cancel(run)
-                self._send(202, run.as_dict())
+                self._send(202, run.as_dict(include_events=False))
             else:
                 report = self.manager.validate(run)
                 self._send(200, {"runId": run.run_id, "status": run.status, "report": report})

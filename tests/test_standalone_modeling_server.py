@@ -1172,5 +1172,119 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             web.configure_task_persistence(old_enabled)
 
 
+    def test_http_execute_returns_summary_without_event_payload(self):
+        manager = self._manager()
+        httpd = self._http_server(manager)
+        status, body = self._post(httpd, "/api/modeling-runs", {"prompt": "HTTP execute summary"})
+        self.assertEqual(status, 201)
+        run_id = body["runId"]
+        release = threading.Event()
+
+        def blocked_execute(_run):
+            self.assertTrue(release.wait(2))
+
+        try:
+            with patch.object(manager, "_execute", side_effect=blocked_execute):
+                status, payload = self._post(
+                    httpd, f"/api/modeling-runs/{run_id}/execute", {"intent": "execute"})
+                self.assertEqual(status, 202)
+                self.assertIn("runId", payload)
+                self.assertNotIn("events", payload)
+                self.assertEqual(payload["status"], "QUEUED")
+                self.assertIn("eventsCount", payload)
+                release.set()
+                manager.threads[run_id].join(timeout=2)
+        finally:
+            release.set()
+            import oc_codex_server as web
+            web.configure_task_persistence(True)
+        # The journal stays available through /events with absolute cursors.
+        status, events = self._get(httpd, f"/api/modeling-runs/{run_id}/events?since=0")
+        self.assertEqual(status, 200)
+        self.assertIn("events", events)
+        self.assertIn("eventStart", events)
+        self.assertIn("eventEnd", events)
+        self.assertIn("eventTotal", events)
+        self.assertIn("nextCursor", events)
+        self.assertLessEqual(events["eventStart"], events["eventEnd"])
+        self.assertEqual(events["eventEnd"], events["nextCursor"])
+        self.assertEqual(events["eventTotal"], len(events["events"]))
+
+    def test_cancelled_run_conversational_question_clears_stale_error(self):
+        manager = self._manager()
+        try:
+            run = self.store.create("DATABASE", "cancel then question")
+            self.store.transition(run, "QUEUED", allowed_from={"CREATED"})
+            self.store.transition(run, "CANCELLED", error="cancelled by user",
+                                  allowed_from={"QUEUED"})
+            with patch.object(manager, "_execute", return_value=None):
+                manager.execute(run, "这个表是什么意思", intent="chat")
+                # A question from CANCELLED is accepted and must not keep the
+                # stale "cancelled by user" error visible as a current failure.
+                self.assertEqual(run.error, "")
+                self.assertIn(run.status, {"QUEUED", "CLAIMED", "ANALYZING"})
+                manager.threads[run.run_id].join(timeout=2)
+        finally:
+            manager.close()
+            import oc_codex_server as web
+            web.configure_task_persistence(True)
+
+    def test_failed_run_question_keeps_reason_but_real_continuation_clears_it(self):
+        manager = self._manager()
+        try:
+            run = self.store.create("DATABASE", "failed then question")
+            self.store.transition(run, "ANALYZING", allowed_from={"CREATED"})
+            self.store.transition(run, "FAILED", error="MODEL_GATE_RETRY_LIMIT",
+                                  allowed_from={"ANALYZING"})
+            with patch.object(manager, "_execute", return_value=None):
+                manager.execute(run, "为什么会失败", intent="chat")
+                # A conversational question keeps the failure reason so the
+                # restored FAILED state still explains why modeling stopped.
+                self.assertEqual(run.error, "MODEL_GATE_RETRY_LIMIT")
+                manager.threads[run.run_id].join(timeout=2)
+            self.store.transition(run, "FAILED", allowed_from={"ANALYZING", "QUEUED", "CLAIMED"})
+            # A real continuation clears the current error; the historical
+            # failure stays in the event journal instead of run.error.
+            with patch.object(manager, "_execute", return_value=None):
+                manager.execute(run, "继续修复门禁问题", intent="execute")
+                self.assertEqual(run.error, "")
+                manager.threads[run.run_id].join(timeout=2)
+        finally:
+            manager.close()
+            import oc_codex_server as web
+            web.configure_task_persistence(True)
+
+    def test_event_route_since_and_before_boundaries_do_not_overlap(self):
+        run = self.store.create("DATABASE", "event boundaries")
+        for index in range(10):
+            self.store.append_event(run, "text", text=f"token-{index}")
+        total = len(run.events)
+        self.assertGreaterEqual(total, 10)
+        # `before` is exclusive: [start, before) never repeats the previous
+        # window's last event when a later page uses it as its `before`.
+        status, first = self._get(
+            self._http_server(self._manager()),
+            f"/api/modeling-runs/{run.run_id}/events?before={total}&limit=4")
+        self.assertEqual(status, 200)
+        self.assertEqual(first["eventEnd"], total)
+        boundary = first["eventStart"]
+        status, second = self._get(
+            self._http_server(self._manager()),
+            f"/api/modeling-runs/{run.run_id}/events?before={boundary}&limit=4")
+        self.assertEqual(status, 200)
+        first_ids = [event["seq"] for event in first["events"]]
+        second_ids = [event["seq"] for event in second["events"]]
+        self.assertEqual(len(set(first_ids)), len(first_ids))
+        self.assertEqual(len(set(second_ids)), len(second_ids))
+        self.assertFalse(set(first_ids) & set(second_ids))
+        self.assertLess(max(second_ids), min(first_ids))
+        # `since` returns strictly greater seqs and never skips appended ones.
+        status, tail = self._get(
+            self._http_server(self._manager()),
+            f"/api/modeling-runs/{run.run_id}/events?since={first['eventEnd'] - 2}")
+        self.assertEqual(status, 200)
+        self.assertTrue(all(event["seq"] >= first["eventEnd"] - 2 for event in tail["events"]))
+        self.assertEqual(tail["eventEnd"], len(run.events))
+
 if __name__ == "__main__":
     unittest.main()

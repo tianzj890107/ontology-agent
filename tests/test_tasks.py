@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -703,6 +704,115 @@ class ToolExecutionDedupTests(unittest.TestCase):
             task = first.create("Persisted step")
             second = TaskStore(directory)
             self.assertEqual(second.get(task.id).subject, "Persisted step")
+
+
+class TaskEventSyncTests(unittest.TestCase):
+    """Stable event identity contract for the 47313 workbench."""
+
+    def _task(self, directory, task_id="task-events"):
+        task = oc_codex_server.Task(
+            "p", directory, task_id=task_id, user_id="test")
+        task.conv = _FakeConversation()
+        return task
+
+    def test_record_event_stamps_monotonic_persisted_seq(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            with patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                first = task._record_event({"type": "user", "text": "a"})
+                second = task._record_event({"type": "assistant", "text": "b"})
+            self.assertEqual(first["seq"], 0)
+            self.assertEqual(second["seq"], 1)
+            self.assertEqual([event["seq"] for event in task.log], [0, 1])
+
+    def test_record_event_dedupes_by_client_message_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            with patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                first = task._record_event(
+                    {"type": "user", "text": "继续", "clientMessageId": "cm-1"})
+                replay = task._record_event(
+                    {"type": "user", "text": "继续", "clientMessageId": "cm-1"})
+                second = task._record_event(
+                    {"type": "user", "text": "继续", "clientMessageId": "cm-2"})
+            self.assertIs(replay, first)
+            self.assertEqual(len(task.log), 2)
+            self.assertEqual([event["seq"] for event in task.log], [0, 1])
+
+    def test_stream_turn_echoes_user_event_with_client_message_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            task.user_id = ""
+            emitted = []
+
+            def fake_stream_message(client, messages, system_prompt, **kwargs):
+                yield {"type": "done", "status": "idle"}
+
+            fake_runtime = SimpleNamespace(stream_message=fake_stream_message)
+            with patch.object(oc_codex_server.AGENT_RUNTIME, "get",
+                              return_value=fake_runtime), \
+                    patch.object(oc_codex_server, "persist_tasks"), \
+                    patch.object(oc_codex_server, "_append_task_history"):
+                task.stream_turn("继续", emitted.append, client_message_id="cm-echo")
+            user_events = [event for event in task.log if event.get("type") == "user"]
+            self.assertEqual(len(user_events), 1)
+            self.assertEqual(user_events[0]["clientMessageId"], "cm-echo")
+            self.assertIn("seq", user_events[0])
+            streamed = [event for event in emitted if event.get("type") == "user"]
+            self.assertEqual(len(streamed), 1)
+            self.assertEqual(streamed[0]["clientMessageId"], "cm-echo")
+
+    def test_restore_tasks_resumes_event_seq_after_restart(self):
+        import oc_codex_server as web
+        old_sandbox = web.SANDBOX_DIR
+        old_state = web.TASKS_STATE_PATH
+        old_enabled = web.WEB_TASK_PERSISTENCE_ENABLED
+        old_tasks = web.TASKS
+        try:
+            with tempfile.TemporaryDirectory() as sandbox_dir:
+                web.SANDBOX_DIR = sandbox_dir
+                web.TASKS_STATE_PATH = os.path.join(sandbox_dir, ".web_tasks.json")
+                os.makedirs(os.path.join(sandbox_dir, "p"), exist_ok=True)
+                task = web.Task("p", os.path.join(sandbox_dir, "p"),
+                                task_id="seq-restore", user_id="test")
+                with patch.object(web, "_append_task_history"), \
+                        patch.object(web, "persist_tasks"):
+                    task._record_event({"type": "user", "text": "a"})
+                    task._record_event({"type": "assistant", "text": "b"})
+                rows = [{
+                    **task.summary(), "log": task.log,
+                    "missionContext": {}, "platformUploadedFiles": {},
+                    "platformOutputPrefix": task.platform_output_prefix,
+                    "platformLastError": task.platform_last_error,
+                    "sessionId": "", "userId": task.user_id,
+                    "workspace": task.workspace,
+                    "taskWorkspace": task.task_workspace_relpath,
+                }]
+                with open(web.TASKS_STATE_PATH, "w", encoding="utf-8") as fh:
+                    json.dump(rows, fh)
+                web.TASKS = {}
+                with patch.object(web, "_load_task_history",
+                                  return_value=task.log), \
+                        patch.object(web, "_seed_task_history",
+                                     return_value=False), \
+                        patch.object(web, "persist_tasks"):
+                    web.restore_tasks()
+                restored = web.TASKS.get("seq-restore")
+                self.assertIsNotNone(restored)
+                self.assertEqual(restored.event_seq, 2)
+                with patch.object(web, "_append_task_history"), \
+                        patch.object(web, "persist_tasks"):
+                    third = restored._record_event({"type": "assistant", "text": "c"})
+                self.assertEqual(third["seq"], 2)
+                self.assertEqual([event["seq"] for event in restored.log], [0, 1, 2])
+        finally:
+            web.SANDBOX_DIR = old_sandbox
+            web.TASKS_STATE_PATH = old_state
+            web.TASKS = old_tasks
+            web.configure_task_persistence(old_enabled)
+
 
 
 if __name__ == "__main__":

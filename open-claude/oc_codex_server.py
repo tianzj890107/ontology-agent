@@ -3586,6 +3586,11 @@ class Task:
         self.updated = self.created
         self.status = "idle"          # idle | working | error
         self.log: list[dict] = []     # replayable UI events
+        # Monotonic, persisted event sequence. Every _record_event stamps a
+        # stable seq so the browser can dedupe snapshots, SSE, polling and
+        # pagination with one identity. Restored tasks recompute the counter
+        # from the persisted log so the seq never collides after a restart.
+        self.event_seq = 0
         self.lock = threading.Lock()
         # ThreadingHTTPServer can receive two rapid completion clicks before
         # either request persists. Keep lifecycle callbacks idempotent by
@@ -4047,14 +4052,30 @@ class Task:
         return {**event, "timestamp": time.time()}
 
     def _record_event(self, event: dict) -> dict:
-        """Record one complete UI event in memory and in the task archive."""
+        """Record one complete UI event in memory and in the task archive.
+
+        Events receive a stable, monotonic ``seq`` unless they already carry
+        one (restored archives keep their original sequence). A
+        ``clientMessageId`` makes recording idempotent: a retried send or a
+        duplicated stream packet returns the already-recorded event instead of
+        appending a second copy.
+        """
         stamped = self._stamp_event(event)
+        client_id = str(stamped.get("clientMessageId") or "").strip()
+        if client_id:
+            for prior in self.log:
+                if str(prior.get("clientMessageId") or "").strip() == client_id:
+                    return prior
+        if stamped.get("seq") is None:
+            stamped = {**stamped, "seq": self.event_seq}
+            self.event_seq += 1
         self.log.append(stamped)
         _append_task_history(self.id, stamped)
         return stamped
 
     def stream_turn(self, text: str, emit, display_text: str | None = None,
-                    platform_authorization: str = "", conversational: bool = False):
+                    platform_authorization: str = "", conversational: bool = False,
+                    client_message_id: str = ""):
         """Run one turn; keep an optional short UI label separate from LLM input.
 
         ``conversational`` is used for a normal question/cancellation inside a
@@ -4095,7 +4116,14 @@ class Task:
             self.updated = time.time()
             if self.title == "新任务" and display_text:
                 self.title = display_text[:48]
-            self._record_event({"type": "user", "text": display_text})
+            user_event = {"type": "user", "text": display_text}
+            if client_message_id:
+                user_event["clientMessageId"] = client_message_id
+            user_event = self._record_event(user_event)
+            # Stream the recorded user event back so the browser can reconcile
+            # its optimistic bubble (same clientMessageId) with the persisted
+            # one instead of showing a duplicate on refresh.
+            emit_timed(user_event)
             conv.add_user_message(text)
             # 用户消息和“working”状态先持久化，进程中断后仍能恢复该任务。
             persist_tasks()
@@ -4665,6 +4693,11 @@ def restore_tasks():
                 t.log = archived
             else:
                 _seed_task_history(t.id, t.log)
+            # Resume the monotonic event counter past every restored event so
+            # new recordings never collide with archive/legacy sequences.
+            seqs = [int(event["seq"]) for event in t.log
+                    if isinstance(event, dict) and str(event.get("seq") or "").lstrip("-").isdigit()]
+            t.event_seq = (max(seqs) + 1) if seqs else 0
             # Reconcile persisted upload hashes with the artifact plan on
             # restart so task summaries and the task-information modal agree.
             t.refresh_modeling_artifacts()
@@ -5941,6 +5974,7 @@ class Handler(BaseHTTPRequestHandler):
         data = self._read_body()
         text = (data.get("message") or "").strip()
         display_text = (data.get("displayMessage") or "").strip()
+        client_message_id = str(data.get("clientMessageId") or "").strip()
         if not display_text:
             display_text = text
         if not text:
@@ -6067,7 +6101,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             task.stream_turn(text, emit, display_text,
                              platform_authorization=self.headers.get("Authorization") or "",
-                             conversational=conversational_turn)
+                             conversational=conversational_turn,
+                             client_message_id=client_message_id)
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Client disconnected mid-stream; the turn state is already saved.
             pass

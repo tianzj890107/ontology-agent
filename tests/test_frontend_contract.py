@@ -1,5 +1,6 @@
 import json
 import pathlib
+import subprocess
 import unittest
 
 
@@ -45,7 +46,8 @@ class FrontendContractTests(unittest.TestCase):
         # 47314 receives each streamed thinking token as a persisted event.
         # It must use the shared adjacent-delta merger so one reasoning block
         # cannot become dozens of separate "思考中" nodes.
-        self.assertIn('...normalizeEvents({ events: run.events || [] })', source)
+        self.assertIn('const journal = mergeEvents([], run.events || [], scope);', source)
+        self.assertIn('const normalized = normalizeEvents({ events: journal });', source)
         self.assertIn('className={`standalone-layout ${run ? "standalone-layout-running" : ""}`}', source)
         self.assertIn('const startNewTask = () => {', source)
         self.assertIn('setRun(null);', source)
@@ -75,7 +77,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('files: Array.isArray(summary.files) ? summary.files : (visibleRun?.files || []),', source)
         self.assertIn('if (events.error && !cachedEvents.length)', source)
         self.assertIn('includeEvents=true', source)
-        self.assertIn('standaloneEventCacheRef.current.set(runId, latestEvents);', source)
+        self.assertIn('standaloneEventCacheRef.current.set(runId, mergedEvents);', source)
         self.assertIn('async function standaloneApi(path, apiKey, options = {}, retrySession = true)', source)
         self.assertIn('fetch("/", { credentials: "same-origin", cache: "no-store" })', source)
         self.assertIn('return standaloneApi(path, apiKey, options, false);', source)
@@ -225,7 +227,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('}, [events, busy, view]);', source)
         self.assertIn('}, [events, view, filesOpen]);', source)
         self.assertIn('<div ref={feedRef} className="feed" onScroll={handleFeedScroll}>', source)
-        self.assertIn('body: JSON.stringify({ message: content, displayMessage, startTask, intent })', source)
+        self.assertIn('body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId })', source)
         self.assertNotIn('startTask, missionContext:', source)
         self.assertIn('function missionIdentity(task = null)', source)
         self.assertIn('const taskMission = missionIdentity(task)', source)
@@ -234,7 +236,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('`已思考 ${formatDuration(durationMs)}`', source)
         self.assertIn('durationMs={eventDuration(events, index)}', source)
         self.assertIn('["done", "tool_result", "approval_result", "audit", "error"]', source)
-        self.assertIn('event = stampEvent(event);', source)
+        self.assertIn('const stamped = stampEvent(event);', source)
         styles = (ROOT / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
         self.assertIn('.thought-icon-approval-result{color:#7c3aed;background:#ede9fe}', styles)
         self.assertIn('.chain-event-approval-result .thought-toggle{color:#7c3aed}', styles)
@@ -316,7 +318,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('function isExpiredApprovalError(error)', source)
         self.assertIn('if (!isExpiredApprovalError(result.error)) messageApi.error(result.error);', source)
         self.assertNotIn('else messageApi.warning(result.error);', source)
-        for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${task.id}/send", "/api/minio/upload"):
+        for route in ("/api/tasks", "/api/files", "/api/mission/task", "/api/tasks/${taskId}/send", "/api/minio/upload"):
             self.assertIn(route, source)
 
     def test_python_server_prefers_built_frontend_with_safe_assets(self):
@@ -408,11 +410,77 @@ class FrontendContractTests(unittest.TestCase):
         # journal when the window is already loaded.
         self.assertIn("const cursor = eventCursorRef.current.get(runId) || 0;", source)
         self.assertIn("`/api/modeling-runs/${encodedId}/events?since=${cursor}`", source)
-        self.assertIn("eventCursorRef.current.set(runId, cursor + delta.length);", source)
+        self.assertIn("eventCursorRef.current.set(runId, nextCursor(events, delta));", source)
         self.assertIn("if (!eventWindowRef.current.has(runId)) return null;", source)
         # The already-rendered file tree must survive until refresh replaces it.
-        self.assertIn("setRun({ ...started, files: Array.isArray(run.files) ? run.files : [] });", source)
+        self.assertIn("return { ...started, files: Array.isArray(run.files) ? run.files : [] };", source)
+        self.assertIn("events: current.events,", source)
         self.assertIn("if (!run?.runId || ![\"CREATED\", \"INPUT_READY\", \"FAILED\", \"BLOCKED\", \"CANCELLED\"].includes(run.status)) return;", source)
+
+
+    def test_event_sync_merge_is_idempotent_and_seq_safe(self):
+        """Behavioral check of the shared merge through the Node runtime."""
+        script = (
+            "import { mergeEvents, appendStreamEvent, nextCursor } from './src/eventSync.js';"
+            "const snapshot = [{seq:0,type:'user',text:'继续'},{seq:1,type:'run_queued'}];"
+            "const delta = [{seq:0,type:'user',text:'继续'},{seq:2,type:'run_started'}];"
+            "const merged = mergeEvents(snapshot, delta, 'run:1');"
+            "if (JSON.stringify(merged.map(e=>e.seq)) !== '[0,1,2]') throw new Error('merge not idempotent');"
+            "const older = [{seq:0,type:'user',text:'继续'}];"
+            "const newer = [{seq:0,type:'user',text:'继续'},{seq:1,type:'run_queued'}];"
+            "if (mergeEvents(older, newer, 'run:1').length !== 2) throw new Error('prepend overlap');"
+            "const sameText = [{seq:3,type:'user',text:'继续'},{seq:4,type:'user',text:'继续'}];"
+            "if (mergeEvents([], sameText, 'run:1').length !== 2) throw new Error('same text diff seq must keep both');"
+            "const stream = appendStreamEvent([{type:'user',text:'x',clientMessageId:'cm1'}], {type:'user',text:'x',clientMessageId:'cm1',seq:0}, 'task:1');"
+            "if (stream.length !== 1) throw new Error('stream dedupe failed');"
+            "if (nextCursor({eventStart:10,eventEnd:12,nextCursor:12},[1,2]) !== 12) throw new Error('absolute cursor');"
+            "console.log('eventSync ok');"
+        )
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=str(ROOT / "frontend"), capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("eventSync ok", result.stdout)
+
+    def test_event_sync_contract_unifies_identity_cursor_and_error_handling(self):
+        source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
+        sync = (ROOT / "frontend" / "src" / "eventSync.js").read_text(encoding="utf-8")
+        standalone = (ROOT / "open-claude" / "standalone_modeling_server.py").read_text(encoding="utf-8")
+        # One shared idempotent merge feeds both the workbench and the
+        # standalone workspace; execute snapshots never double-apply as deltas.
+        self.assertIn('import { appendStreamEvent, eventKey, mergeEvents, nextCursor } from "./eventSync.js";', source)
+        for exported in ("export function mergeEvents", "export function eventIdentity",
+                         "export function nextCursor", "export function appendStreamEvent"):
+            self.assertIn(exported, sync)
+        self.assertIn("self._send(202, run.as_dict(include_events=False))", standalone)
+        self.assertIn('"nextCursor": end', standalone)
+        # Domain error fields on 2xx responses are not API/transport failures.
+        self.assertIn("if (standaloneRequestFailed(started))", source)
+        self.assertIn("if (standaloneRequestFailed(created))", source)
+        # Cursor is the server-absolute next-read position, never only
+        # `cursor + delta.length`.
+        self.assertIn("eventCursorRef.current.set(runId, nextCursor(events, delta));", source)
+        self.assertIn("nextCursor(eventPayload, latestEvents)", source)
+        self.assertNotIn("eventCursorRef.current.set(runId, cursor + delta.length);", source)
+        # Poll lock is per-run so session A can never block/release session B.
+        self.assertIn("pollInFlightRef.current.has(runId)", source)
+        self.assertIn("pollInFlightRef.current.set(runId, true);", source)
+        self.assertIn("pollInFlightRef.current.delete(runId);", source)
+        # Initial prompt bubble is synthesized only without a formal user
+        # event; the BLOCKED advice and prompt bubble carry stable keys.
+        self.assertIn('const hasUserEvent = normalized.some((event) => event.type === "user");', source)
+        self.assertIn("_key: `prompt:${run.runId}`", source)
+        self.assertIn("_key: `blocked-advice:${run.runId}`", source)
+        self.assertIn('function eventKey(event, scope = "default", index = 0)', sync)
+        # 47313 optimistic user messages reconcile through clientMessageId and
+        # the shared stream merge; busy is request-scoped.
+        self.assertIn('const clientMessageId = `cm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;', source)
+        self.assertIn("body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId })", source)
+        self.assertIn("appendStreamEvent(previous, stamped, `task:${taskId}`)", source)
+        self.assertIn("mergeEvents(older, current, `task:${task.id}`)", source)
+        self.assertIn("const busyRequestRef = useRef(0);", source)
+        self.assertIn("if (busyRequestRef.current === requestId) setBusy(false)", source)
+        self.assertIn('if (activeTaskIdRef.current !== taskId) return;', source)
 
     def test_legacy_static_frontends_are_removed(self):
         self.assertEqual([], sorted(ROOT.glob("*.html")))
