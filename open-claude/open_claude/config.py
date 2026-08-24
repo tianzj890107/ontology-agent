@@ -187,17 +187,37 @@ for _mid in _QWEN_MODEL_IDS:
     if not any(m["id"] == _mid for m in AVAILABLE_MODELS):
         AVAILABLE_MODELS.append({"id": _mid, "label": _mid, "provider": "qwen", "aliases": []})
 
+TEAM_DEFAULT_MODEL = "qwen3.8-27b"
 TEAM_MODEL_IDS = list(dict.fromkeys(_env_csv("TEAM_MODELS") or [
-    "direct-deepseek-v4-flash",
+    "mimo-v2.5",
+    "qwen3.5-397b-a17b",
+    "doubao-seed-2-0-code-preview-260215",
     "Qwen/Qwen3-80B-AWQ",
-    "direct-deepseek-v4-pro",
-    "qwen3.7-plus",
-    "glm-5.1",
     "kimi-k2.6",
+    "doubao-seed-2-0-pro-260215",
+    "direct-deepseek-v4-pro",
+    "doubao-seed-2-0-lite-260428",
     "glm-5.2",
+    "glm-5.1",
+    "qwen3.7-plus",
+    "glm-5v-turbo",
+    "mimo-v2.5-pro",
+    "doubao-seed-2-0-mini-260428",
     "glm-5-turbo",
+    "doubao-seed-2-1-turbo-260628",
+    "qwen3-vl-plus",
+    "qwen3.5-122b-a10b",
+    "doubao-seed-2-1-pro-260628",
+    "qwen3-vl-flash",
+    "direct-deepseek-v4-flash",
+    "qwen3.8-2.4t-a95b",
+    TEAM_DEFAULT_MODEL,
+    "deepseek-v4-flash-0731",
 ]))
 _TEAM_MODEL_LABELS = {
+    "mimo-v2.5": "MiMo V2.5",
+    "qwen3.5-397b-a17b": "Qwen3.5 397B A17B",
+    "doubao-seed-2-0-code-preview-260215": "Doubao Seed 2.0 Code Preview",
     "direct-deepseek-v4-flash": "DeepSeek V4 Flash",
     "Qwen/Qwen3-80B-AWQ": "Qwen3 80B AWQ",
     "direct-deepseek-v4-pro": "DeepSeek V4 Pro",
@@ -206,6 +226,7 @@ _TEAM_MODEL_LABELS = {
     "kimi-k2.6": "Kimi K2.6",
     "glm-5.2": "GLM-5.2",
     "glm-5-turbo": "GLM-5 Turbo",
+    "qwen3.8-27b": "Qwen3.8 27B",
 }
 for _mid in TEAM_MODEL_IDS:
     _existing = next((m for m in AVAILABLE_MODELS if m["id"] == _mid), None)
@@ -216,7 +237,9 @@ for _mid in TEAM_MODEL_IDS:
 _requested_team_model = os.environ.get("TEAM_MODEL", "").strip()
 if os.environ.get("LLM_PROVIDER", "").strip().lower() == "team":
     DEFAULT_MODEL = (_requested_team_model if _requested_team_model in TEAM_MODEL_IDS
-                     else (TEAM_MODEL_IDS[0] if TEAM_MODEL_IDS else AVAILABLE_MODELS[0]["id"]))
+                     else (TEAM_DEFAULT_MODEL if TEAM_DEFAULT_MODEL in TEAM_MODEL_IDS
+                           else (TEAM_MODEL_IDS[0] if TEAM_MODEL_IDS
+                                 else AVAILABLE_MODELS[0]["id"])))
 else:
     DEFAULT_MODEL = AVAILABLE_MODELS[0]["id"]
 

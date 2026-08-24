@@ -9,6 +9,26 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TeamModelConfigTests(unittest.TestCase):
+    def test_builtin_team_catalogue_contains_only_verified_models_and_defaults_to_qwen38(self):
+        env = os.environ.copy()
+        env.update({
+            "PYTHONPATH": str(ROOT / "open-claude"),
+            "LLM_PROVIDER": "team",
+            "TEAM_MODEL": "",
+            "TEAM_MODELS": "",
+        })
+        script = (
+            "from open_claude.config import DEFAULT_MODEL, TEAM_MODEL_IDS; "
+            "print(DEFAULT_MODEL); print(len(TEAM_MODEL_IDS)); "
+            "print(sorted(set(TEAM_MODEL_IDS) & "
+            "{'mimo-v2-pro', 'mimo-v2-flash', 'claude-opus-4-8', 'test'}))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], cwd=ROOT, env=env,
+            check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(result.stdout.splitlines(), ["qwen3.8-27b", "24", "[]"])
+
     def test_team_default_model_must_be_in_exposed_catalogue(self):
         env = os.environ.copy()
         env.update({
