@@ -1061,7 +1061,7 @@ class RunStore:
         general-purpose way back to INPUT_READY.
         """
         target = str(target or "INPUT_READY").upper()
-        if target not in {"INPUT_READY", "FAILED"}:
+        if target not in {"INPUT_READY", "FAILED", "BLOCKED"}:
             target = "INPUT_READY"
         with self.lock, run.state_lock:
             if run.status != "ANALYZING":
@@ -1412,7 +1412,8 @@ class ModelingRunManager:
         if str(intent or "auto").strip().lower() != "execute" and _is_table_count_request(requested_prompt):
             with self.store.lock, run.state_lock:
                 self.store._transition_locked(
-                    run, "INPUT_READY", allowed_from={"CREATED", "INPUT_READY", "FAILED"})
+                    run, "INPUT_READY",
+                    allowed_from={"CREATED", "INPUT_READY", "FAILED", "BLOCKED", "CANCELLED"})
                 if prompt is not None:
                     run.prompt = requested_prompt
                 if model is not None:
@@ -1439,11 +1440,15 @@ class ModelingRunManager:
                     "GLOBAL_QUEUE_FULL", "全局排队任务已达到上限",
                     details={"maxQueuedRuns": self.max_queued_runs})
             return_status = run.status if run.status in {"FAILED", "BLOCKED"} else "INPUT_READY"
-            changes = {"error": ""}
+            # A conversational question on a FAILED/BLOCKED run keeps its
+            # failure/block reason so the restored state still explains why
+            # the modeling stopped; only a real continuation clears it.
+            changes = {} if conversational else {"error": ""}
             if model is not None:
                 changes["model"] = requested_model
             self.store.transition_and_update(
-                run, "QUEUED", allowed_from={"CREATED", "INPUT_READY", "FAILED", "BLOCKED"},
+                run, "QUEUED",
+                allowed_from={"CREATED", "INPUT_READY", "FAILED", "BLOCKED", "CANCELLED"},
                 changes=changes)
             self.execution_modes[run.run_id] = (conversational, return_status)
             self.execution_prompts[run.run_id] = str(prompt or "").strip()

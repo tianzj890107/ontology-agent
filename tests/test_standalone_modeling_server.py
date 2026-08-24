@@ -1058,14 +1058,96 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertTrue(any(event["type"] == "worker_lost" for event in run.events))
         manager.close()
 
-    def test_queued_cancel_cannot_be_claimed(self):
+    def test_cancelled_run_can_be_executed_again(self):
         manager = ModelingRunManager(self.store, max_active_runs=1)
-        run = self.store.create("DATABASE", "cancel", user_id="u1")
+        run = self.store.create("DATABASE", "resume cancelled run", user_id="u1")
         self.store.transition(run, "QUEUED")
         self.store.request_cancel(run)
         self.assertEqual(run.status, "CANCELLED")
-        with self.assertRaises(StateTransitionError):
+        with patch.object(manager, "_execute", return_value=None):
             manager.execute(run)
+            manager.threads[run.run_id].join(timeout=2)
+        self.assertEqual(run.status, "ANALYZING")
+        manager.close()
+
+    def test_conversational_question_on_blocked_run_keeps_blocked_state(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "blocked question")
+        run.resume_session_id = "session-blocked-question"
+        run.error = "MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE"
+        self.store.transition(run, "BLOCKED", error=run.error)
+        self.store.transition(run, "ANALYZING", allowed_from={"BLOCKED"})
+        manager.execution_modes[run.run_id] = (True, "BLOCKED")
+        manager.execution_prompts[run.run_id] = "为什么被暂停了？"
+        captured = {}
+
+        class FakeTask:
+            status = "idle"
+
+            def __init__(self, *args, **kwargs):
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def session_id(self):
+                return "session-question"
+
+            def stream_turn(self, text, emit, conversational=False):
+                captured["prompt"] = text
+                captured["conversational"] = conversational
+
+        with patch("oc_codex_server.Task", FakeTask):
+            manager._execute(run)
+
+        self.assertEqual(captured["prompt"], "为什么被暂停了？")
+        self.assertTrue(captured["conversational"])
+        # The question must not silently downgrade a hard gate block: the run
+        # returns to BLOCKED and keeps the gate reason for the UI advice.
+        self.assertEqual(run.status, "BLOCKED")
+        self.assertEqual(run.error, "MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE")
+        manager.close()
+
+    def test_cancelled_run_question_returns_to_input_ready(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "cancelled question")
+        self.store.transition(run, "QUEUED")
+        self.store.request_cancel(run)
+        self.assertEqual(run.status, "CANCELLED")
+        # A cancelled run is resumable: execute() queues it again (the state
+        # graph already allowed CANCELLED -> QUEUED) and the worker restores
+        # INPUT_READY after answering a conversational turn.
+        manager.store.transition_and_update(
+            run, "QUEUED", allowed_from={"CANCELLED"}, changes={"cancel_requested": False})
+        self.store.transition(run, "CLAIMED", allowed_from={"QUEUED"})
+        self.store.transition(run, "ANALYZING", allowed_from={"CLAIMED"})
+        manager.execution_modes[run.run_id] = (True, "INPUT_READY")
+        manager.execution_prompts[run.run_id] = "这个表是什么意思？"
+        captured = {}
+
+        class FakeTask:
+            status = "idle"
+
+            def __init__(self, *args, **kwargs):
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def session_id(self):
+                return "session-question"
+
+            def stream_turn(self, text, emit, conversational=False):
+                captured["prompt"] = text
+
+        with patch("oc_codex_server.Task", FakeTask):
+            manager._execute(run)
+
+        self.assertEqual(captured["prompt"], "这个表是什么意思？")
+        self.assertEqual(run.status, "INPUT_READY")
+        self.assertEqual(run.error, "")
         manager.close()
 
     def test_standalone_adapter_never_changes_legacy_web_tasks_snapshot(self):

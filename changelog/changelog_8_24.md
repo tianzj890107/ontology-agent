@@ -64,3 +64,27 @@
 - 部署：已部署 47313/47314 至 `8194cc2`（服务器直连 github 超时，沿用 bundle+scp；本次仅改 `oc_codex_server.py`，不在依赖指纹内，venv 无需重装），两服务 `/`、`/health` 均 200，启动日志均含 transport timeouts 行，模型接口默认仍为 `Qwen/Qwen3-80B-AWQ`。
 - 运维：`run_6ed2452ad3c447c1a2bfb4edbaff76a7` 状态由 FAILED 重置为 INPUT_READY（服务端 `RunStore.transition`，API 复核通过）。该 run 的 FAILED 真实原因是第 3 轮建模续跑（08-24 10:59:28）撞团队网关预算上限（`Budget has been exceeded! Current cost: 30.35, Max budget: 30.0`）；第 4 轮被误判为问答。正式语义校验显示产物仍不合格（`logical_entities.csv` 第 16、26–44 行业务对象编码/名称为空；LE000001/009/011/013/016/019/024 的 `mainFlag=Y` 无 CONFIRMED 业务对象），因此不置 SUCCEEDED，重置为可续跑状态，待网关预算恢复后以明确建模指令重跑。
 - 主要文件：`open-claude/oc_codex_server.py`、`tests/test_ontology_knowledge.py`、`changelog/changelog_8_24.md`。
+
+### 8. 建模规范第 12 条修订：可实例化的低过拟合证据一致性门禁
+
+- 规范源：`数据模型建模规范-v.0.0.1.xlsx` 是用户后来更新的权威版本（非临时变体），本次修订直接基于该文件；同时按构建链固定读取名 `rules/数据模型建模规范v0.0.1.xlsx` 同步一份内容完全一致的副本（原规范名文件此前在 git 中处于删除态，现已恢复为修改态），两个文件保持逐字节一致，运行时知识以构建链文件名生成。
+- 修订第 12 条“可实例化”（保持严格表述，按用户校正后的口径）：基础数据、规则数据、报告报表数据三类明确不是业务对象（分别指分类/标签型参考数据、规则配置项/表达式/执行结果、报表模板/查询定义/统计展示等纯派生展示）；同时保留例外：可独立创建、版本化、审批、发布、生效、停用、审计的规则定义/规则版本可具有业务对象资格，有唯一报告编号和编制、审批、发布、归档独立生命周期的“某次报告实例”可作为文档型业务对象，主数据不因数量有限或当前行数少而否决；判定必须基于证据组合（实例来源、数量是否可预置、稳定身份、独立治理、业务行为、生命周期、是否纯派生展示），不得仅凭名称、表名或数据类别一刀切；证据不足用 UNKNOWN/CANDIDATE 并形成确认问题，不得臆造 PASS 或无反证直接 FAIL。
+- 第 10 条“有生命周期和状态变化”同步对齐：分类/标签型基础数据和观测数据通常无状态变化、无独立生命周期，不属于业务对象；规则定义/版本和报告实例按第 12 条例外处理，消除“报告报表一律不能实例化”与“报告实例可作业务对象”的绝对表述冲突。
+- 运行时知识重建：`scripts/build_agent_knowledge.py` 重新生成 `agent_knowledge/modeling/数据模型建模规范v0.0.1.md`、`basev0.0.1.md`、`all_sourcesv0.0.1.md` 及 integration 同名文件，均包含新第 12/10 条（仅手工改生成文件、不修源是禁止的；本次从源文件改起）。
+- 建模提示词（`oc_codex_server.py build_modeling_instructions`，47313/47314 共用）：步骤 6 增加候选性质分类（OPERATIONAL_BUSINESS_OBJECT/MASTER_DATA/REFERENCE_DATA/RULE_DEFINITION/RULE_COMPONENT_OR_CONFIGURATION/REPORT_DEFINITION_OR_VIEW/REPORT_INSTANCE/DERIVED_ANALYTICAL_RESULT/UNKNOWN）与 R5 组合判定指引；证据门禁新增“低过拟合证据一致性”条目，明确反证存在仍写 PASS/CONFIRMED、或 CONFIRMED 正向证据只来自名称/表名/数据类别时将被阻断，名称/类别提示只触发复核并生成具体确认问题。
+- 服务端门禁（`open-claude/open_claude/modeling_reliability.py`）：新增 `validate_business_object_evidence_consistency`，接入 `semantic_validation_issues` 与 `BUSINESS_OBJECTS` 阶段校验。反证词组只在证据文本中匹配（绝不匹配候选名称、表名或数据类别），单个强反证或两个以上弱反证视为明确反证；命中且 R5/R3=PASS 时输出 `R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE`/`R3_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE`（ERROR/STRUCTURAL_BLOCKER，阻断正式输出）；报告实例/规则版本带自身生命周期证据时放行；R5=PASS 但正向证据只来自名称/表名/数据类别时输出 `R5_PASS_WITHOUT_INSTANTIATION_EVIDENCE` 阻断。证据不足、名称/类别提示、正反冲突仍为 UNKNOWN/CANDIDATE，不直接 REJECTED。
+- 修复推断缺陷：`infer_business_object_rule_status` 新增 `_marker_hit`，避免“不可实例化/不可重复创建/无业务编号”被正向标记误判为 PASS；R5 反证标记补充“不可实例化、不能形成可区分实例、纯查询结果、聚合结果、统计展示、计算派生”等规则 12 的显式证据短语。
+- 测试：`tests/test_modeling_reliability.py` 新增 `BusinessObjectEvidenceConsistencyTests`（12 项），覆盖固定码表拒绝、低行数/0 行主数据放行、规则配置行拒绝、规则定义放行、SQL 聚合视图拒绝、报告实例放行、名称含“报告”降 CANDIDATE、名称/类别关键词只触发复核、正反冲突保持 UNKNOWN、finalization 阻断、47313/47314 共享同一门禁结论一致。
+- 验证：`python -m unittest discover -s tests` 359 项通过（3 项跳过），其中 `tests.test_modeling_reliability` 71 项、`tests.test_ontology_knowledge` 等 114 项、`tests.test_standalone_modeling_server` 48 项；`py_compile` 与 `git diff --check` 通过。
+- 未部署、未提交、未推送；生成知识中同步出现的 V6 标题归一（`通用业务对象与逻辑实体识别规范v0.0.1.md` 标题由 v0.0.1 归一为 V6）是构建脚本既有输出与上次提交产物之间的漂移，随本次重建一并落齐。
+- 主要文件：`rules/数据模型建模规范v0.0.1.xlsx`、`scripts/build_agent_knowledge.py`（无改动，仅重建）、`agent_knowledge/modeling|integration/*v0.0.1.md`、`open-claude/oc_codex_server.py`、`open-claude/open_claude/modeling_reliability.py`、`tests/test_modeling_reliability.py`、`changelog/changelog_8_24.md`。
+
+### 9. CANCELLED/BLOCKED 运行的提问与续跑修复
+
+- 问题：`run_6ed2452ad3c447c1a2bfb4edbaff76a7` 在 08-24 14:54 用户点取消后最终状态为 CANCELLED（在途第 5 轮 14:56:02 门禁触发 blocked 后走取消收尾），此后无法继续提问；而 FAILED/BLOCKED 的 run 均可提问。
+- 根因：状态机 `RUN_TRANSITIONS` 允许 `CANCELLED → QUEUED`（取消后恢复），但两处不一致：前端 `continueRun` 放行列表只含 `["CREATED", "INPUT_READY", "FAILED", "BLOCKED"]`（CANCELLED 直接静默 return，气泡不出现也无报错）；服务端 `execute()` 转 QUEUED 的 `allowed_from` 同样漏了 CANCELLED（会 409 `INVALID_STATE_TRANSITION`）。另外 `restore_after_question` 只接受 INPUT_READY/FAILED 作为回退目标，BLOCKED 会被强制归一成 INPUT_READY，问完问题会丢掉 BLOCKED 标记和暂停原因。
+- 修复：前端 `continueRun` 放行列表加 `CANCELLED`，“继续运行”按钮对 CANCELLED 也显示（FAILED/BLOCKED/CANCELLED），run 状态色为 CANCELLED 增加 warning 色；服务端 `execute()` 的 QUEUED `allowed_from` 加 `CANCELLED`（表数量只读问答路径同步放行 BLOCKED/CANCELLED），且问答回合不再清空 FAILED/BLOCKED 的错误原因，只有真正的续跑才清；`restore_after_question` 接受 BLOCKED 原样回退，保留暂停原因，避免问完问题丢状态。
+- 测试：`tests/test_standalone_modeling_server.py` 将“取消后不可执行”改为“CANCELLED 可重新排队执行”，新增 BLOCKED 上问答回合保持 BLOCKED 且保留门禁原因、CANCELLED 上问答回合回到 INPUT_READY；`tests/test_frontend_contract.py` 同步更新 3 处放行列表断言。
+- 验证：`python -m unittest tests.test_standalone_modeling_server tests.test_frontend_contract` 通过，`python -m unittest discover -s tests` 361 项通过（3 项跳过）；`npm run build`（vite 构建通过）；`py_compile` 与 `git diff --check` 通过。
+- 部署：已部署 47313/47314（服务器直连 github 超时，沿用本地 bundle+scp；本次改 `standalone_modeling_server.py` 与前端 dist，不在依赖指纹内，venv 无需重装），两服务 `/`、`/health` 均 200，启动日志均含 transport timeouts 行，模型接口默认仍为 `Qwen/Qwen3-80B-AWQ`；`run_6ed2452ad3c447c1a2bfb4edbaff76a7` 未改动状态，可直接按“继续运行”或提问恢复。
+- 主要文件：`frontend/src/main.jsx`、`frontend/dist/*`、`open-claude/standalone_modeling_server.py`、`tests/test_standalone_modeling_server.py`、`tests/test_frontend_contract.py`、`changelog/changelog_8_24.md`。

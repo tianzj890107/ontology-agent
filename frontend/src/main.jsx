@@ -660,7 +660,7 @@ function StandaloneApp() {
     }
   };
   const continueRun = async (nextPrompt = "", selectedModel = standaloneModel) => {
-    if (!run?.runId || !["CREATED", "INPUT_READY", "FAILED", "BLOCKED"].includes(run.status)) return;
+    if (!run?.runId || !["CREATED", "INPUT_READY", "FAILED", "BLOCKED", "CANCELLED"].includes(run.status)) return;
     if (continueInFlightRef.current) return;
     setError("");
     setBusy(true);
@@ -787,7 +787,7 @@ function StandaloneApp() {
     if (okCount > 0) messageApi.success(`已开始下载 ${okCount} 个文件`);
     if (failed.length) messageApi.error(`下载失败 ${failed.length} 个文件：${failed.map((path) => path.split("/").pop()).join("、")}`);
   };
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "default", BLOCKED: "default" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "default", BLOCKED: "default", CANCELLED: "warning" }[run?.status] || "default";
   return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
     {contextHolder}
     <div className="standalone-shell">
@@ -862,7 +862,7 @@ function blockedAdviceText(run) {
 }
 
 function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
-  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "default", BLOCKED: "default" }[run?.status] || "default";
+  const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "default", BLOCKED: "default", CANCELLED: "warning" }[run?.status] || "default";
   const files = run?.files || [];
   // The standalone API persists every streamed thinking token. Reuse the
   // shared workbench normalization so one continuous reasoning block renders
@@ -878,7 +878,7 @@ function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selected
     return base;
   }, [run.events, run.prompt, run.status]);
   return <section className="task-view standalone-agent-task-view">
-    <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{statusLabel(run.status)}</Tag>{["FAILED", "BLOCKED"].includes(run.status) && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
+    <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{statusLabel(run.status)}</Tag>{["FAILED", "BLOCKED", "CANCELLED"].includes(run.status) && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
     <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
   </section>;
 }
