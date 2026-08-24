@@ -375,7 +375,6 @@ function StandaloneApp() {
       files: Array.isArray(summary.files) ? summary.files : (visibleRun?.files || []),
       events: cachedEvents,
     };
-    if (summary.model) setStandaloneModel(summary.model);
     setRun(summaryRun);
     updateRunSummary(summary);
     const events = await standaloneApi(
@@ -427,7 +426,6 @@ function StandaloneApp() {
       events: latestEvents,
     };
     standaloneEventCacheRef.current.set(runId, latestEvents);
-    if (summary.model) setStandaloneModel(summary.model);
     if (selectedRunIdRef.current === runId) setRun(result);
     scheduleIdle(async () => {
       // The file tree is a single cheap request; populate the panel first so
@@ -499,7 +497,6 @@ function StandaloneApp() {
       // immediately instead of leaving the user on the new-task form while
       // a historical event payload is fetched.
       selectedRunIdRef.current = runId;
-      if (cached.model) setStandaloneModel(cached.model);
       setRun({ ...cached, events: Array.isArray(cached.events) ? cached.events : [] });
     }
     void loadRun(runId);
@@ -639,7 +636,6 @@ function StandaloneApp() {
       // client read cursor because it does not contain the event payload.
       eventCursorRef.current.delete(created.runId);
       setRun(created);
-      if (created.model) setStandaloneModel(created.model);
       setRuns((current) => [created, ...current.filter((item) => item.runId !== created.runId)]);
       const started = await standaloneApi(`/api/modeling-runs/${created.runId}/execute`, "", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -801,7 +797,7 @@ function StandaloneApp() {
         <main className="standalone-main">
           {!run && <div className="standalone-title"><div><h1>独立智能建模</h1><p>上传输入资料或连接已有数据库，完成建模并查看可追溯产物。</p></div></div>}
           {error && <Alert type="error" showIcon closable onClose={() => setError("")} message={error} />}
-          {!run ? <StandaloneInputCard sourceMode={sourceMode} setSourceMode={setSourceMode} title={standaloneTitle} setTitle={setStandaloneTitle} prompt={prompt} setPrompt={setPrompt} inputFiles={inputFiles} setInputFiles={setInputFiles} databaseSourceId={databaseSourceId} setDatabaseSourceId={setDatabaseSourceId} databaseSources={databaseSources} databaseSchemas={databaseSchemas} selectedSchemas={selectedSchemas} setSelectedSchemas={setSelectedSchemas} databaseSchema={databaseSchema} tablesLoading={tablesLoading} databaseTables={databaseTables} selectedTables={selectedTables} setSelectedTables={setSelectedTables} selectedArtifacts={selectedArtifacts} setSelectedArtifacts={setSelectedArtifacts} busy={busy} startModeling={startModeling} /> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} filesLoading={runFilesLoading} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || run.model || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}
+          {!run ? <StandaloneInputCard sourceMode={sourceMode} setSourceMode={setSourceMode} title={standaloneTitle} setTitle={setStandaloneTitle} prompt={prompt} setPrompt={setPrompt} inputFiles={inputFiles} setInputFiles={setInputFiles} databaseSourceId={databaseSourceId} setDatabaseSourceId={setDatabaseSourceId} databaseSources={databaseSources} databaseSchemas={databaseSchemas} selectedSchemas={selectedSchemas} setSelectedSchemas={setSelectedSchemas} databaseSchema={databaseSchema} tablesLoading={tablesLoading} databaseTables={databaseTables} selectedTables={selectedTables} setSelectedTables={setSelectedTables} selectedArtifacts={selectedArtifacts} setSelectedArtifacts={setSelectedArtifacts} busy={busy} startModeling={startModeling} /> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} filesLoading={runFilesLoading} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}
         </main>
       </div>
       <input ref={standaloneFileInputRef} type="file" multiple hidden onChange={onStandaloneFilesSelected} />
