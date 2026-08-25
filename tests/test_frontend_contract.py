@@ -397,8 +397,10 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('if (!businessObjects.length) return entityNodes.map(({ node }) => node);', source)
         self.assertIn('formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || ""', source)
         self.assertIn('id: "ontology:virtual-root"', source)
-        self.assertIn('children: data.map((node) => ({ ...node, lineStyle: { opacity: 0 } }))', source)
-        self.assertIn('initialTreeDepth: hasBusinessObjects ? 2 : 1', source)
+        self.assertIn('children: data.map((node) => ({ ...visibleNode(node), lineStyle: { opacity: 0 } }))', source)
+        self.assertIn('const height = Math.max(520, visibleRows(data) * 58 + 80);', source)
+        self.assertIn('expandAndCollapse: false', source)
+        self.assertIn('chart.on("click", ({ data: clicked }) =>', source)
         self.assertIn('const [filesTaskId, setFilesTaskId] = useState("");', source)
         self.assertIn('if (activeTaskIdRef.current !== taskId || filesRequestRef.current !== requestId) return [];', source)
         self.assertIn('return filesTaskId === active?.id && byName.has("logical_entities.csv") ? byName : null;', source)
@@ -414,6 +416,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('position: "inside"', source)
         self.assertIn('preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} />', source)
         self.assertIn('.ontology-tree-preview{', styles)
+        self.assertIn('.ontology-tree-scroll{', styles)
 
 
     def test_continue_run_preserves_event_cursor_and_guards_double_submit(self):

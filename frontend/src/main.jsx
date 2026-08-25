@@ -1508,33 +1508,59 @@ function OntologyTreePreview({ data }) {
     void import("echarts").then((echarts) => {
       if (disposed || !containerRef.current) return;
       chart = echarts.init(containerRef.current);
-      chart.setOption({
-        tooltip: { trigger: "item", formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
-        series: [{
-          type: "tree",
-          data: [{
-            id: "ontology:virtual-root",
-            name: "",
-            virtualRoot: true,
-            symbolSize: 0,
-            itemStyle: { opacity: 0 },
-            children: data.map((node) => ({ ...node, lineStyle: { opacity: 0 } })),
-          }],
-          top: 28,
-          left: 80,
-          bottom: 28,
-          right: 180,
-          orient: "LR",
-          initialTreeDepth: hasBusinessObjects ? 2 : 1,
-          expandAndCollapse: true,
-          roam: true,
-          label: { position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: 13, overflow: "truncate", formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
-          leaves: { label: { position: "inside", verticalAlign: "middle", align: "center" } },
-          emphasis: { focus: "descendant" },
-          animationDuration: 300,
-          animationDurationUpdate: 500,
-        }],
+      const nodesById = new Map();
+      const indexNodes = (nodes) => nodes.forEach((node) => {
+        nodesById.set(node.id, node);
+        indexNodes(node.children || []);
       });
+      indexNodes(data);
+      const expanded = new Set(hasBusinessObjects ? data.filter((node) => node.nodeType === "businessObject").map((node) => node.id) : []);
+      const visibleNode = (node) => ({
+        ...node,
+        ...(expanded.has(node.id) && node.children?.length ? { children: node.children.map(visibleNode) } : { children: undefined }),
+      });
+      const visibleRows = (nodes) => nodes.reduce((total, node) => {
+        if (expanded.has(node.id) && node.children?.length) return total + visibleRows(node.children);
+        return total + 1;
+      }, 0);
+      const renderTree = () => {
+        const height = Math.max(520, visibleRows(data) * 58 + 80);
+        if (containerRef.current.style.height !== `${height}px`) containerRef.current.style.height = `${height}px`;
+        chart.setOption({
+          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
+          series: [{
+            type: "tree",
+            data: [{
+              id: "ontology:virtual-root",
+              name: "",
+              virtualRoot: true,
+              symbolSize: 0,
+              itemStyle: { opacity: 0 },
+              children: data.map((node) => ({ ...visibleNode(node), lineStyle: { opacity: 0 } })),
+            }],
+            top: 40,
+            left: 42,
+            bottom: 40,
+            right: 150,
+            orient: "LR",
+            expandAndCollapse: false,
+            roam: true,
+            label: { position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: 13, overflow: "truncate", formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
+            leaves: { label: { position: "inside", verticalAlign: "middle", align: "center" } },
+            emphasis: { focus: "descendant" },
+            animationDuration: 0,
+            animationDurationUpdate: 0,
+          }],
+        }, { notMerge: true });
+        chart.resize();
+      };
+      chart.on("click", ({ data: clicked }) => {
+        const original = nodesById.get(clicked?.id);
+        if (!original?.children?.length) return;
+        if (expanded.has(original.id)) expanded.delete(original.id); else expanded.add(original.id);
+        renderTree();
+      });
+      renderTree();
       observer = new ResizeObserver(() => chart?.resize());
       observer.observe(containerRef.current);
     });
@@ -1544,7 +1570,7 @@ function OntologyTreePreview({ data }) {
       chart?.dispose();
     };
   }, [data, hasBusinessObjects]);
-  return <div className="ontology-tree-preview" ref={containerRef} />;
+  return <div className="ontology-tree-scroll"><div className="ontology-tree-preview" ref={containerRef} /></div>;
 }
 
 function PreviewModalTitle({ title, fullscreen, onToggle }) {
