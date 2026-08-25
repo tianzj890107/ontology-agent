@@ -1523,19 +1523,52 @@ function OntologyTreePreview({ data }) {
       if (disposed || !containerRef.current || !scrollRef.current) return;
       chart = echarts.init(containerRef.current);
       const renderGraph = () => {
-        const objectX = 110;
-        const entityX = hasBusinessObjects ? 390 : 110;
-        const attributeStartX = entityX + 270;
-        const attributeGap = 230;
         const attributeColumns = 4;
+        const objectNodes = data.filter((node) => node.nodeType === "businessObject");
+        const entityNodes = data.flatMap((root) => root.nodeType === "entity" ? [root] : (root.children || []).filter((node) => node.nodeType === "entity"));
+        const displaySize = (node) => {
+          if (!Array.isArray(node.symbolSize)) return [92, showAttributes ? 38 : 50];
+          return showAttributes ? node.symbolSize : [Math.round(node.symbolSize[0] * 1.3), 50];
+        };
+        const maxWidth = (nodes, fallback = 92) => Math.max(fallback, ...nodes.map((node) => displaySize(node)[0]));
+        const attributeWidths = Array.from({ length: attributeColumns }, (_, column) => maxWidth(entityNodes.flatMap((entity) => (entity.children || []).filter((_, index) => index % attributeColumns === column))));
+        const objectWidth = maxWidth(objectNodes);
+        const entityWidth = maxWidth(entityNodes);
+        const viewportWidth = Math.max(320, scrollRef.current.clientWidth || 0);
+        const padding = 28;
+        const minimumGap = 24;
+        let width;
+        let objectX = null;
+        let entityX;
+        let attributeXs = [];
+        if (!showAttributes) {
+          if (hasBusinessObjects) {
+            width = Math.max(viewportWidth, objectWidth + entityWidth + minimumGap * 2 + padding * 2);
+            objectX = Math.max(padding + objectWidth / 2, width * 0.25);
+            entityX = Math.min(width - padding - entityWidth / 2, width * 0.75);
+          } else {
+            width = Math.max(viewportWidth, entityWidth + padding * 2);
+            entityX = width / 2;
+          }
+        } else {
+          const columnWidths = [...(hasBusinessObjects ? [objectWidth] : []), entityWidth, ...attributeWidths];
+          width = Math.max(viewportWidth, columnWidths.reduce((sum, value) => sum + value, 0) + minimumGap * (columnWidths.length - 1) + padding * 2);
+          const gap = (width - padding * 2 - columnWidths.reduce((sum, value) => sum + value, 0)) / (columnWidths.length - 1);
+          const centers = [];
+          let x = padding;
+          columnWidths.forEach((columnWidth) => {
+            centers.push(x + columnWidth / 2);
+            x += columnWidth + gap;
+          });
+          objectX = hasBusinessObjects ? centers[0] : null;
+          entityX = centers[hasBusinessObjects ? 1 : 0];
+          attributeXs = centers.slice(hasBusinessObjects ? 2 : 1);
+        }
         const graphNodes = [];
         const graphLinks = [];
         let cursorY = 40;
         const addNode = (node, x, y) => {
-          const enlargedSize = !showAttributes && Array.isArray(node.symbolSize)
-            ? [Math.round(node.symbolSize[0] * 1.3), 50]
-            : node.symbolSize;
-          graphNodes.push({ ...node, children: undefined, x, y, symbolSize: enlargedSize, ...(!showAttributes ? { label: { fontSize: 15 } } : {}) });
+          graphNodes.push({ ...node, children: undefined, x, y, symbolSize: displaySize(node), ...(!showAttributes ? { label: { fontSize: 15 } } : {}) });
         };
         const addEntity = (entity, objectId = null) => {
           const attributes = showAttributes ? (entity.children || []) : [];
@@ -1547,7 +1580,7 @@ function OntologyTreePreview({ data }) {
           attributes.forEach((attribute, index) => {
             const column = index % attributeColumns;
             const row = Math.floor(index / attributeColumns);
-            addNode(attribute, attributeStartX + column * attributeGap, cursorY + row * 58 + 29);
+            addNode(attribute, attributeXs[column], cursorY + row * 58 + 29);
             graphLinks.push({ source: entity.id, target: attribute.id });
           });
           cursorY += bandHeight;
@@ -1564,21 +1597,24 @@ function OntologyTreePreview({ data }) {
           } else if (root.nodeType === "entity") addEntity(root);
         });
         const height = Math.max(520, cursorY + 40);
-        const width = Math.max(980, showAttributes && hasAttributes ? attributeStartX + (attributeColumns - 1) * attributeGap + 160 : entityX + 180);
+        const layoutAnchors = [
+          { id: "ontology:layout-top-left", name: "", layoutAnchor: true, x: 0, y: 0, symbolSize: 0, itemStyle: { opacity: 0 }, label: { show: false } },
+          { id: "ontology:layout-bottom-right", name: "", layoutAnchor: true, x: width, y: height, symbolSize: 0, itemStyle: { opacity: 0 }, label: { show: false } },
+        ];
         containerRef.current.style.width = `${width}px`;
         containerRef.current.style.height = `${height}px`;
         chart.resize({ width, height });
         chart.setOption({
-          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.name || "" },
+          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.layoutAnchor ? "" : node?.name || "" },
           series: [{
             type: "graph",
             layout: "none",
-            data: graphNodes,
+            data: [...graphNodes, ...layoutAnchors],
             links: graphLinks,
-            top: 40,
-            left: 40,
-            bottom: 40,
-            right: 60,
+            top: 0,
+            left: 0,
+            bottom: 0,
+            right: 0,
             roam: true,
             label: { show: true, position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: 13, overflow: "truncate", formatter: ({ data: node }) => node?.name || "" },
             lineStyle: { color: "#94a3b8", width: 1.2, opacity: 0.8, curveness: 0.08 },
