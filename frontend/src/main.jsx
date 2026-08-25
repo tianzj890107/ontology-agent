@@ -1518,7 +1518,7 @@ function OntologyTreePreview({ data }) {
             virtualRoot: true,
             symbolSize: 0,
             itemStyle: { opacity: 0 },
-            children: data,
+            children: data.map((node) => ({ ...node, lineStyle: { opacity: 0 } })),
           }],
           top: 28,
           left: 80,
@@ -1714,7 +1714,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" aria-label="刷新文件" title="刷新文件" onClick={onRefresh}><RefreshFilePanelIcon /></Button><Button size="small" aria-label="折叠文件面板" title="折叠文件面板" onClick={onClose}><CollapseFilePanelIcon /></Button></div>
-    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={() => onDownload(selected)}>下载所选</Button>{mission && <Tooltip title={uploadBlocked ? "任务执行或状态变更期间不能上传" : platformStatus === "COMPLETED" ? "上传新结果将恢复任务为执行中" : "上传选中的任务结果"}><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || uploadBlocked} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{(mission || workspaceFolders) && <Tooltip title={ontologyAvailable ? "根据当前任务已有产物生成本体树图" : "缺少逻辑实体 CSV，不能进行本体可视化"}><Button size="small" loading={drawingOntology} disabled={!ontologyAvailable || drawingOntology} onClick={onDrawOntology}>本体可视化</Button></Tooltip>}{mission && <span className="panel-note">{platformStatus === "COMPLETED" ? "上传新结果将恢复执行" : "当前任务范围"}</span>}</div>
+    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={() => onDownload(selected)}>下载所选</Button>{mission && <Tooltip title={uploadBlocked ? "任务执行或状态变更期间不能上传" : platformStatus === "COMPLETED" ? "上传新结果将恢复任务为执行中" : "上传选中的任务结果"}><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || uploadBlocked} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{(mission || workspaceFolders) && <Tooltip title={ontologyAvailable ? "根据当前任务已有产物生成本体树图" : "缺少逻辑实体 CSV，不能进行本体可视化"}><Button size="small" loading={drawingOntology} disabled={!ontologyAvailable || drawingOntology} onClick={onDrawOntology}>本体可视化</Button></Tooltip>}{mission && platformStatus === "COMPLETED" && <span className="panel-note">上传新结果将恢复执行</span>}</div>
     {loading ? <Spin /> : !files.length && !mission && !workspaceFolders ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, subgroups]) => {
       const collapsed = collapsedDirs.has(dir);
       const items = [...subgroups.values()].flat();
