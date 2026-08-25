@@ -402,7 +402,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('children: data.map((node) => ({ ...visibleNode(node), lineStyle: { opacity: 0 } }))', source)
         self.assertIn('const height = Math.max(520, visibleRows(data) * 58 + 80);', source)
         self.assertIn('expandAndCollapse: false', source)
-        self.assertIn('left: hasBusinessObjects ? "-35%" : "-71%"', source)
+        self.assertIn('left: hasBusinessObjects ? "-38%" : "-71%"', source)
         self.assertIn('chart.on("click", ({ data: clicked }) =>', source)
         self.assertIn('const [filesTaskId, setFilesTaskId] = useState("");', source)
         self.assertIn('if (activeTaskIdRef.current !== taskId || filesRequestRef.current !== requestId) return [];', source)
