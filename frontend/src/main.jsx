@@ -1547,7 +1547,7 @@ function OntologyTreePreview({ data }) {
               children: data.map((node) => ({ ...visibleNode(node), lineStyle: { opacity: 0 } })),
             }],
             top: 40,
-            left: hasBusinessObjects ? "-38%" : "-71%",
+            left: hasBusinessObjects ? "-48%" : "-71%",
             bottom: 40,
             right: 150,
             orient: "LR",
