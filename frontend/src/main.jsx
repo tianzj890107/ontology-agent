@@ -241,6 +241,7 @@ function StandaloneApp() {
   const [runs, setRuns] = useState([]);
   const [run, setRun] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
   const [runFilesOpen, setRunFilesOpen] = useState(true);
   const [runFilesLoading, setRunFilesLoading] = useState(false);
   const [selectedRunFiles, setSelectedRunFiles] = useState([]);
@@ -249,6 +250,7 @@ function StandaloneApp() {
   const [standaloneModels, setStandaloneModels] = useState([]);
   const [standaloneModel, setStandaloneModel] = useState("");
   const [busy, setBusy] = useState(false);
+  const [standaloneOntologyDrawing, setStandaloneOntologyDrawing] = useState(false);
   const [error, setError] = useState("");
   const [messageApi, contextHolder] = message.useMessage();
   const selectedRunIdRef = useRef("");
@@ -266,6 +268,16 @@ function StandaloneApp() {
   const continueInFlightRef = useRef(false);
   const standaloneFileInputRef = useRef(null);
   const standaloneFeedPrependAnchorRef = useRef(null);
+  const standaloneOntologyFiles = useMemo(() => {
+    const required = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"];
+    const byName = new Map();
+    (run?.files || []).forEach((file) => {
+      const name = String(file?.path || "").replaceAll("\\", "/").split("/").pop();
+      if (required.includes(name) && (!byName.has(name) || String(file.path).includes("output/"))) byName.set(name, file.path);
+    });
+    return byName.has("logical_entities.csv") ? byName : null;
+  }, [run?.files, run?.runId]);
+  useEffect(() => { setStandaloneOntologyDrawing(false); setPreviewFullscreen(false); }, [run?.runId]);
 
   const loadRuns = async () => {
     const result = await standaloneApi("/api/modeling-runs", "");
@@ -817,6 +829,31 @@ function StandaloneApp() {
     if (okCount > 0) messageApi.success(`已开始下载 ${okCount} 个文件`);
     if (failed.length) messageApi.error(`下载失败 ${failed.length} 个文件：${failed.map((path) => path.split("/").pop()).join("、")}`);
   };
+  const drawStandaloneOntology = async () => {
+    const runId = run?.runId || "";
+    if (!standaloneOntologyFiles || !runId) {
+      setError("缺少逻辑实体 CSV，不能进行本体可视化");
+      return;
+    }
+    setStandaloneOntologyDrawing(true);
+    setError("");
+    try {
+      const names = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"].filter((name) => standaloneOntologyFiles.has(name));
+      const responses = await Promise.all(names.map((name) => standaloneFileResponse(`/api/modeling-runs/${encodeURIComponent(runId)}/files/content?path=${encodeURIComponent(standaloneOntologyFiles.get(name))}`)));
+      const failedIndex = responses.findIndex((result) => result.error || !result.response?.ok);
+      if (failedIndex >= 0) throw new Error(`${names[failedIndex]} 读取失败`);
+      const texts = await Promise.all(responses.map((result) => result.response.text()));
+      if (selectedRunIdRef.current !== runId) return;
+      const records = new Map(names.map((name, index) => [name, csvRecords(texts[index])]));
+      const tree = buildOntologyTree(records.get("business_objects.csv") || [], records.get("logical_entities.csv") || [], records.get("business_attributes.csv") || []);
+      if (!tree.length) throw new Error("逻辑实体产物中没有可展示的数据");
+      setPreview({ path: "本体可视化", ontologyTree: tree });
+    } catch (drawError) {
+      if (selectedRunIdRef.current === runId) setError(`本体可视化失败：${drawError.message}`);
+    } finally {
+      if (selectedRunIdRef.current === runId) setStandaloneOntologyDrawing(false);
+    }
+  };
   const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "default", BLOCKED: "default", CANCELLED: "warning" }[run?.status] || "default";
   return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
     {contextHolder}
@@ -827,11 +864,11 @@ function StandaloneApp() {
         <main className="standalone-main">
           {!run && <div className="standalone-title"><div><h1>独立智能建模</h1><p>上传输入资料或连接已有数据库，完成建模并查看可追溯产物。</p></div></div>}
           {error && <Alert type="error" showIcon closable onClose={() => setError("")} message={error} />}
-          {!run ? <StandaloneInputCard sourceMode={sourceMode} setSourceMode={setSourceMode} title={standaloneTitle} setTitle={setStandaloneTitle} prompt={prompt} setPrompt={setPrompt} inputFiles={inputFiles} setInputFiles={setInputFiles} databaseSourceId={databaseSourceId} setDatabaseSourceId={setDatabaseSourceId} databaseSources={databaseSources} databaseSchemas={databaseSchemas} selectedSchemas={selectedSchemas} setSelectedSchemas={setSelectedSchemas} databaseSchema={databaseSchema} tablesLoading={tablesLoading} databaseTables={databaseTables} selectedTables={selectedTables} setSelectedTables={setSelectedTables} selectedArtifacts={selectedArtifacts} setSelectedArtifacts={setSelectedArtifacts} busy={busy} startModeling={startModeling} /> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} filesLoading={runFilesLoading} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}
+          {!run ? <StandaloneInputCard sourceMode={sourceMode} setSourceMode={setSourceMode} title={standaloneTitle} setTitle={setStandaloneTitle} prompt={prompt} setPrompt={setPrompt} inputFiles={inputFiles} setInputFiles={setInputFiles} databaseSourceId={databaseSourceId} setDatabaseSourceId={setDatabaseSourceId} databaseSources={databaseSources} databaseSchemas={databaseSchemas} selectedSchemas={selectedSchemas} setSelectedSchemas={setSelectedSchemas} databaseSchema={databaseSchema} tablesLoading={tablesLoading} databaseTables={databaseTables} selectedTables={selectedTables} setSelectedTables={setSelectedTables} selectedArtifacts={selectedArtifacts} setSelectedArtifacts={setSelectedArtifacts} busy={busy} startModeling={startModeling} /> : <StandaloneAgentWorkspace run={run} busy={busy || ["QUEUED", "ANALYZING", "VALIDATING"].includes(run.status)} filesOpen={runFilesOpen} filesLoading={runFilesLoading} selectedFiles={selectedRunFiles} onToggleFiles={() => setRunFilesOpen((value) => !value)} onSelectFile={(path) => setSelectedRunFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedRunFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((item) => !paths.includes(item)) : [...new Set([...current, ...paths])])} onOpenFile={openFile} onDownload={downloadRunFiles} onDrawOntology={drawStandaloneOntology} drawingOntology={standaloneOntologyDrawing} ontologyAvailable={Boolean(standaloneOntologyFiles)} onRefresh={() => void loadRun(run.runId)} onContinue={continueRun} composerValue={standaloneComposerText} onComposerChange={setStandaloneComposerText} onComposerSend={sendStandaloneMessage} onComposerAttach={onStandaloneAttach} pendingComposerFiles={standalonePendingFiles} model={standaloneModel || "默认模型"} models={standaloneModels} onModel={setStandaloneModel} onOpenSettings={() => {}} />}
         </main>
       </div>
       <input ref={standaloneFileInputRef} type="file" multiple hidden onChange={onStandaloneFilesSelected} />
-      {preview && <Modal open title={preview.path} footer={null} width="82vw" onCancel={() => setPreview(null)}>{preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+      {preview && <Modal open centered className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "82vw"} onCancel={() => { setPreview(null); setPreviewFullscreen(false); }}>{preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
     </div>
   </ConfigProvider>;
 }
@@ -891,7 +928,7 @@ function blockedAdviceText(run) {
   ].join("\n");
 }
 
-function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
+function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selectedFiles, onToggleFiles, onSelectFile, onSelectGroup, onOpenFile, onDownload, onDrawOntology, drawingOntology, ontologyAvailable, onRefresh, onContinue, composerValue, onComposerChange, onComposerSend, onComposerAttach, pendingComposerFiles, model, models, onModel, onOpenSettings }) {
   const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "default", BLOCKED: "default", CANCELLED: "warning" }[run?.status] || "default";
   const files = run?.files || [];
   // The standalone API persists every streamed thinking token. Reuse the
@@ -926,7 +963,7 @@ function StandaloneAgentWorkspace({ run, busy, filesOpen, filesLoading, selected
   }, [run.events, run.prompt, run.status, run.runId]);
   return <section className="task-view standalone-agent-task-view">
     <header className="task-header"><span className={busy ? "status-dot working" : "status-dot"} /><strong title="Agent 建模执行">Agent 建模执行</strong><Tag>{run.runId}</Tag><span className="header-spacer" /><Tag color={statusColor}>{statusLabel(run.status)}</Tag>{["FAILED", "BLOCKED", "CANCELLED"].includes(run.status) && <Button type="primary" loading={busy} onClick={() => onContinue()}>继续运行</Button>}<Button onClick={onRefresh}>刷新</Button><Button icon={<TaskFilesIcon />} onClick={onToggleFiles}>文件</Button></header>
-    <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} scope={`run:${run.runId}`} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
+    <div className="standalone-agent-task-body"><div className="standalone-agent-conversation"><div className="feed standalone-agent-feed"><EventFeed events={events} onApprove={() => {}} files={files} onFile={onOpenFile} busy={busy} scope={`run:${run.runId}`} /></div><div className="task-composer standalone-agent-task-composer"><Composer value={composerValue} onChange={onComposerChange} onSend={onComposerSend} onAttach={onComposerAttach} pendingFiles={pendingComposerFiles} mission={null} busy={busy} hasConversation={true} model={model} models={models} onModel={onModel} onOpenSettings={onOpenSettings} placeholder="继续对这个任务下指令…" projects={[]} project="" onProject={() => {}} /></div></div><FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} onSelect={onSelectFile} onSelectGroup={onSelectGroup} onOpen={onOpenFile} onDownload={onDownload} onUploadToMinio={() => {}} uploadingToMinio={false} uploadBlocked={busy} onDrawOntology={onDrawOntology} drawingOntology={drawingOntology} ontologyAvailable={ontologyAvailable} onClose={onToggleFiles} onRefresh={onRefresh} mission={false} workspaceFolders resetKey={run.runId} /></div>
   </section>;
 }
 
@@ -1399,17 +1436,28 @@ function csvRecords(text) {
   return rows.slice(1).filter((row) => row.some((value) => String(value || "").trim())).map((row) => Object.fromEntries(headers.map((header, index) => [String(header || "").trim(), String(row[index] || "").trim()])));
 }
 
+function ontologyNodeStyle(name, color) {
+  const length = Array.from(String(name || "")).length;
+  return {
+    symbol: "circle",
+    symbolSize: [Math.max(92, Math.min(220, length * 14 + 32)), 38],
+    itemStyle: { color, borderColor: "#fff", borderWidth: 1.5 },
+  };
+}
+
 function buildOntologyTree(businessObjects, logicalEntities, businessAttributes) {
   const attributesByEntity = new Map();
   businessAttributes.forEach((attribute) => {
     const entityCode = attribute["逻辑实体编码"];
     if (!entityCode) return;
     if (!attributesByEntity.has(entityCode)) attributesByEntity.set(entityCode, []);
+    const name = attribute["业务属性名称"] || attribute["业务属性编码"];
     attributesByEntity.get(entityCode).push({
       id: `attribute:${entityCode}:${attribute["业务属性编码"]}`,
       code: attribute["业务属性编码"],
-      name: attribute["业务属性名称"] || attribute["业务属性编码"],
+      name,
       nodeType: "attribute",
+      ...ontologyNodeStyle(name, "#64748b"),
     });
   });
 
@@ -1417,13 +1465,15 @@ function buildOntologyTree(businessObjects, logicalEntities, businessAttributes)
   const entityNodes = logicalEntities.filter((entity) => entity["逻辑实体编码"]).map((entity) => {
     const objectCode = entity["业务对象编码"];
     const entityCode = entity["逻辑实体编码"];
+    const name = entity["逻辑实体名称"] || entityCode;
     const node = {
       id: `entity:${entityCode}`,
       code: entityCode,
-      name: entity["逻辑实体名称"] || entityCode,
+      name,
       nodeType: "entity",
       isPrimary: entity["是否主逻辑实体"] === "Y",
       children: attributesByEntity.get(entityCode) || [],
+      ...ontologyNodeStyle(name, "#0f766e"),
     };
     if (objectCode) {
       if (!entitiesByObject.has(objectCode)) entitiesByObject.set(objectCode, []);
@@ -1434,13 +1484,17 @@ function buildOntologyTree(businessObjects, logicalEntities, businessAttributes)
 
   if (!businessObjects.length) return entityNodes.map(({ node }) => node);
   const objectCodes = new Set(businessObjects.map((object) => object["业务对象编码"]).filter(Boolean));
-  const objectNodes = businessObjects.filter((object) => object["业务对象编码"]).map((object) => ({
-    id: `business-object:${object["业务对象编码"]}`,
-    code: object["业务对象编码"],
-    name: object["业务对象名称"] || object["业务对象编码"],
-    nodeType: "businessObject",
-    children: entitiesByObject.get(object["业务对象编码"]) || [],
-  }));
+  const objectNodes = businessObjects.filter((object) => object["业务对象编码"]).map((object) => {
+    const name = object["业务对象名称"] || object["业务对象编码"];
+    return {
+      id: `business-object:${object["业务对象编码"]}`,
+      code: object["业务对象编码"],
+      name,
+      nodeType: "businessObject",
+      children: entitiesByObject.get(object["业务对象编码"]) || [],
+      ...ontologyNodeStyle(name, "#2563eb"),
+    };
+  });
   return [...objectNodes, ...entityNodes.filter(({ objectCode }) => !objectCodes.has(objectCode)).map(({ node }) => node)];
 }
 
@@ -1471,13 +1525,11 @@ function OntologyTreePreview({ data }) {
           bottom: 28,
           right: 180,
           orient: "LR",
-          symbol: "circle",
-          symbolSize: 9,
           initialTreeDepth: hasBusinessObjects ? 2 : 1,
           expandAndCollapse: true,
           roam: true,
-          label: { position: "left", verticalAlign: "middle", align: "right", fontSize: 13, formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
-          leaves: { label: { position: "right", verticalAlign: "middle", align: "left" } },
+          label: { position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: 13, overflow: "truncate", formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
+          leaves: { label: { position: "inside", verticalAlign: "middle", align: "center" } },
           emphasis: { focus: "descendant" },
           animationDuration: 300,
           animationDurationUpdate: 500,
@@ -1493,6 +1545,10 @@ function OntologyTreePreview({ data }) {
     };
   }, [data, hasBusinessObjects]);
   return <div className="ontology-tree-preview" ref={containerRef} />;
+}
+
+function PreviewModalTitle({ title, fullscreen, onToggle }) {
+  return <div className="preview-modal-title"><span title={title}>{title}</span><button type="button" onClick={onToggle} aria-label={fullscreen ? "退出全屏" : "全屏"} title={fullscreen ? "退出全屏" : "全屏"}>{fullscreen ? <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 1v4.5H2M9.5 1v4.5H14M6.5 15v-4.5H2M9.5 15v-4.5H14" /></svg> : <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4" /></svg>}</button></div>;
 }
 
 function CsvPreview({ text }) {
@@ -1607,7 +1663,7 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
   );
 }
 
-function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onUploadToMinio, uploadingToMinio, uploadBlocked = false, onDrawOntology, drawingOntology = false, ontologyReady = false, ontologyAvailable = false, onClose, onRefresh, mission, workspaceFolders = false, focusPath, platformStatus, resetKey }) {
+function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onUploadToMinio, uploadingToMinio, uploadBlocked = false, onDrawOntology, drawingOntology = false, ontologyAvailable = false, onClose, onRefresh, mission, workspaceFolders = false, focusPath, platformStatus, resetKey }) {
   const defaultCollapsedDirs = () => new Set(["root", "input"]);
   const [collapsedDirs, setCollapsedDirs] = useState(defaultCollapsedDirs);
   const displayPath = (file) => String(file?.displayPath || file?.path || "").replaceAll("\\", "/");
@@ -1658,7 +1714,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" aria-label="刷新文件" title="刷新文件" onClick={onRefresh}><RefreshFilePanelIcon /></Button><Button size="small" aria-label="折叠文件面板" title="折叠文件面板" onClick={onClose}><CollapseFilePanelIcon /></Button></div>
-    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={() => onDownload(selected)}>下载所选</Button>{mission && <Tooltip title={uploadBlocked ? "任务执行或状态变更期间不能上传" : platformStatus === "COMPLETED" ? "上传新结果将恢复任务为执行中" : "上传选中的任务结果"}><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || uploadBlocked} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{mission && <Tooltip title={ontologyAvailable ? (ontologyReady ? "展示已生成的本体树图" : "根据已有产物画图") : "缺少逻辑实体 CSV，不能画图"}><Button size="small" loading={drawingOntology} disabled={!ontologyAvailable || drawingOntology} onClick={onDrawOntology}>{ontologyReady ? "展示" : "画图"}</Button></Tooltip>}{mission && <span className="panel-note">{platformStatus === "COMPLETED" ? "上传新结果将恢复执行" : "当前任务范围"}</span>}</div>
+    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={() => onDownload(selected)}>下载所选</Button>{mission && <Tooltip title={uploadBlocked ? "任务执行或状态变更期间不能上传" : platformStatus === "COMPLETED" ? "上传新结果将恢复任务为执行中" : "上传选中的任务结果"}><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || uploadBlocked} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{(mission || workspaceFolders) && <Tooltip title={ontologyAvailable ? "根据当前任务已有产物生成本体树图" : "缺少逻辑实体 CSV，不能进行本体可视化"}><Button size="small" loading={drawingOntology} disabled={!ontologyAvailable || drawingOntology} onClick={onDrawOntology}>本体可视化</Button></Tooltip>}{mission && <span className="panel-note">{platformStatus === "COMPLETED" ? "上传新结果将恢复执行" : "当前任务范围"}</span>}</div>
     {loading ? <Spin /> : !files.length && !mission && !workspaceFolders ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, subgroups]) => {
       const collapsed = collapsedDirs.has(dir);
       const items = [...subgroups.values()].flat();
@@ -1692,10 +1748,10 @@ function App() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [focusFile, setFocusFile] = useState("");
   const [preview, setPreview] = useState(null);
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [minioUploading, setMinioUploading] = useState(false);
   const [ontologyDrawing, setOntologyDrawing] = useState(false);
-  const [ontologyTree, setOntologyTree] = useState(null);
   const [platformActionLoading, setPlatformActionLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1730,8 +1786,8 @@ function App() {
   const params = meta.params || { temperature: null, max_tokens: null, thinking: false, thinking_budget: 8000 };
   const provider = meta.provider || "";
   useEffect(() => {
-    setOntologyTree(null);
     setOntologyDrawing(false);
+    setPreviewFullscreen(false);
   }, [active?.id]);
   const currentMission = missionIdentity(active);
   const isMissionTask = Boolean(currentMission);
@@ -1923,7 +1979,6 @@ function App() {
     activeTaskIdRef.current = current.id;
     setFiles([]);
     setFilesTaskId("");
-    setOntologyTree(null);
     setActive(current);
     setEvents(mergeEvents([], recentEvents, `task:${current.id}`));
     setView("task"); setText("");
@@ -2233,12 +2288,8 @@ function App() {
   const drawOntology = async () => {
     const task = active;
     const taskId = task?.id || "";
-    if (ontologyTree?.taskId === taskId) {
-      showPreview({ path: "本体树图", ontologyTree: ontologyTree.data });
-      return;
-    }
     if (!ontologyFiles) {
-      messageApi.warning("缺少逻辑实体 CSV，不能画图");
+      messageApi.warning("缺少逻辑实体 CSV，不能进行本体可视化");
       return;
     }
     setOntologyDrawing(true);
@@ -2252,10 +2303,9 @@ function App() {
       const tree = buildOntologyTree(records.get("business_objects.csv") || [], records.get("logical_entities.csv") || [], records.get("business_attributes.csv") || []);
       if (!tree.length) throw new Error("逻辑实体产物中没有可展示的数据");
       if (activeTaskIdRef.current !== taskId) return;
-      setOntologyTree({ taskId, data: tree });
-      showPreview({ path: "本体树图", ontologyTree: tree });
+      showPreview({ path: "本体可视化", ontologyTree: tree });
     } catch (error) {
-      messageApi.error(`画图失败：${error.message}`);
+      messageApi.error(`本体可视化失败：${error.message}`);
     } finally {
       setOntologyDrawing(false);
     }
@@ -2344,9 +2394,9 @@ function App() {
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} autoApprove={autoApprove} onToggleAutoApprove={toggleAutoApprove} showAutoApprove={isMissionTask} /></div>
         </section>}
       </main>
-      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || active?.status === "queued" || platformActionLoading} onDrawOntology={drawOntology} drawingOntology={ontologyDrawing} ontologyReady={ontologyTree?.taskId === active?.id} ontologyAvailable={Boolean(ontologyFiles)} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
+      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || active?.status === "queued" || platformActionLoading} onDrawOntology={drawOntology} drawingOntology={ontologyDrawing} ontologyAvailable={Boolean(ontologyFiles)} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
-      {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={closePreview}>{preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} /> : preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+      {preview && <Modal open centered className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "88vw"} onCancel={() => { closePreview(); setPreviewFullscreen(false); }}>{preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} /> : preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
       {MISSION && <MissionInfo open={missionInfoOpen} context={missionContext} loading={missionLoading} onClose={() => setMissionInfoOpen(false)} />}
     </div>
