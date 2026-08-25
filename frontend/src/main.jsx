@@ -1514,7 +1514,7 @@ function OntologyTreePreview({ data }) {
     const entities = root.nodeType === "entity" ? [root] : (root.children || []);
     return entities.some((entity) => entity.nodeType === "entity" && entity.children?.length);
   });
-  const [showAttributes, setShowAttributes] = useState(true);
+  const [showAttributes, setShowAttributes] = useState(false);
   useEffect(() => {
     let disposed = false;
     let chart = null;

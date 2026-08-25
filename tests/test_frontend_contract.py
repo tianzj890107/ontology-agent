@@ -408,6 +408,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('emphasis: { focus: "none", scale: 1.12 }', source)
         self.assertIn('selectedMode: false', source)
         self.assertIn('showAttributes ? "隐藏业务属性" : "展开业务属性"', source)
+        self.assertIn('const [showAttributes, setShowAttributes] = useState(false);', source)
         self.assertNotIn('chart.on("click", ({ data: clicked }) =>', source)
         self.assertIn('const [filesTaskId, setFilesTaskId] = useState("");', source)
         self.assertIn('if (activeTaskIdRef.current !== taskId || filesRequestRef.current !== requestId) return [];', source)
