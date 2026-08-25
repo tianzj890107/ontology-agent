@@ -133,6 +133,12 @@ POST /api/modeling-runs/{runId}/validate
 
 47314 使用有界 worker pool 和公平调度：在线用户默认 `100`，全局 active run 默认 `10`，单用户 active run 默认 `3`，单用户 queued run 默认 `3`，全局 queued run 默认 `50`。超过 active 上限的第 11 个任务进入 `QUEUED`，不会直接失败；超过在线用户、用户队列或全局队列上限分别返回 `ONLINE_USER_LIMIT_REACHED`、`USER_QUEUE_LIMIT_REACHED` / `GLOBAL_QUEUE_FULL`（HTTP 429）。通过 `MODELING_SERVER_MAX_ONLINE_USERS`、`MODELING_SERVER_MAX_ACTIVE_RUNS`、`MODELING_SERVER_MAX_ACTIVE_PER_USER`、`MODELING_SERVER_MAX_QUEUED_PER_USER`、`MODELING_SERVER_MAX_QUEUED` 可配置。
 
+排队、配额、provider/database semaphore、租约与 fencing 由 47313/47314 共享的 `ExecutionCoordinator` 负责，两个服务使用同一套公平调度与游标/事件窗口语义（`open_claude/execution_coordinator.py`、`open_claude/execution_lease.py`、`open_claude/event_window.py`）。47314 协调后端默认 `file`（同主机多进程安全，`multiHostSafe=false`），可用 `MODELING_SERVER_COORDINATOR_BACKEND=redis` + `MODELING_REDIS_URL`（或 `REDIS_URL`）启用跨实例模式；租约目录可用 `MODELING_SERVER_LEASE_DIR` 配置，租约/心跳间隔为 `MODELING_SERVER_LEASE_SECONDS` / `MODELING_SERVER_HEARTBEAT_SECONDS`。47313 使用同一套 coordinator：`TASKS_COORDINATOR_BACKEND=file|redis|none`（默认 `file`），Redis 时读取 `TASKS_REDIS_URL`（回退 `REDIS_URL`）与 `TASKS_REDIS_PREFIX`（默认 `ontology:47313:`），并安装 `open-claude[redis]` 可选依赖。Redis 后端启用时全局 active/queued、单用户配额、队列顺序、owner、lease 与 fence 均保存在 Redis，多实例不会叠加计数；Redis 不可用时启动失败，不静默退化。
+
+协调后端能力边界：file 后端同一任务 lease 为同主机多进程安全，但 active/queued 配额与公平队列仅限单进程（`quotaScope=process`、`queueScope=process`、`multiHostSafe=false`）；redis 后端任务 lease、active/queued 与单用户配额、公平队列均为集群共享（`quotaScope=cluster`、`queueScope=cluster`、`multiHostSafe=true`）。
+
+`/health` 的 `concurrency` 与 `coordination` 字段为 47313/47314 统一结构：`concurrency` 含 `activeRuns/queuedRuns/maxActiveRuns/maxActivePerUser/maxQueuedPerUser/maxQueuedRuns/oldestQueuedSeconds/providerConcurrency/providerInUse/databaseConcurrency/databaseInUse`；`coordination` 含 `backend/instanceId/multiProcessSafe/multiHostSafe/leaseSeconds/heartbeatSeconds/activeLeases/expiredLeasesRecovered`，不暴露 userId、Redis URL、密码或租约 token。
+
 每个被 claim 的 attempt 记录 `attemptId`、`attemptNumber`、`workerId`、lease 和 heartbeat；worker 丢失后由 lease recovery 标记为 `FAILED` 并记录 `worker_lost`。Run 元数据通过共享 SQLite Repository 持久化（`.runs.sqlite3`），`.runs.json` 仅作为兼容快照；后续可无业务层改动切换 PostgreSQL Repository。事件带有 `userId`、`runId` 和 `attemptId`，API 列表、详情和事件按用户隔离。
 
 事件接口支持增量读取：客户端保存已消费的事件数量后，将其作为 `since` 参数传入，避免重复下载完整思考历史。`GET /api/modeling-runs/{runId}?includeEvents=false` 只返回运行摘要和文件列表，适合轮询状态；不传该参数时保留完整事件响应以兼容旧客户端。

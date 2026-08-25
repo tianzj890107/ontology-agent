@@ -31,7 +31,6 @@ import threading
 import time
 import uuid
 import weakref
-from concurrent.futures import Future, ThreadPoolExecutor
 from collections import Counter
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,6 +38,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from open_claude.event_journal import append_line as _journal_append_line
+from open_claude.event_journal import read_all_valid as _journal_read_all_valid
+from open_claude.event_window import parse_window as _parse_event_window
+from open_claude.event_window import window_response as _event_window_response
+from open_claude.execution_coordinator import (
+    CoordinatorConfig as _CoordinatorConfig,
+    ExecutionCoordinator as _ExecutionCoordinator,
+)
+from open_claude.execution_lease import (
+    FileExecutionLeaseStore as _FileExecutionLeaseStore,
+    RedisExecutionLeaseStore as _RedisExecutionLeaseStore,
+)
 from open_claude.lifecycle import LazyService, LifecycleTracker
 from open_claude.run_repository import SQLiteRunRepository
 
@@ -389,33 +400,139 @@ class QueueLimitError(RuntimeError):
 class _RunHandle:
     """Small compatibility handle with a Thread-like join API.
 
-    The actual work is owned by the bounded executor; this object only lets
-    existing callers wait for a run without reintroducing one thread per
-    queued run.
+    The actual work is owned by the shared ExecutionCoordinator worker pool;
+    the adapter marks the handle finished when the worker exits so existing
+    callers can keep using a Thread-like join without owning the future.
     """
     def __init__(self):
-        self._ready = threading.Event()
-        self._future: Future[Any] | None = None
+        self._done = threading.Event()
 
-    def attach(self, future: Future[Any]) -> None:
-        self._future = future
-        self._ready.set()
+    def finish(self) -> None:
+        self._done.set()
 
     def join(self, timeout: float | None = None) -> None:
-        if not self._ready.wait(timeout):
-            return
-        future = self._future
-        if future is not None:
-            try:
-                future.result(timeout=timeout)
-            except Exception:
-                # The worker persists its failure on the run.  join mirrors
-                # Thread.join and does not rethrow worker exceptions.
-                return
+        self._done.wait(timeout)
 
     def is_alive(self) -> bool:
-        future = self._future
-        return bool(future is None or not future.done())
+        return not self._done.is_set()
+
+
+def _build_standalone_lease_store(lease_dir: str,
+                                  lease_seconds: float) -> Any:
+    """Build the 47314 durable lease store from ``MODELING_SERVER_*`` env."""
+    kind = str(os.environ.get("MODELING_SERVER_LEASE_STORE", "file")).strip().lower()
+    if kind in {"", "none", "off", "disabled"}:
+        return None
+    if kind == "redis":
+        url = (str(os.environ.get("MODELING_REDIS_URL", "") or "").strip()
+               or str(os.environ.get("REDIS_URL", "") or "").strip())
+        if not url:
+            raise ValueError("MODELING_SERVER_LEASE_STORE=redis 需要 "
+                             "MODELING_REDIS_URL 或 REDIS_URL")
+        try:
+            import redis  # noqa: PLC0415 - lazy optional dependency
+        except ImportError as exc:
+            raise RuntimeError("MODELING_SERVER_LEASE_STORE=redis 需要安装 "
+                               "redis 包") from exc
+        return _RedisExecutionLeaseStore(
+            redis.Redis.from_url(url, decode_responses=True),
+            prefix="ontology:47314:", lease_seconds=lease_seconds)
+    if kind != "file":
+        raise ValueError(f"未知的 MODELING_SERVER_LEASE_STORE: {kind}")
+    directory = str(os.environ.get("MODELING_SERVER_LEASE_DIR", "") or "").strip()
+    if not directory:
+        directory = lease_dir
+    if not directory:
+        raise ValueError("file lease store 需要 MODELING_SERVER_LEASE_DIR")
+    return _FileExecutionLeaseStore(directory, lease_seconds=lease_seconds)
+
+
+class _StandaloneExecutionAdapter:
+    """Bridge 47314 runs into the shared ExecutionCoordinator.
+
+    Run state stays in RunStore; this adapter only connects coordinator
+    callbacks (queue admission, worker start, heartbeat-loss events, worker
+    completion) back to the manager's store transitions and worker body.
+    """
+
+    scope = "ontology:47314"
+
+    def __init__(self, manager: "ModelingRunManager"):
+        self.manager = manager
+        self.instance_id = manager.worker_id
+
+    def _run(self, execution_id: str) -> Any:
+        store = self.manager.store
+        with store.lock:
+            run = store.runs.get(execution_id)
+        return run
+
+    def record_event(self, execution_id: str, event: dict[str, Any]) -> None:
+        run = self._run(execution_id)
+        if run is None:
+            return
+        try:
+            self.manager.store.append_event(
+                run, event.get("type", "agent_event"), **event)
+        except Exception:
+            pass
+        if event.get("code") == "LEASE_LOST":
+            # A lost lease must stop the run and never leave a permanent
+            # working state.  The store transition CAS prevents a stale
+            # worker from overwriting this terminal state afterwards.
+            try:
+                self.manager.store.transition(
+                    run, "FAILED", error="WORKER_LEASE_EXPIRED",
+                    allowed_from={"CLAIMED", "ANALYZING", "VALIDATING"})
+            except StateTransitionError:
+                pass
+
+    def on_queued(self, execution_id: str, position: int,
+                  queue_length: int) -> None:
+        # execute() records run_queued with the exact claim position; the
+        # coordinator callback is only used for bookkeeping parity.
+        return None
+
+    def on_started(self, execution_id: str) -> None:
+        run = self._run(execution_id)
+        if run is None or run.status != "QUEUED":
+            return
+        now = time.time()
+        attempt = int(getattr(run, "attempt_number", 0) or 0) + 1
+        try:
+            self.manager.store.transition_and_update(
+                run, "CLAIMED", allowed_from={"QUEUED"},
+                changes={
+                    "attempt_number": attempt,
+                    "attempt_id": f"{run.run_id}-attempt-{attempt}-"
+                                  f"{uuid.uuid4().hex[:8]}",
+                    "worker_id": self.manager.worker_id,
+                    "claimed_at": now,
+                    "heartbeat_at": now,
+                    "lease_expires_at": now + self.manager.lease_seconds,
+                    "cancel_requested": False,
+                })
+        except StateTransitionError:
+            return
+
+    def run_worker(self, execution_id: str, token: Any) -> None:
+        run = self._run(execution_id)
+        if run is None or token.cancelled:
+            return
+        execution_guard = None
+        coordinator = getattr(self.manager, "coordinator", None)
+        if coordinator is not None:
+            execution_guard = coordinator.execution_context(execution_id)
+        self.manager._run_worker(run, token=token,
+                                 execution_guard=execution_guard)
+
+    def on_finished(self, execution_id: str, ok: bool, token: Any) -> None:
+        del ok, token
+        handle = self.manager.threads.get(execution_id)
+        if handle is not None:
+            handle.finish()
+        self.manager.execution_modes.pop(execution_id, None)
+        self.manager.execution_prompts.pop(execution_id, None)
 
 
 def _normalize_requested_artifacts(value: Any) -> list[str]:
@@ -625,14 +742,7 @@ class RunStore:
             return legacy_events
         journal: list[dict[str, Any]] = []
         try:
-            with path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    try:
-                        event = json.loads(line)
-                    except (ValueError, TypeError):
-                        continue
-                    if isinstance(event, dict):
-                        journal.append(event)
+            journal = _journal_read_all_valid(str(path))
         except OSError:
             return legacy_events
         if not legacy_events:
@@ -722,11 +832,7 @@ class RunStore:
                     handle.write(json.dumps(previous, ensure_ascii=False,
                                              separators=(",", ":")))
                     handle.write("\n")
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False,
-                                    separators=(",", ":")))
-            handle.write("\n")
-            handle.flush()
+        _journal_append_line(str(path), event)
 
     def _load(self) -> None:
         repository_items = self.repository.load_all()
@@ -1264,7 +1370,6 @@ class ModelingRunManager:
         self.tasks: dict[str, Any] = {}
         self.scheduler_lock = threading.RLock()
         self.scheduler_wakeup = threading.Condition(self.scheduler_lock)
-        self.worker_futures: dict[str, Future[Any]] = {}
         self.stop_event = threading.Event()
         self.worker_id = f"standalone-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self.max_online_users = int(os.environ.get("MODELING_SERVER_MAX_ONLINE_USERS",
@@ -1307,18 +1412,66 @@ class ModelingRunManager:
             raise ValueError("provider/database concurrency must be positive")
         self.provider_concurrency = provider_limit
         self.database_concurrency = database_limit
-        self.provider_slots = threading.BoundedSemaphore(provider_limit)
-        self.database_slots = threading.BoundedSemaphore(database_limit)
-        self.executor = ThreadPoolExecutor(max_workers=self.max_active_runs,
-                                           thread_name_prefix="modeling-worker")
-        self.scheduler_thread = threading.Thread(target=self._scheduler_loop,
+        # P1/P2: the shared ExecutionCoordinator owns the fair queue, global
+        # and per-user quotas, provider/database semaphores, durable leases,
+        # fencing and heartbeat.  Env parsing stays in the service entry
+        # point; the coordinator only receives a config object.  The old
+        # per-service scheduler loop is replaced by the coordinator dispatcher.
+        backend = str(os.environ.get("MODELING_SERVER_COORDINATOR_BACKEND",
+                                     "file")).strip().lower()
+        lease_dir = str(os.environ.get(
+            "MODELING_SERVER_LEASE_DIR",
+            str(Path(store.root) / ".modeling_leases"))).strip()
+        if backend in {"", "none", "off", "disabled"}:
+            self.coordinator: _ExecutionCoordinator | None = None
+            self.provider_slots: Any = threading.BoundedSemaphore(provider_limit)
+            self.database_slots: Any = threading.BoundedSemaphore(database_limit)
+        else:
+            lease_store = None
+            redis_url = ""
+            if backend == "redis":
+                redis_url = (str(os.environ.get("MODELING_REDIS_URL", "") or "").strip()
+                             or str(os.environ.get("REDIS_URL", "") or "").strip())
+                if not redis_url:
+                    raise ValueError("MODELING_SERVER_COORDINATOR_BACKEND=redis "
+                                     "需要 MODELING_REDIS_URL 或 REDIS_URL")
+            elif backend != "file":
+                raise ValueError(f"未知的 MODELING_SERVER_COORDINATOR_BACKEND: {backend}")
+            else:
+                lease_store = _build_standalone_lease_store(
+                    lease_dir, self.lease_seconds)
+            config = _CoordinatorConfig(
+                service_namespace="ontology:47314",
+                max_active=self.max_active_runs,
+                max_active_per_user=self.max_active_per_user,
+                max_queued_per_user=self.max_queued_per_user,
+                max_queued=self.max_queued_runs,
+                provider_concurrency=provider_limit,
+                database_concurrency=database_limit,
+                lease_seconds=self.lease_seconds,
+                heartbeat_seconds=self.heartbeat_seconds,
+                backend=backend,
+                lease_dir=lease_dir,
+                redis_url=redis_url or None,
+                redis_prefix="ontology:47314:",
+            )
+            self.coordinator = _ExecutionCoordinator(
+                config, _StandaloneExecutionAdapter(self),
+                lease_store=lease_store)
+            self.provider_slots = self.coordinator.provider_slots
+            self.database_slots = self.coordinator.database_slots
+        # Compatibility scheduler thread: admission, heartbeat and expiry
+        # recovery are owned by the coordinator dispatcher.  This thread only
+        # watches shutdown/workspace removal so legacy ``stop_event`` /
+        # ``scheduler_thread`` callers keep working.
+        self.scheduler_thread = threading.Thread(target=self._scheduler_compat_loop,
                                                  name="modeling-scheduler", daemon=True)
         self.scheduler_thread.start()
         # Disable legacy web-task persistence at the adapter boundary.  The
         # standalone manager has no authority to write 47313's task index.
         try:
-            from oc_codex_server import configure_task_persistence
-            configure_task_persistence(False)
+            import oc_codex_server as web
+            web.configure_task_persistence(False)
         except ImportError:
             pass
 
@@ -1326,7 +1479,8 @@ class ModelingRunManager:
         self.stop_event.set()
         with self.scheduler_wakeup:
             self.scheduler_wakeup.notify_all()
-        self.executor.shutdown(wait=True, cancel_futures=False)
+        if self.coordinator is not None:
+            self.coordinator.shutdown(timeout=2.0)
         if self.scheduler_thread is not threading.current_thread():
             self.scheduler_thread.join(timeout=2)
 
@@ -1342,18 +1496,30 @@ class ModelingRunManager:
                     user_counts[run.user_id]["queued"] += 1
             queued = [run.created_at for run in self.store.runs.values()
                       if run.status == "QUEUED"]
+        coordinator_metrics = {}
+        if self.coordinator is not None:
+            coordinator_metrics = self.coordinator.metrics()
         return {
             "onlineUsers": len(self.online_users),
             "maxOnlineUsers": self.max_online_users,
-            "activeRuns": counts["active"], "queuedRuns": counts["queued"],
-            "maxActiveRuns": self.max_active_runs,
-            "maxActivePerUser": self.max_active_per_user,
-            "maxQueuedPerUser": self.max_queued_per_user,
-            "maxQueuedRuns": self.max_queued_runs,
-            "oldestQueuedSeconds": max(0.0, time.time() - min(queued)) if queued else 0.0,
-            "providerConcurrency": self.provider_concurrency,
-            "databaseConcurrency": self.database_concurrency,
             "users": user_counts,
+            "concurrency": {
+                "activeRuns": counts["active"],
+                "queuedRuns": counts["queued"],
+                "maxActiveRuns": self.max_active_runs,
+                "maxActivePerUser": self.max_active_per_user,
+                "maxQueuedPerUser": self.max_queued_per_user,
+                "maxQueuedRuns": self.max_queued_runs,
+                "oldestQueuedSeconds": (
+                    max(0.0, time.time() - min(queued)) if queued else 0.0),
+                "providerConcurrency": self.provider_concurrency,
+                "providerInUse": coordinator_metrics.get("concurrency", {})
+                                  .get("providerInUse", 0),
+                "databaseConcurrency": self.database_concurrency,
+                "databaseInUse": coordinator_metrics.get("concurrency", {})
+                                 .get("databaseInUse", 0),
+            },
+            "coordination": coordinator_metrics.get("coordination", {}),
         }
 
     def touch_user(self, user_id: str) -> None:
@@ -1428,17 +1594,6 @@ class ModelingRunManager:
             self.store.refresh_from_repository()
             if run.status in {"QUEUED", "CLAIMED", "ANALYZING", "VALIDATING", "CANCELLING"}:
                 raise StateTransitionError(run.run_id, run.status, "QUEUED")
-            queued_global = self.store.counts()["queued"]
-            queued_user = self.store.counts(user_id=run.user_id)["queued"]
-            if queued_user >= self.max_queued_per_user:
-                raise QueueLimitError(
-                    "USER_QUEUE_LIMIT_REACHED",
-                    "该用户排队任务已达到上限",
-                    details={"maxQueuedPerUser": self.max_queued_per_user})
-            if queued_global >= self.max_queued_runs:
-                raise QueueLimitError(
-                    "GLOBAL_QUEUE_FULL", "全局排队任务已达到上限",
-                    details={"maxQueuedRuns": self.max_queued_runs})
             return_status = run.status if run.status in {"FAILED", "BLOCKED"} else "INPUT_READY"
             # A conversational question on a FAILED/BLOCKED run keeps its
             # failure/block reason so the restored state still explains why
@@ -1449,6 +1604,46 @@ class ModelingRunManager:
                        else {"error": ""})
             if model is not None:
                 changes["model"] = requested_model
+            # P1/P2: the shared coordinator owns queue limits and admission.
+            # ``claim`` never blocks the HTTP thread: it either admits
+            # immediately, enqueues, or returns an explicit limit error.
+            claim = None
+            run_queued = False
+            queue_position = 0
+            queue_length = 0
+            if self.coordinator is not None and not self.stop_event.is_set():
+                attempt = int(getattr(run, "attempt_number", 0) or 0) + 1
+                claim = self.coordinator.claim(
+                    run.run_id, uuid.uuid4().hex, run.user_id, attempt=attempt)
+                if claim.decision == "active_exists":
+                    raise StateTransitionError(run.run_id, run.status, "QUEUED")
+                if claim.decision == "user_queue_limit":
+                    raise QueueLimitError(
+                        "USER_QUEUE_LIMIT_REACHED", "该用户排队任务已达到上限",
+                        details={"maxQueuedPerUser": self.max_queued_per_user})
+                if claim.decision == "global_queue_full":
+                    raise QueueLimitError(
+                        "GLOBAL_QUEUE_FULL", "全局排队任务已达到上限",
+                        details={"maxQueuedRuns": self.max_queued_runs})
+                run_queued = claim.decision == "queued"
+                queue_position = int(getattr(claim, "queue_position", 0) or 0)
+                queue_length = int(getattr(claim, "queue_length", 0) or 0)
+            else:
+                # Legacy/stopped fallback: enforce limits from the store and
+                # queue without coordinator admission (tests stop the
+                # scheduler to freeze runs in QUEUED).
+                queued_global = self.store.counts()["queued"]
+                queued_user = self.store.counts(user_id=run.user_id)["queued"]
+                if queued_user >= self.max_queued_per_user:
+                    raise QueueLimitError(
+                        "USER_QUEUE_LIMIT_REACHED",
+                        "该用户排队任务已达到上限",
+                        details={"maxQueuedPerUser": self.max_queued_per_user})
+                if queued_global >= self.max_queued_runs:
+                    raise QueueLimitError(
+                        "GLOBAL_QUEUE_FULL", "全局排队任务已达到上限",
+                        details={"maxQueuedRuns": self.max_queued_runs})
+                run_queued = True
             self.store.transition_and_update(
                 run, "QUEUED",
                 allowed_from={"CREATED", "INPUT_READY", "FAILED", "BLOCKED", "CANCELLED"},
@@ -1458,132 +1653,96 @@ class ModelingRunManager:
             self.threads[run.run_id] = _RunHandle()
         if prompt is not None and str(prompt).strip():
             self.store.append_event(run, "user", text=str(prompt).strip())
-        self.store.append_event(run, "run_queued", maxActiveRuns=self.max_active_runs)
+        if run_queued:
+            queued_payload: dict[str, Any] = {
+                "maxActiveRuns": self.max_active_runs,
+            }
+            if queue_position:
+                queued_payload["position"] = queue_position
+                queued_payload["queueLength"] = queue_length
+            self.store.append_event(run, "run_queued", **queued_payload)
         with self.scheduler_wakeup:
             self.scheduler_wakeup.notify_all()
 
-    def _scheduler_loop(self) -> None:
+    def _scheduler_compat_loop(self) -> None:
+        # The shared coordinator owns queue admission, heartbeat and lease
+        # expiry recovery.  This compatibility loop only watches for shutdown
+        # and workspace removal so legacy stop_event/scheduler_thread callers
+        # keep working.
         while not self.stop_event.is_set():
             if not self.store.root.exists():
                 self.stop_event.set()
                 return
-            try:
-                self._recover_expired_leases()
-                self._dispatch()
-            except Exception:
-                # A scheduler loop must stay alive; individual run failures
-                # are persisted by their worker and never escape here.
-                pass
-            with self.scheduler_wakeup:
-                self.scheduler_wakeup.wait(timeout=0.25)
-
-    def _dispatch(self) -> None:
-        with self.scheduler_lock, self.store.lock:
-            self.store.refresh_from_repository()
-            for run_id, future in list(self.worker_futures.items()):
-                run = self.store.runs.get(run_id)
-                if future.done() and run is not None and run.status not in {
-                        "CLAIMED", "ANALYZING", "VALIDATING", "CANCELLING"}:
-                    self.worker_futures.pop(run_id, None)
-            live_worker_ids = {run_id for run_id, future in self.worker_futures.items()
-                               if not future.done()}
-            finished_local_ids = {run_id for run_id, future in self.worker_futures.items()
-                                  if future.done()}
-            claimed_without_worker = {run.run_id for run in self.store.runs.values()
-                                      if run.status == "CLAIMED"
-                                      and run.run_id not in self.worker_futures}
-            remote_active_ids = {run.run_id for run in self.store.runs.values()
-                                 if run.status in {"ANALYZING", "VALIDATING", "CANCELLING"}
-                                 and run.run_id not in finished_local_ids}
-            active = len(live_worker_ids | claimed_without_worker | remote_active_ids)
-            capacity = self.max_active_runs - active
-            if capacity <= 0:
-                return
-            queued = sorted((run for run in self.store.runs.values()
-                             if run.status == "QUEUED"),
-                            key=lambda item: (item.created_at, item.run_id))
-            selected: list[ModelingRun] = []
-            user_active: Counter[str] = Counter(
-                run.user_id for run in self.store.runs.values()
-                if run.run_id in live_worker_ids or run.run_id in claimed_without_worker
-                or run.run_id in remote_active_ids)
-            for run in queued:
-                if len(selected) >= capacity:
-                    break
-                if user_active[run.user_id] >= self.max_active_per_user:
-                    continue
-                now = time.time()
-                attempt_number = run.attempt_number + 1
-                try:
-                    self.store.transition_and_update(
-                        run, "CLAIMED", allowed_from={"QUEUED"},
-                        changes={
-                            "attempt_number": attempt_number,
-                            "attempt_id": f"{run.run_id}-attempt-{attempt_number}-{uuid.uuid4().hex[:8]}",
-                            "worker_id": self.worker_id,
-                            "claimed_at": now,
-                            "heartbeat_at": now,
-                            "lease_expires_at": now + self.lease_seconds,
-                            "cancel_requested": False,
-                        })
-                except StateTransitionError:
-                    continue
-                selected.append(run)
-                user_active[run.user_id] += 1
-        for run in selected:
-            future = self.executor.submit(self._run_worker, run)
-            self.worker_futures[run.run_id] = future
-            self.threads[run.run_id].attach(future)
+            self.stop_event.wait(0.25)
 
     def _recover_expired_leases(self) -> None:
+        """Fail runs whose durable coordinator lease is gone or expired.
+
+        The coordinator's backend reclaims expired leases atomically; this
+        store-side pass turns a lost lease into a retryable FAILED state so a
+        run never stays permanently ``working``.
+        """
+        coordinator = getattr(self, "coordinator", None)
         now = time.time()
         with self.store.lock:
-            expired = [run for run in self.store.runs.values()
-                       if run.status in {"CLAIMED", "ANALYZING", "VALIDATING"}
-                       and run.lease_expires_at and run.lease_expires_at < now
-                       and not (self.worker_futures.get(run.run_id)
-                                and not self.worker_futures[run.run_id].done())]
-        for run in expired:
+            candidates: list[tuple[ModelingRun, str]] = []
+            for run in self.store.runs.values():
+                if run.status not in {"CLAIMED", "ANALYZING", "VALIDATING"}:
+                    continue
+                if run.lease_expires_at and run.lease_expires_at < now:
+                    # Legacy store-level lease (e.g. a run marked CLAIMED by
+                    # an older worker or a direct transition).
+                    candidates.append((run, "WORKER_LEASE_EXPIRED"))
+                    continue
+                if coordinator is not None:
+                    record = coordinator.read_lease(run.run_id)
+                    if record is None or record.expired(now):
+                        candidates.append((run, "WORKER_LEASE_EXPIRED"))
+        for run, reason in candidates:
             try:
-                self.store.transition(run, "FAILED", error="WORKER_LEASE_EXPIRED",
+                self.store.transition(run, "FAILED", error=reason,
                                       allowed_from={"CLAIMED", "ANALYZING", "VALIDATING"})
-                self.store.append_event(run, "worker_lost", reason="WORKER_LEASE_EXPIRED",
+                self.store.append_event(run, "worker_lost", reason=reason,
                                         attemptId=run.attempt_id)
             except StateTransitionError:
                 continue
 
-    def _heartbeat(self, run: ModelingRun, stop: threading.Event) -> None:
-        while not stop.wait(self.heartbeat_seconds):
-            if not self.store.root.exists():
-                return
-            try:
-                self.store.heartbeat(run, worker_id=self.worker_id,
-                                     lease_seconds=self.lease_seconds)
-            except Exception:
-                # Shutdown/temporary workspace removal must not leak an
-                # unhandled exception from this best-effort background loop.
-                return
+    def cancel(self, run: ModelingRun) -> None:
+        """Cancel a queued or running run and drop its coordinator waiter."""
+        self.store.request_cancel(run)
+        if self.coordinator is not None:
+            self.coordinator.cancel(run.run_id)
 
-    def _run_worker(self, run: ModelingRun) -> None:
+    def _run_worker(self, run: ModelingRun, token: Any = None,
+                    execution_guard: Any = None) -> None:
         try:
+            if token is not None:
+                token.throw_if_cancelled()
             if run.status == "CANCELLING":
                 self.store.transition(run, "CANCELLED", error="cancelled by user",
                                       allowed_from={"CANCELLING"})
                 return
+            if run.status != "CLAIMED":
+                # The run was cancelled/removed while queued; the coordinator
+                # already released its admission slot in on_finished.
+                return
             self.store.transition(run, "ANALYZING", allowed_from={"CLAIMED"})
             self.store.append_event(run, "run_started", maxActiveRuns=self.max_active_runs,
                                     workerId=self.worker_id, attemptId=run.attempt_id)
-            heartbeat_stop = threading.Event()
-            heartbeat_thread = threading.Thread(target=self._heartbeat,
-                                                 args=(run, heartbeat_stop), daemon=True)
-            heartbeat_thread.start()
-            with self.provider_slots:
-                if run.database is not None or run.database_source_id:
-                    with self.database_slots:
+            if self.coordinator is None:
+                # Degraded mode: no shared coordinator, so keep a coarse slot
+                # window so local concurrency limits still apply.
+                with self.provider_slots:
+                    if run.database is not None or run.database_source_id:
+                        with self.database_slots:
+                            self._execute(run)
+                    else:
                         self._execute(run)
-                else:
-                    self._execute(run)
-            heartbeat_stop.set()
+            else:
+                # The coordinator's provider/database slots are acquired inside
+                # Task.stream_turn only around the real model request and tool
+                # execution window; never hold them across the whole turn.
+                self._execute(run, token=token, execution_guard=execution_guard)
             if run.status == "CANCELLING":
                 self.store.transition(run, "CANCELLED", error="cancelled by user",
                                       allowed_from={"CANCELLING"})
@@ -1625,10 +1784,13 @@ class ModelingRunManager:
             changes["resume_session_id"] = session_id
         self.store.update(run, **changes)
 
-    def _execute(self, run: ModelingRun) -> None:
+    def _execute(self, run: ModelingRun, token: Any = None,
+                execution_guard: Any = None) -> None:
         conversational, return_status = self.execution_modes.get(
             run.run_id, (False, "INPUT_READY"))
         try:
+            if token is not None:
+                token.throw_if_cancelled()
             if run.cancel_requested:
                 return
             # The import is intentionally inside the worker: API-only tests do
@@ -1686,7 +1848,13 @@ class ModelingRunManager:
                 resume_prompt = RESUME_CHECKPOINT_PROMPT
             else:
                 resume_prompt = run.prompt
-            task.stream_turn(resume_prompt, emit, conversational=conversational)
+            task.stream_turn(
+                resume_prompt, emit, conversational=conversational,
+                cancellation_token=token, execution_guard=execution_guard,
+                provider_slots=self.provider_slots,
+                database_slots=self.database_slots)
+            if token is not None:
+                token.throw_if_cancelled()
             self._persist_task_checkpoint(run, task)
             if run.status in {"SUCCEEDED", "CANCELLED"}:
                 self.tasks.pop(run.run_id, None)
@@ -1883,6 +2051,7 @@ class ModelingHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/health":
+            metrics = self.manager.metrics() if getattr(self, "manager", None) else {}
             self._send(200, {
                 "status": "ok", "service": "standalone-modeling",
                 "port": self.server.server_port,
@@ -1892,7 +2061,10 @@ class ModelingHandler(BaseHTTPRequestHandler):
                     "database_metadata": "on_demand",
                     "agent_runtime": "on_demand",
                 },
-                "concurrency": self.manager.metrics() if getattr(self, "manager", None) else {},
+                "concurrency": metrics.get("concurrency", {}),
+                "coordination": metrics.get("coordination", {}),
+                "onlineUsers": metrics.get("onlineUsers", 0),
+                "maxOnlineUsers": metrics.get("maxOnlineUsers", 0),
             })
             return
         if not parsed.path.startswith("/api/") and self._serve_frontend(parsed.path):
@@ -1973,30 +2145,16 @@ class ModelingHandler(BaseHTTPRequestHandler):
                 query = parse_qs(parsed.query)
                 with run.state_lock:
                     total = len(run.events)
-                    if "tail" in query or "before" in query:
-                        try:
-                            limit = max(1, min(200, int((query.get("limit") or ["80"])[0])))
-                        except (TypeError, ValueError):
-                            limit = 80
-                        try:
-                            end = (max(0, min(total, int(query["before"][0])))
-                                   if "before" in query else total)
-                        except (TypeError, ValueError):
-                            end = total
-                        start = max(0, end - limit)
-                    else:
-                        start = max(0, min(total, int((query.get("since") or ["0"])[0])))
-                        end = total
+                    start, end = _parse_event_window(query, total)
                     events = list(run.events[start:end])
                 # Cursor contract: `since` and `before` are absolute positions
                 # into the append-only journal. `nextCursor`/`eventEnd` is the
                 # next unread seq, so the client never relies on
-                # `cursor + delta.length` alone.
-                self._send(200, {"runId": run.run_id, "events": events,
-                                 "eventStart": start, "eventEnd": end,
-                                 "eventTotal": total,
-                                 "eventHasMore": start > 0,
-                                 "nextCursor": end})
+                # `cursor + delta.length` alone.  The window computation is
+                # shared with 47313 via open_claude.event_window.
+                self._send(200, _event_window_response(
+                    events, start, end, total, scope_id=run.run_id,
+                    scope_key="runId"))
             else:
                 query = parse_qs(parsed.query)
                 include_events = (query.get("includeEvents", ["true"])[0].lower()
@@ -2071,7 +2229,7 @@ class ModelingHandler(BaseHTTPRequestHandler):
                 # client cannot double-apply the same snapshot as a delta.
                 self._send(202, run.as_dict(include_events=False))
             elif action == "cancel":
-                self.manager.store.request_cancel(run)
+                self.manager.cancel(run)
                 self._send(202, run.as_dict(include_events=False))
             else:
                 report = self.manager.validate(run)

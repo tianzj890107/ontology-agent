@@ -7,6 +7,11 @@ set -euo pipefail
 repo_root="${ONTOLOGY_AGENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 shared_venv="${ONTOLOGY_AGENT_SHARED_VENV:-$repo_root/.venv}"
 python_bin="$shared_venv/bin/python"
+# Optional dependency extra (e.g. ``redis`` for
+# TASKS_COORDINATOR_BACKEND=redis / MODELING_SERVER_COORDINATOR_BACKEND=redis).
+# Installed through the same local wheel so offline deployment only needs the
+# extra's wheel in the pip cache; no ad-hoc network install at startup.
+venv_extra="${ONTOLOGY_AGENT_VENV_EXTRA:-}"
 lock_dir="$(dirname "$shared_venv")/.ontology-agent-venv.lock"
 stamp="$shared_venv/.ontology-agent-deps.sha256"
 
@@ -30,7 +35,7 @@ if [ ! -x "$python_bin" ]; then
   exit 1
 fi
 
-fingerprint="$("$python_bin" -c 'import hashlib,pathlib,sys; root=pathlib.Path(sys.argv[1]); h=hashlib.sha256(); paths=[root/"open-claude"/"pyproject.toml",root/"open-claude"/"open_claude"/"requirements.txt"]+sorted((root/"open-claude"/"open_claude").rglob("*.py")); [h.update(str(p).encode()+p.read_bytes()) for p in paths if p.exists()]; print(h.hexdigest())' "$repo_root")"
+fingerprint="$("$python_bin" -c 'import hashlib,pathlib,sys; root=pathlib.Path(sys.argv[1]); h=hashlib.sha256(); paths=[root/"open-claude"/"pyproject.toml",root/"open-claude"/"open_claude"/"requirements.txt"]+sorted((root/"open-claude"/"open_claude").rglob("*.py")); [h.update(str(p).encode()+p.read_bytes()) for p in paths if p.exists()]; print(h.hexdigest())' "$repo_root")"${venv_extra:+|$venv_extra}
 needs_install=1
 if [ -s "$stamp" ] && [ "$(cat "$stamp")" = "$fingerprint" ]; then
   needs_install=0
@@ -43,6 +48,13 @@ if [ "$needs_install" -eq 1 ]; then
     --no-deps --force-reinstall "$repo_root/open-claude"
   "$python_bin" -m pip install --quiet --disable-pip-version-check \
     -r "$repo_root/open-claude/open_claude/requirements.txt"
+  if [ -n "$venv_extra" ]; then
+    # ``open-claude[<extra>]`` resolves the extra's requirements (e.g. redis)
+    # through the same wheel metadata used by the base install, so the
+    # dependency comes from the same wheel/cache source as everything else.
+    "$python_bin" -m pip install --quiet --disable-pip-version-check \
+      "$repo_root/open-claude[$venv_extra]"
+  fi
   printf '%s\n' "$fingerprint" > "$stamp"
   chmod 600 "$stamp"
 fi

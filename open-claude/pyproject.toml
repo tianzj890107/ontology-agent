@@ -19,6 +19,9 @@ dependencies = [
 [project.optional-dependencies]
 # Needed by the ontology modeling database verification helper.
 ontology = ["SQLAlchemy>=2.0", "psycopg2-binary>=2.9", "PyMySQL>=1.1", "oracledb>=2.0"]
+# Needed by the shared execution coordinator's multi-instance Redis backend
+# (TASKS_COORDINATOR_BACKEND=redis / MODELING_SERVER_COORDINATOR_BACKEND=redis).
+redis = ["redis>=4.0"]
 
 [tool.setuptools.packages.find]
 include = ["open_claude*"]

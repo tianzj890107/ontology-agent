@@ -51,6 +51,7 @@ import urllib.request
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -97,6 +98,40 @@ from open_claude.modeling_csv_contract import (
     CONTRACTS,
     logical_entity_assignment_statuses,
     validate_row_contract,
+)
+from open_claude.event_journal import (
+    append_line as _journal_append_line,
+    read_all_valid as _journal_read_all_valid,
+    last_valid_seq as _journal_last_valid_seq,
+    read_range as _journal_read_range,
+    tail_events as _journal_tail_events,
+    seed as _journal_seed,
+    rebuild_index as _journal_rebuild_index,
+)
+from open_claude.event_window import (
+    parse_window as _parse_event_window,
+    window_response as _event_window_response,
+)
+from open_claude.task_scheduler import (
+    SchedulerLimitError as SchedulerLimitError,
+    TaskScheduler as TaskScheduler,
+    build_scheduler as _build_task_scheduler,
+)
+from open_claude.execution_lease import (
+    DEFAULT_LEASE_SECONDS as DEFAULT_TASK_LEASE_SECONDS,
+    DEFAULT_HEARTBEAT_SECONDS as DEFAULT_TASK_HEARTBEAT_SECONDS,
+    FileExecutionLeaseStore as FileExecutionLeaseStore,
+    LeaseRecord as LeaseRecord,
+    RedisExecutionLeaseStore as RedisExecutionLeaseStore,
+    build_lease_store as _build_task_lease_store,
+)
+from open_claude.execution_coordinator import (
+    CancellationToken as CancellationToken,
+    CoordinatorConfig as _CoordinatorConfig,
+    ExecutionCancelled as _ExecutionCancelled,
+    ExecutionCoordinator as _ExecutionCoordinator,
+    StaleExecution as _StaleExecution,
+    acquire_cancelable as _acquire_cancelable,
 )
 from open_claude.sandbox import is_within_root
 from open_claude.credential_crypto import (
@@ -1588,7 +1623,7 @@ def task_completion_gate(task) -> list[dict]:
     """Check orchestration state before any mission can become COMPLETED."""
     issues: list[dict] = []
     status = str(getattr(task, "status", "") or "").lower()
-    if status == "working":
+    if status in {"working", "queued"}:
         issues.append({"code": "TASK_STATE_CONFLICT", "message": "任务仍在执行中，不能完成"})
     if normalize_platform_status(getattr(task, "platform_status", "")) in {"FAILED", "CANCELLED"}:
         issues.append({"code": "TASK_STATE_CONFLICT", "message": "任务当前处于失败或取消状态，不能直接完成"})
@@ -1616,6 +1651,54 @@ def task_completion_gate(task) -> list[dict]:
                     "message": f"artifact {artifact_name} 状态为 {item.get('status')}，不能完成",
                 })
     return issues
+
+
+def task_lifecycle_conflict(task, action: str):
+    """Return an ``EXECUTION_ACTIVE`` conflict payload if ``action`` must be
+    blocked while the task has an active execution.
+
+    A task is busy when the process-local short claim says so (status
+    ``queued``/``working`` or a non-empty ``activeExecutionId``) or when the
+    shared coordinator still holds a live execution/fence for the task.  The
+    platform lifecycle lock is held by callers around the actual transition,
+    so this gate is checked before (and again inside) that lock.
+
+    Read-only entries (view, download, event replay) never call this gate and
+    the Agent's own internal checkpoint/finalize uses ExecutionContext
+    fencing, so neither is affected by the external HTTP gate.
+    """
+    task_id = str(getattr(task, "id", "") or "")
+    active_id = str(getattr(task, "active_execution_id", "") or "")
+    status = str(getattr(task, "status", "") or "").lower()
+    if status in {"queued", "working"} or active_id:
+        return {
+            "code": "EXECUTION_ACTIVE",
+            "error": f"任务仍在执行中，不能{action}",
+            "taskId": task_id,
+            "executionId": active_id,
+        }
+    coordinator = EXECUTION_COORDINATOR
+    if coordinator is not None:
+        context = coordinator.execution_context(task_id)
+        if context is not None:
+            return {
+                "code": "EXECUTION_ACTIVE",
+                "error": f"任务仍在执行中，不能{action}",
+                "taskId": task_id,
+                "executionId": str(context.execution_id or ""),
+            }
+        try:
+            record = coordinator.read_lease(task_id)
+        except Exception:
+            record = None
+        if record is not None:
+            return {
+                "code": "EXECUTION_ACTIVE",
+                "error": f"任务仍在执行中，不能{action}",
+                "taskId": task_id,
+                "executionId": str(record.execution_id or ""),
+            }
+    return None
 
 
 def reopen_completed_mission(task, authorization: str = "") -> tuple[bool, str | None]:
@@ -3584,14 +3667,43 @@ class Task:
         self.title = "新任务"
         self.created = time.time()
         self.updated = self.created
-        self.status = "idle"          # idle | working | error
-        self.log: list[dict] = []     # replayable UI events
+        self.status = "idle"          # idle | working | error | blocked
+        # Bounded in-memory hot window of UI events.  The append-only journal
+        # (.task_history/<taskId>.jsonl) is the full fact source; self.log only
+        # keeps the most recent events for legacy readers and stream replay so
+        # a long session never pins hundreds of thousands of events in RAM.
+        self.log: list[dict] = []
         # Monotonic, persisted event sequence. Every _record_event stamps a
         # stable seq so the browser can dedupe snapshots, SSE, polling and
         # pagination with one identity. Restored tasks recompute the counter
-        # from the persisted log so the seq never collides after a restart.
+        # from the journal's last valid line so the seq never collides after
+        # a restart.
         self.event_seq = 0
         self.lock = threading.Lock()
+        # Short state lock for atomic execution claims and lifecycle guards.
+        # It is never held across an Agent turn; the long turn lock
+        # (self.lock) is used only inside stream_turn.
+        self.state_lock = threading.Lock()
+        self.active_execution_id = ""
+        self.execution_started_at = 0.0
+        # P2: durable, expiring execution lease.  When ``lease_store`` is set
+        # the claim is persisted (file or Redis backend) and renewed by a
+        # background heartbeat so a crashed process's claim expires instead of
+        # blocking the task forever, and two processes cannot claim the same
+        # task at once.
+        self.lease_store: FileExecutionLeaseStore | RedisExecutionLeaseStore | None = TASK_LEASE_STORE
+        self.lease_seconds = float(os.environ.get(
+            "TASKS_LEASE_SECONDS", str(DEFAULT_TASK_LEASE_SECONDS)))
+        self.heartbeat_seconds = float(os.environ.get(
+            "TASKS_HEARTBEAT_SECONDS", str(DEFAULT_TASK_HEARTBEAT_SECONDS)))
+        if self.lease_seconds <= 0 or self.heartbeat_seconds <= 0:
+            raise ValueError("TASKS_LEASE_SECONDS/TASKS_HEARTBEAT_SECONDS must be positive")
+        self._lease_owner_id = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self._heartbeat_stop: threading.Event | None = None
+        self._heartbeat_thread: threading.Thread | None = None
+        # Bounded clientMessageId index so idempotent user-event retries are
+        # O(1) instead of scanning the full journal on every message.
+        self._client_message_ids: OrderedDict = OrderedDict()
         # ThreadingHTTPServer can receive two rapid completion clicks before
         # either request persists. Keep lifecycle callbacks idempotent by
         # serializing complete/edit transitions independently of Agent turns.
@@ -3993,22 +4105,24 @@ class Task:
                 continue
             if str(event.get("text") or "").strip():
                 return True
+        # The hot window may not contain the first user/assistant messages of
+        # a long session; check the journal tail cheaply.
+        for event in _tail_task_events(self, 64):
+            if not isinstance(event, dict) or event.get("type") not in ("user", "assistant", "text"):
+                continue
+            if str(event.get("text") or "").strip():
+                return True
         return False
 
     def replay_events(self) -> list[dict]:
-        """Return UI replay events, rebuilding old sessions when needed.
+        """Return the bounded in-memory replay window for legacy readers.
 
-        The append-only task archive is the source of truth for the browser.
-        ``self.log`` is retained in the task snapshot as a compatibility copy,
-        while the model's compacted Conversation is deliberately not used to
-        replace the visible history.
+        Paginated endpoints read the append-only journal directly via
+        ``_read_task_event_window``/``_tail_task_events``; this method only
+        serves legacy callers that need a small recent snapshot.
         """
-        events = _load_task_history(self.id)
-        if events:
-            return events
         if self.log:
-            _seed_task_history(self.id, self.log)
-            return self.log
+            return list(self.log)
         recovered = self.rebuild_log_from_conversation()
         if recovered:
             _seed_task_history(self.id, recovered)
@@ -4051,31 +4165,113 @@ class Task:
             return event
         return {**event, "timestamp": time.time()}
 
+    def _append_log_window(self, event: dict) -> None:
+        """Keep the in-memory hot window bounded (amortized O(1) append)."""
+        self.log.append(event)
+        if len(self.log) > EVENT_LOG_HOT_WINDOW * 2:
+            self.log = self.log[-EVENT_LOG_HOT_WINDOW:]
+
+    def claim_execution(self) -> tuple[str, str]:
+        """Atomically claim this task for one execution.
+
+        Returns ``(execution_id, "")`` on success or ``("", active_id)`` when
+        another execution is already active.  Only the short ``state_lock`` is
+        held here; the caller must never hold the long Agent turn lock while
+        claiming, and must call ``release_execution`` in a ``finally``.
+
+        This is intentionally a process-local short lock.  The durable,
+        cross-process lease and the monotonic fence are owned exclusively by
+        the shared ``ExecutionCoordinator`` (claim/release/heartbeat), so the
+        task never claims a second lease and can never delete the
+        coordinator's lease out from under a live worker.
+        """
+        with self.state_lock:
+            if self.active_execution_id:
+                return "", self.active_execution_id
+            execution_id = uuid.uuid4().hex
+            self.active_execution_id = execution_id
+            self.execution_started_at = time.time()
+            self.status = "working"
+            self.updated = time.time()
+            return execution_id, ""
+
+    def release_execution(self, execution_id: str) -> None:
+        """Clear an execution claim only if it still belongs to this execution.
+
+        Idempotent: a stale worker's finally can never clear a newer
+        execution's claim.  The durable coordinator lease is released by the
+        coordinator itself (fence-guarded); this method only clears the
+        process-local UI claim so the task is immediately retryable within
+        this process.
+        """
+        with self.state_lock:
+            if self.active_execution_id != execution_id:
+                return
+            self.active_execution_id = ""
+            self.execution_started_at = 0.0
+
+    def start_lease_heartbeat(self, execution_id: str) -> None:
+        """No-op: the coordinator owns lease heartbeat for this task."""
+
+    def _stop_lease_heartbeat(self) -> None:
+        """No-op: the coordinator owns lease heartbeat for this task."""
+
     def _record_event(self, event: dict) -> dict:
-        """Record one complete UI event in memory and in the task archive.
+        """Record one complete UI event in the journal and the hot window.
 
         Events receive a stable, monotonic ``seq`` unless they already carry
         one (restored archives keep their original sequence). A
         ``clientMessageId`` makes recording idempotent: a retried send or a
         duplicated stream packet returns the already-recorded event instead of
-        appending a second copy.
+        appending a second copy.  Dedup uses the bounded in-memory index and
+        the hot window, never a full journal scan.
         """
         stamped = self._stamp_event(event)
         client_id = str(stamped.get("clientMessageId") or "").strip()
         if client_id:
-            for prior in self.log:
-                if str(prior.get("clientMessageId") or "").strip() == client_id:
-                    return prior
+            with self.state_lock:
+                prior = self._client_message_ids.get(client_id)
+            if prior is None:
+                for prior_event in reversed(self.log):
+                    if str(prior_event.get("clientMessageId") or "").strip() == client_id:
+                        prior = prior_event
+                        break
+            if prior is not None:
+                with self.state_lock:
+                    self._client_message_ids[client_id] = prior
+                    self._trim_client_message_ids()
+                return prior
         if stamped.get("seq") is None:
             stamped = {**stamped, "seq": self.event_seq}
             self.event_seq += 1
-        self.log.append(stamped)
+        self._append_log_window(stamped)
         _append_task_history(self.id, stamped)
+        if client_id:
+            with self.state_lock:
+                self._client_message_ids[client_id] = stamped
+                self._trim_client_message_ids()
         return stamped
+
+    def _trim_client_message_ids(self) -> None:
+        while len(self._client_message_ids) > EVENT_CLIENT_ID_INDEX_SIZE:
+            self._client_message_ids.popitem(last=False)
+
+    def _rebuild_client_message_index(self, events) -> None:
+        for event in events or []:
+            if not isinstance(event, dict):
+                continue
+            client_id = str(event.get("clientMessageId") or "").strip()
+            if not client_id:
+                continue
+            with self.state_lock:
+                self._client_message_ids[client_id] = event
+                self._trim_client_message_ids()
 
     def stream_turn(self, text: str, emit, display_text: str | None = None,
                     platform_authorization: str = "", conversational: bool = False,
-                    client_message_id: str = ""):
+                    client_message_id: str = "", execution_id: str = "",
+                    cancellation_token=None, execution_guard=None,
+                    provider_slots=None, database_slots=None):
         """Run one turn; keep an optional short UI label separate from LLM input.
 
         ``conversational`` is used for a normal question/cancellation inside a
@@ -4083,10 +4279,24 @@ class Task:
         the Agent not to execute tools or produce modelling artefacts for that
         turn.  This is intentionally a per-turn overlay rather than a mutation
         of the persisted mission context.
+
+        ``execution_id`` is the short-lock execution claim granted by the
+        request handler; only that id is cleared in ``finally``, so a stale
+        worker can never release a newer execution's claim.
+
+        ``cancellation_token`` (from the shared coordinator) is checked before
+        every model round, every tool execution and every provider/database
+        slot wait, so a lost lease or a user cancel stops the worker promptly.
+        ``execution_guard`` fences formal side effects (FAILED platform
+        callbacks, finalize/upload writes) so a lease-lost or stale worker can
+        never overwrite a newer execution's results.  ``provider_slots`` /
+        ``database_slots`` override the module globals when the caller (e.g.
+        47314) owns its own coordinator semaphores.
         """
         display_text = str(display_text or text).strip() or text
         failure_message = ""
         original_system_prompt = None
+        uses_database = bool(_find_database_config(self.mission_context))
 
         def emit_timed(ev):
             try:
@@ -4095,9 +4305,11 @@ class Task:
                 pass
 
         def rec(ev):
+            # Streamed events append to the append-only journal only; the
+            # bounded task-state summary is saved on state changes instead of
+            # on every token so a long session never rewrites the global
+            # snapshot per event.
             event = self._record_event(ev)
-            try: persist_tasks()
-            except Exception: pass
             emit_timed(event)                # 客户端断开时继续后台执行,不中断回合
 
         with self.lock:
@@ -4161,6 +4373,10 @@ class Task:
                         "message": "建模已停止，保留当前 work/output 供人工处理。"
                                    "未通过的门禁校验项：" + (blocker_detail or "无"),
                     })
+                    try:
+                        persist_tasks()
+                    except Exception:
+                        pass
 
                 def pause_modeling(reason: str):
                     # A budget/tool-limit pause is not a quality block.  Persist
@@ -4187,6 +4403,10 @@ class Task:
                             "code": reason,
                             "message": "建模产物已满足全部校验，预算上限不再阻断本轮结果。",
                         })
+                        try:
+                            persist_tasks()
+                        except Exception:
+                            pass
                         return
                     self.modeling_block_reason = str(reason or "MODEL_EXECUTION_PAUSED")
                     self.status = "blocked"
@@ -4205,6 +4425,10 @@ class Task:
                         "message": "建模运行已暂停（预算/工具上限），已保留当前 checkpoint；"
                                    "重新排队后将从最后完成的阶段继续执行。",
                     })
+                    try:
+                        persist_tasks()
+                    except Exception:
+                        pass
 
                 def handle_gate_failure(checkpoint: dict) -> bool:
                     if guard is None:
@@ -4234,6 +4458,8 @@ class Task:
                 iteration = 0
                 stop_reason = "end_turn"
                 while True:
+                    if cancellation_token is not None:
+                        cancellation_token.throw_if_cancelled()
                     if guard is not None:
                         budget_error = guard.check()
                         if budget_error:
@@ -4252,7 +4478,10 @@ class Task:
                         break
                     iteration += 1
                     conv._maybe_compact()
-                    stop_reason = self._stream_once(conv, emit_timed, text_buf, flush_text)
+                    stop_reason = self._stream_once(
+                        conv, emit_timed, text_buf, flush_text,
+                        cancellation_token=cancellation_token,
+                        provider_slots=provider_slots)
 
                     if guard is not None:
                         budget_error = guard.check()
@@ -4263,7 +4492,23 @@ class Task:
                     if stop_reason == "tool_use":
                         # Reuse open-claude's exact execution path (permissions,
                         # hooks, Agent/MCP/execute_tool dispatch + sandbox guard).
-                        conv._execute_pending_tools()
+                        # The database slot is held only around the tool
+                        # execution window (queries/schema extraction), never
+                        # across the whole model turn; the acquire is
+                        # cancelable so a lost lease cannot block forever.
+                        if cancellation_token is not None:
+                            cancellation_token.throw_if_cancelled()
+                        database_slots = (database_slots if database_slots is not None
+                                          else TASK_DATABASE_SLOTS)
+                        if uses_database and database_slots is not None:
+                            _acquire_cancelable(database_slots, cancellation_token,
+                                                reason="等待数据库资源时执行被取消")
+                            try:
+                                conv._execute_pending_tools()
+                            finally:
+                                database_slots.release()
+                        else:
+                            conv._execute_pending_tools()
                         last = conv.messages[-1] if conv.messages else None
                         if last and last.get("role") == "user" and isinstance(last.get("content"), list):
                             for blk in last["content"]:
@@ -4309,6 +4554,14 @@ class Task:
                             finalize_checkpoint()
                         except Exception:
                             pass
+            except _ExecutionCancelled as exc:
+                # A lost lease or user cancel stops the worker without formal
+                # FAILED callbacks; the error event is marked recoverable so
+                # the task can be re-executed or continued.
+                self.status = "error"
+                failure_message = str(exc) or "执行被取消或租约丢失"
+                rec({"type": "error", "error": failure_message,
+                     "recoverable": True})
             except Exception as e:
                 traceback.print_exc()
                 self.status = "error"
@@ -4318,19 +4571,56 @@ class Task:
                 self._modeling_guard = None
                 self._rec = None
                 flush_text()
+                if execution_id:
+                    # Release only this execution's claim; a stale worker's
+                    # finally must never clear a newer execution's claim.
+                    self.release_execution(execution_id)
+                try:
+                    persist_tasks()
+                except Exception:
+                    pass
                 if conversational and original_system_prompt is not None:
                     self.conv.system_prompt = original_system_prompt
                 if self.mission_context:
                     ensure_mission_output_files(self.cwd, self.mission_context)
                 if (not conversational and self.status not in {"error", "blocked"}
                         and task_callback_kind(self) == "modeling"):
-                    finalize_result = finalize_modeling_task(self)
-                    if finalize_result.get("status") != "PASSED":
-                        self.status = "error"
-                        failure_message = "建模语义 finalize 未通过，正式结果不可交付"
+                    # Formal finalize/output writes are fenced: a lease-lost
+                    # worker must not publish results for a newer owner.
+                    if execution_guard is not None:
+                        try:
+                            execution_guard.assert_current()
+                        except Exception:
+                            self.status = "error"
+                            failure_message = "执行租约已丢失，正式结果未交付"
+                    if self.status != "error":
+                        finalize_result = finalize_modeling_task(self)
+                        if finalize_result.get("status") != "PASSED":
+                            self.status = "error"
+                            failure_message = "建模语义 finalize 未通过，正式结果不可交付"
                 if self.status == "error" and self.task_code:
                     # A tool rejection is represented in normal tool results; only an
                     # error-ended turn/unhandled exception reaches this branch.
+                    # A lease-lost or stale worker must never push FAILED over
+                    # a newer owner: the fence guard raises and we skip the
+                    # platform callback entirely.
+                    if execution_guard is not None:
+                        try:
+                            execution_guard.assert_current()
+                        except Exception:
+                            self.platform_last_error = ""
+                            rec({"type": "error",
+                                 "error": "执行租约已丢失或已失效，本轮结果未回写平台",
+                                 "recoverable": True})
+                            self.updated = time.time()
+                            try:
+                                persist_tasks()
+                            except Exception:
+                                pass
+                            self.updated = time.time()
+                            emit_timed({"type": "done", "model": conv.model,
+                                        "status": self.status})
+                            return
                     callback = task_status_callback(
                         self, "FAILED", authorization=platform_authorization,
                         error_code="AGENT_EXECUTION_FAILED",
@@ -4351,7 +4641,8 @@ class Task:
                 emit_timed({"type": "done", "model": conv.model, "cost": round(cost, 5),
                             "status": self.status})
 
-    def _stream_once(self, conv, emit, text_buf, flush_text) -> str:
+    def _stream_once(self, conv, emit, text_buf, flush_text,
+                     cancellation_token=None, provider_slots=None) -> str:
         tool_uses = []
         turn_text: list[str] = []
         turn_thinking: list[str] = []
@@ -4372,87 +4663,102 @@ class Task:
         guard = self._modeling_guard
         if guard is not None and guard.check():
             return "budget_exceeded"
+        if cancellation_token is not None:
+            cancellation_token.throw_if_cancelled()
 
-        gen = AGENT_RUNTIME.get().stream_message(
-            conv.client, conv.messages, conv.system_prompt,
-            model=conv.model, tools=conv.tool_schemas,
-            max_tokens=conv.profile.max_tokens,
-            temperature=conv.profile.temperature,
-            thinking_budget=conv.profile.thinking_budget if conv.profile.thinking else None,
-            api_key=api_key,
-        )
-        for ev in gen:
-            if guard is not None and guard.check():
-                stop_reason = "budget_exceeded"
-                break
-            t = ev["type"]
-            if t == "text_delta":
-                turn_text.append(ev["text"])
-                text_buf.append(ev["text"])
-                emit({"type": "text", "text": ev["text"]})
-            elif t == "thinking_delta":
-                turn_thinking.append(str(ev.get("text") or ""))
-                # Keep each thinking block in the replay log.  The browser
-                # merges adjacent deltas while preserving the first timestamp,
-                # so its duration remains visible after a task is reopened.
-                thinking_event = self._record_event({"type": "thinking", "text": ev["text"]})
-                emit(thinking_event)
-            elif t == "tool_use_end":
-                if guard is not None:
-                    guard.record_tool_call(ev.get("name", ""), ev.get("input"))
-                tool_uses.append({"type": "tool_use", "id": ev["id"],
-                                  "name": ev["name"], "input": ev["input"]})
-                flush_text()
-                tool_event = {"type": "tool_use", "id": ev["id"],
-                              "name": ev["name"], "input": ev["input"]}
-                tool_event = self._record_event(tool_event)
-                emit(tool_event)
-                audit = build_tool_audit(ev["name"], ev.get("input"))
-                if audit:
-                    audit = self._record_event(audit)
-                    emit(audit)
-            elif t == "message_end":
-                stop_reason = ev.get("stop_reason", "end_turn")
-                u = ev.get("usage", {})
-                conv.cost_tracker.add_usage(
-                    conv.model,
-                    input_tokens=u.get("input_tokens", 0),
-                    output_tokens=u.get("output_tokens", 0),
-                    cache_read=u.get("cache_read_input_tokens", 0),
-                    cache_creation=u.get("cache_creation_input_tokens", 0),
-                )
-                if guard is not None:
-                    guard.record_usage(u)
-                if self.user_id:
-                    record_user_usage(self.user_id, u, conv.model)
-            elif t == "model_switch":
-                conv.model = ev.get("to") or conv.model
-                model_switch_event = self._record_event(ev)
-                emit(model_switch_event)
-            elif t == "provider_retry":
-                # A recoverable gateway 400 was retried automatically inside
-                # the OpenAI-compatible adapter.  Record the notice so the
-                # browser shows that execution continued instead of failing.
-                retry_event = self._record_event(ev)
-                emit(retry_event)
-            elif t == "error":
-                flush_text()
-                error_payload = {"type": "error", "error": ev["error"]}
-                if ev.get("code"):
-                    error_payload["code"] = ev["code"]
-                if ev.get("recoverable"):
-                    error_payload["recoverable"] = True
-                error_event = self._record_event(error_payload)
-                emit(error_event)
-                # A provider read-timeout pauses the turn at the current
-                # checkpoint (recoverable); any other error is terminal for
-                # this turn.  Both keep the task error so a continue can
-                # resume, but only the timeout is marked recoverable.
-                stop_reason = ("timeout"
-                               if ev.get("recoverable")
-                               and ev.get("code") == "LLM_STREAM_TIMEOUT"
-                               else "error")
-                break
+        provider_slots = (provider_slots if provider_slots is not None
+                          else TASK_PROVIDER_SLOTS)
+        if provider_slots is not None:
+            _acquire_cancelable(provider_slots, cancellation_token,
+                                reason="等待模型资源时执行被取消")
+        try:
+            if cancellation_token is not None:
+                cancellation_token.throw_if_cancelled()
+            gen = AGENT_RUNTIME.get().stream_message(
+                conv.client, conv.messages, conv.system_prompt,
+                model=conv.model, tools=conv.tool_schemas,
+                max_tokens=conv.profile.max_tokens,
+                temperature=conv.profile.temperature,
+                thinking_budget=conv.profile.thinking_budget if conv.profile.thinking else None,
+                api_key=api_key,
+            )
+            for ev in gen:
+                if cancellation_token is not None:
+                    cancellation_token.throw_if_cancelled()
+                if guard is not None and guard.check():
+                    stop_reason = "budget_exceeded"
+                    break
+                t = ev["type"]
+                if t == "text_delta":
+                    turn_text.append(ev["text"])
+                    text_buf.append(ev["text"])
+                    emit({"type": "text", "text": ev["text"]})
+                elif t == "thinking_delta":
+                    turn_thinking.append(str(ev.get("text") or ""))
+                    # Keep each thinking block in the replay log.  The browser
+                    # merges adjacent deltas while preserving the first timestamp,
+                    # so its duration remains visible after a task is reopened.
+                    thinking_event = self._record_event({"type": "thinking", "text": ev["text"]})
+                    emit(thinking_event)
+                elif t == "tool_use_end":
+                    if guard is not None:
+                        guard.record_tool_call(ev.get("name", ""), ev.get("input"))
+                    tool_uses.append({"type": "tool_use", "id": ev["id"],
+                                      "name": ev["name"], "input": ev["input"]})
+                    flush_text()
+                    tool_event = {"type": "tool_use", "id": ev["id"],
+                                  "name": ev["name"], "input": ev["input"]}
+                    tool_event = self._record_event(tool_event)
+                    emit(tool_event)
+                    audit = build_tool_audit(ev["name"], ev.get("input"))
+                    if audit:
+                        audit = self._record_event(audit)
+                        emit(audit)
+                elif t == "message_end":
+                    stop_reason = ev.get("stop_reason", "end_turn")
+                    u = ev.get("usage", {})
+                    conv.cost_tracker.add_usage(
+                        conv.model,
+                        input_tokens=u.get("input_tokens", 0),
+                        output_tokens=u.get("output_tokens", 0),
+                        cache_read=u.get("cache_read_input_tokens", 0),
+                        cache_creation=u.get("cache_creation_input_tokens", 0),
+                    )
+                    if guard is not None:
+                        guard.record_usage(u)
+                    if self.user_id:
+                        record_user_usage(self.user_id, u, conv.model)
+                elif t == "model_switch":
+                    conv.model = ev.get("to") or conv.model
+                    model_switch_event = self._record_event(ev)
+                    emit(model_switch_event)
+                elif t == "provider_retry":
+                    # A recoverable gateway 400 was retried automatically inside
+                    # the OpenAI-compatible adapter.  Record the notice so the
+                    # browser shows that execution continued instead of failing.
+                    retry_event = self._record_event(ev)
+                    emit(retry_event)
+                elif t == "error":
+                    flush_text()
+                    error_payload = {"type": "error", "error": ev["error"]}
+                    if ev.get("code"):
+                        error_payload["code"] = ev["code"]
+                    if ev.get("recoverable"):
+                        error_payload["recoverable"] = True
+                    error_event = self._record_event(error_payload)
+                    emit(error_event)
+                    # A provider read-timeout pauses the turn at the current
+                    # checkpoint (recoverable); any other error is terminal for
+                    # this turn.  Both keep the task error so a continue can
+                    # resume, but only the timeout is marked recoverable.
+                    stop_reason = ("timeout"
+                                   if ev.get("recoverable")
+                                   and ev.get("code") == "LLM_STREAM_TIMEOUT"
+                                   else "error")
+                    break
+        finally:
+            if provider_slots is not None:
+                provider_slots.release()
 
         # Persist the assistant message exactly like the REPL does, but only
         # when the turn produced a provider-sendable payload (text or complete
@@ -4491,11 +4797,317 @@ TASKS_LOCK = threading.Lock()
 TASKS_STATE_LOCK = threading.Lock()
 TASKS_STATE_PATH = os.path.join(SANDBOX_DIR, ".web_tasks.json")
 WEB_TASK_PERSISTENCE_ENABLED = True
-# The browser history is append-only and lives in one JSONL file per task.  The
-# task-state snapshot also keeps the complete log; keeping both copies makes
-# backups and recovery straightforward, and neither is limited by event count.
+# The browser history is append-only and lives in one JSONL file per task.
+# The task-state snapshot keeps only a bounded summary (no log), so long
+# sessions never rewrite every task's full history per event.
 TASK_HISTORY_DIR = os.path.join(SANDBOX_DIR, ".task_history")
 TASK_HISTORY_LOCK = threading.RLock()
+# Bounded in-memory hot window for legacy readers and stream replay.
+EVENT_LOG_HOT_WINDOW = 2000
+# Bounded clientMessageId dedup index size (user-message retries only).
+EVENT_CLIENT_ID_INDEX_SIZE = 2000
+# P1: process-wide fair worker scheduler.  Built from environment variables
+# (TASKS_MAX_ACTIVE / TASKS_MAX_ACTIVE_PER_USER / TASKS_MAX_QUEUED_PER_USER /
+# TASKS_MAX_QUEUED / TASKS_PROVIDER_CONCURRENCY / TASKS_DATABASE_CONCURRENCY)
+# in main(); tests inject their own instance via configure_task_scheduler.
+TASK_SCHEDULER: TaskScheduler | None = None
+
+
+def configure_task_scheduler(scheduler: TaskScheduler | None) -> None:
+    """Set the process-wide scheduler (used by main() and by tests)."""
+    global TASK_SCHEDULER
+    TASK_SCHEDULER = scheduler
+
+
+# P1/P2: shared execution coordinator.  ``EXECUTION_COORDINATOR`` owns the
+# bounded worker pool, the fair FIFO queue, provider/database slots and (with
+# a durable lease store) lease heartbeat + fencing.  ``POST /send`` claims and
+# returns 202 immediately; the worker pool runs the turn in the background so
+# a queued execution never occupies an HTTP handler thread.  47314 wires the
+# same module through ``standalone_modeling_server``.
+EXECUTION_COORDINATOR: _ExecutionCoordinator | None = None
+TASK_PROVIDER_SLOTS: threading.BoundedSemaphore | None = None
+TASK_DATABASE_SLOTS: threading.BoundedSemaphore | None = None
+
+
+def _coordinator_env_int(name: str, default: int, limit: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        result = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if not 1 <= result <= limit:
+        raise ValueError(f"{name} must be between 1 and {limit}")
+    return result
+
+
+class _TaskExecutionAdapter:
+    """Bridge 47313 web tasks into the shared ExecutionCoordinator.
+
+    The coordinator owns the durable lease, the fence, the queue and the
+    worker pool; ``Task.claim_execution`` only provides a process-local short
+    lock so the HTTP handler returns ``202`` immediately.  Every coordinator
+    callback arrives keyed by ``resource_id`` == ``task.id`` (never by the
+    per-attempt UUID), so this adapter is keyed by ``task_id`` only and keeps
+    a single ``execution_id`` (the per-attempt UUID) per task for the UI
+    response.  ``emit`` in the worker writes only to the append-only journal
+    (never a socket), so the background turn is independent of the POST
+    connection.
+    """
+
+    scope = "ontology:47313"
+
+    def __init__(self, instance_id: str = ""):
+        self.instance_id = instance_id or f"web-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self._requests: dict[str, dict] = {}
+        self._lock = threading.Lock()
+
+    def register(self, execution_id: str, task_id: str, text: str,
+                 display_text: str, conversational: bool,
+                 client_message_id: str, authorization: str,
+                 platform_execution: bool = False) -> None:
+        with self._lock:
+            self._requests[task_id] = {
+                "execution_id": execution_id, "task_id": task_id,
+                "text": text, "display_text": display_text,
+                "conversational": conversational,
+                "client_message_id": client_message_id,
+                "authorization": authorization,
+                "platform_execution": platform_execution,
+            }
+
+    def unregister(self, execution_id: str, task_id: str) -> None:
+        """Drop a request that was never admitted (claim rejected)."""
+        with self._lock:
+            request = self._requests.get(task_id)
+            if request is not None and request["execution_id"] == execution_id:
+                self._requests.pop(task_id, None)
+
+    def _request(self, task_id: str) -> tuple[Task | None, dict | None]:
+        with self._lock:
+            request = self._requests.get(task_id)
+        if not request:
+            return None, None
+        task = TASKS.get(request["task_id"])
+        return task, request
+
+    def record_event(self, task_id: str, event: dict) -> None:
+        task, _ = self._request(task_id)
+        if task is not None:
+            try:
+                task._record_event(event)
+            except Exception:
+                pass
+
+    def on_queued(self, task_id: str, position: int, queue_length: int) -> None:
+        task, _ = self._request(task_id)
+        if task is None:
+            return
+        task._record_event({
+            "type": "run_queued", "position": position,
+            "queueLength": queue_length,
+        })
+        task.status = "queued"
+        task.updated = time.time()
+        try:
+            persist_tasks()
+        except Exception:
+            pass
+
+    def on_started(self, task_id: str) -> None:
+        task, request = self._request(task_id)
+        if task is None:
+            return
+        task._record_event({"type": "run_started"})
+        task.status = "working"
+        task.updated = time.time()
+        # The platform RUNNING callback fires only after queue admission, in
+        # the worker pool thread, so the platform never sees RUNNING for a
+        # task that is still queued.
+        if request and request.get("platform_execution") and task.task_code:
+            # The RUNNING callback is a formal platform side effect: only the
+            # current fence owner may send it (a lease-lost worker must not
+            # overwrite a newer execution's platform state).
+            coordinator = EXECUTION_COORDINATOR
+            if coordinator is not None:
+                guard = coordinator.execution_context(task.id)
+                if guard is None:
+                    return
+                try:
+                    guard.assert_current()
+                except Exception:
+                    return
+            if task.platform_lock.acquire(blocking=False):
+                try:
+                    if task.platform_status != "RUNNING":
+                        started = task_status_callback(
+                            task, "RUNNING",
+                            authorization=request.get("authorization") or "")
+                        if not started.get("ok"):
+                            task.status = "error"
+                            task.platform_last_error = (
+                                "RUNNING 状态回调失败: "
+                                + str(started.get("error") or "未知错误")[:800])
+                            set_task_run_result(
+                                task, "ORCHESTRATION_FAILED",
+                                errors=["RUNNING_CALLBACK_FAILED",
+                                        task.platform_last_error])
+                            task.platform_updated = time.time()
+                            task.updated = time.time()
+                            try:
+                                task._record_event({
+                                    "type": "error",
+                                    "error": task.platform_last_error,
+                                })
+                                task._record_event({"type": "done",
+                                                    "status": "error"})
+                            except Exception:
+                                pass
+                        else:
+                            task.platform_status = "RUNNING"
+                            task.platform_last_error = ""
+                            task.platform_updated = time.time()
+                finally:
+                    task.platform_lock.release()
+        try:
+            persist_tasks()
+        except Exception:
+            pass
+
+    def run_worker(self, task_id: str, token: CancellationToken) -> None:
+        task, request = self._request(task_id)
+        if task is None or request is None:
+            return
+        # The execution context fences every formal side effect: uploads,
+        # platform callbacks and the final run status must all be verified
+        # against the current lease/fence before they are written.
+        coordinator = EXECUTION_COORDINATOR
+        execution_guard = (coordinator.execution_context(task.id)
+                           if coordinator is not None else None)
+
+        def emit(event: dict) -> None:
+            # Journal-only emit: ``stream_turn``'s ``rec`` already persisted
+            # every event; nothing may touch a finished HTTP socket here.
+            return None
+
+        if (request.get("platform_execution") and task.task_code
+                and task.platform_status != "RUNNING"):
+            task._record_event({
+                "type": "error",
+                "error": task.platform_last_error or "无法回写 RUNNING 状态，未开始执行",
+            })
+            task._record_event({"type": "done", "status": "error"})
+            return
+        try:
+            token.throw_if_cancelled()
+            task.stream_turn(
+                request["text"], emit, request["display_text"],
+                platform_authorization=request.get("authorization") or "",
+                conversational=bool(request.get("conversational")),
+                client_message_id=request.get("client_message_id") or "",
+                execution_id=request["execution_id"],
+                cancellation_token=token,
+                execution_guard=execution_guard,
+                provider_slots=(coordinator.provider_slots
+                                if coordinator is not None else None),
+                database_slots=(coordinator.database_slots
+                                if coordinator is not None else None))
+        except Exception:
+            pass
+
+    def on_finished(self, task_id: str, ok: bool, token: CancellationToken) -> None:
+        del ok, token
+        task, request = self._request(task_id)
+        if task is not None:
+            try:
+                task.release_execution(request["execution_id"])
+            except Exception:
+                pass
+        with self._lock:
+            self._requests.pop(task_id, None)
+
+
+def configure_execution_coordinator() -> None:
+    """Build the shared coordinator from environment configuration.
+
+    ``TASKS_COORDINATOR_BACKEND=file|redis|none`` selects the coordination
+    backend.  ``file`` (default) keeps the flock-based lease store on the same
+    host; ``redis`` requires ``TASKS_REDIS_URL`` (falling back to
+    ``REDIS_URL``) and puts queue, quotas, lease and fence all in Redis behind
+    atomic Lua scripts; ``none`` disables the coordinator and falls back to
+    the in-process legacy scheduler.
+    """
+    global EXECUTION_COORDINATOR, TASK_PROVIDER_SLOTS, TASK_DATABASE_SLOTS
+    backend = str(os.environ.get("TASKS_COORDINATOR_BACKEND", "file")).strip().lower()
+    if backend in {"", "none", "off", "disabled"}:
+        EXECUTION_COORDINATOR = None
+        TASK_PROVIDER_SLOTS = TASK_DATABASE_SLOTS = None
+        return
+    if backend not in {"file", "redis"}:
+        raise ValueError(f"未知的 TASKS_COORDINATOR_BACKEND: {backend}")
+    try:
+        lease_seconds = float(os.environ.get("TASKS_LEASE_SECONDS",
+                                             str(DEFAULT_TASK_LEASE_SECONDS)))
+        heartbeat_seconds = float(os.environ.get("TASKS_HEARTBEAT_SECONDS",
+                                                 str(DEFAULT_TASK_HEARTBEAT_SECONDS)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("TASKS_LEASE_SECONDS/TASKS_HEARTBEAT_SECONDS must be numbers") from exc
+    max_heartbeat_failures = _coordinator_env_int("TASKS_MAX_HEARTBEAT_FAILURES", 3, 100)
+    if lease_seconds <= 0 or heartbeat_seconds <= 0:
+        raise ValueError("TASKS_LEASE_SECONDS/TASKS_HEARTBEAT_SECONDS must be positive")
+    redis_url = None
+    if backend == "redis":
+        redis_url = (str(os.environ.get("TASKS_REDIS_URL", "") or "").strip()
+                     or str(os.environ.get("REDIS_URL", "") or "").strip())
+        if not redis_url:
+            raise ValueError("TASKS_COORDINATOR_BACKEND=redis 需要 "
+                             "TASKS_REDIS_URL 或 REDIS_URL")
+    config = _CoordinatorConfig(
+        service_namespace="ontology:47313",
+        max_active=_coordinator_env_int("TASKS_MAX_ACTIVE", 10, 32),
+        max_active_per_user=_coordinator_env_int("TASKS_MAX_ACTIVE_PER_USER", 3, 32),
+        max_queued_per_user=_coordinator_env_int("TASKS_MAX_QUEUED_PER_USER", 3, 1000),
+        max_queued=_coordinator_env_int("TASKS_MAX_QUEUED", 50, 1000),
+        provider_concurrency=_coordinator_env_int("TASKS_PROVIDER_CONCURRENCY", 10, 1000),
+        database_concurrency=_coordinator_env_int("TASKS_DATABASE_CONCURRENCY", 10, 1000),
+        lease_seconds=lease_seconds,
+        heartbeat_seconds=heartbeat_seconds,
+        max_heartbeat_failures=max_heartbeat_failures,
+        backend=backend,
+        lease_dir=None if backend == "redis" else TASK_LEASE_DIR,
+        redis_url=redis_url,
+        redis_prefix=str(os.environ.get("TASKS_REDIS_PREFIX",
+                                        "ontology:47313:") or "ontology:47313:"),
+    )
+    # With backend=redis the coordinator builds its own _RedisBackend and
+    # never reuses the file lease store; with backend=file it reuses
+    # TASK_LEASE_STORE so queue/lease live in the same flock files.
+    lease_store = None if backend == "redis" else TASK_LEASE_STORE
+    EXECUTION_COORDINATOR = _ExecutionCoordinator(
+        config, _TaskExecutionAdapter(), lease_store=lease_store)
+    TASK_PROVIDER_SLOTS = EXECUTION_COORDINATOR.provider_slots
+    TASK_DATABASE_SLOTS = EXECUTION_COORDINATOR.database_slots
+
+
+# P2: durable execution leases.  The store lives in ``TASK_LEASE_DIR`` by
+# default (file backend, flock-based, shared by processes on the same host);
+# set ``TASKS_LEASE_STORE=redis`` + ``REDIS_URL`` for multi-instance
+# coordination.  ``TASK_LEASE_STORE`` is a module global so ``Task`` picks it
+# up at construction; restored tasks are re-bound by ``configure_task_leases``
+# when they were loaded before the store was configured.
+TASK_LEASE_DIR = os.path.join(SANDBOX_DIR, ".task_leases")
+TASK_LEASE_STORE: FileExecutionLeaseStore | RedisExecutionLeaseStore | None = None
+
+
+def configure_task_leases() -> None:
+    """Build the durable lease store from env and bind it to every task."""
+    global TASK_LEASE_STORE
+    TASK_LEASE_STORE = _build_task_lease_store(TASK_LEASE_DIR)
+    with TASKS_LOCK:
+        for task in TASKS.values():
+            task.lease_store = TASK_LEASE_STORE
 
 
 def _task_history_path(task_id: str) -> str:
@@ -4505,89 +5117,85 @@ def _task_history_path(task_id: str) -> str:
 
 
 def _load_task_history(task_id: str) -> list[dict]:
-    """Read the complete browser event history, if this task has one."""
+    """Read the complete browser event history, if this task has one.
+
+    Full reads are only used by legacy callers and migration decisions;
+    paginated endpoints read windows via the offset-indexed journal API.
+    """
     path = _task_history_path(task_id)
-    events: list[dict] = []
-    try:
-        with TASK_HISTORY_LOCK, open(path, encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    event = json.loads(line)
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    continue
-                if isinstance(event, dict):
-                    events.append(event)
-    except OSError:
-        pass
-    return events
+    return _journal_read_all_valid(path, lock=TASK_HISTORY_LOCK)
 
 
 def _append_task_history(task_id: str, event: dict):
-    """Append one UI event to the unlimited task archive."""
+    """Append one UI event to the task's append-only journal."""
     if not WEB_TASK_PERSISTENCE_ENABLED:
         return
     if not isinstance(event, dict):
         return
-    path = _task_history_path(task_id)
-    try:
-        with TASK_HISTORY_LOCK:
-            os.makedirs(TASK_HISTORY_DIR, exist_ok=True)
-            with open(path, "a", encoding="utf-8") as fh:
-                json.dump(event, fh, ensure_ascii=False, separators=(",", ":"))
-                fh.write("\n")
-                fh.flush()
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    except OSError:
-        # The bounded state snapshot remains a useful fallback if a runtime
-        # filesystem error prevents the archive from being written.
-        pass
+    _journal_append_line(_task_history_path(task_id), event,
+                         lock=TASK_HISTORY_LOCK)
 
 
 def _seed_task_history(task_id: str, events: list[dict]) -> bool:
-    """Create an archive from legacy events, but never overwrite an archive."""
+    """Create a journal from legacy events, but never overwrite a journal."""
     if not WEB_TASK_PERSISTENCE_ENABLED:
         return False
     if not isinstance(events, list) or not events:
         return False
-    path = _task_history_path(task_id)
+    return _journal_seed(_task_history_path(task_id), events,
+                         lock=TASK_HISTORY_LOCK)
+
+
+def _task_event_journal_path(task) -> str:
+    return _task_history_path(getattr(task, "id", ""))
+
+
+def _read_task_event_window(task, start: int, end: int) -> list[dict]:
+    """Read events at absolute positions ``[start, end)`` for a task.
+
+    Uses the offset-indexed journal so pagination never parses the full
+    history.  Falls back to the bounded in-memory hot window for legacy tasks
+    whose journal has not been migrated yet.
+    """
+    if end is None or start is None or end <= start:
+        return []
+    path = _task_event_journal_path(task)
+    if os.path.exists(path):
+        return _journal_read_range(path, int(start), int(end),
+                                   lock=TASK_HISTORY_LOCK)
+    log = getattr(task, "log", []) or []
+    return list(log)[int(start):int(end)]
+
+
+def _tail_task_events(task, limit: int) -> list[dict]:
+    """Return the last ``limit`` events without parsing the full journal."""
     try:
-        with TASK_HISTORY_LOCK:
-            if os.path.exists(path):
-                return False
-            os.makedirs(TASK_HISTORY_DIR, exist_ok=True)
-            with open(path, "x", encoding="utf-8") as fh:
-                for event in events:
-                    if isinstance(event, dict):
-                        json.dump(event, fh, ensure_ascii=False, separators=(",", ":"))
-                        fh.write("\n")
-                fh.flush()
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-        return True
-    except FileExistsError:
-        return False
-    except OSError:
-        return False
+        limit = max(1, min(100000, int(limit)))
+    except (TypeError, ValueError):
+        limit = 80
+    path = _task_event_journal_path(task)
+    if os.path.exists(path):
+        return _journal_tail_events(path, limit, lock=TASK_HISTORY_LOCK)
+    log = getattr(task, "log", []) or []
+    return list(log)[-limit:]
 
 
 def persist_tasks():
-    """Persist web task metadata and the complete UI log.
+    """Persist web task metadata as a bounded summary.
 
-    The log is intentionally not sliced.  The per-task JSONL archive is the
-    crash-safe append-only copy, while this snapshot keeps a complete copy for
-    straightforward backups and legacy readers.
+    The per-task JSONL journal is the full crash-safe event fact source; this
+    snapshot stores only the task summary, execution claim and the next event
+    position so a single streamed token never rewrites every task's history.
     """
     if not WEB_TASK_PERSISTENCE_ENABLED:
         return
     with TASKS_LOCK:
         rows = []
         for t in TASKS.values():
-            rows.append({**t.summary(), "log": t.log,
+            rows.append({**t.summary(),
+                         "eventSeq": getattr(t, "event_seq", 0),
+                         "activeExecutionId": getattr(t, "active_execution_id", ""),
+                         "executionStartedAt": getattr(t, "execution_started_at", 0),
                          "missionContext": _mask_mission_secrets(t.mission_context),
                          "platformUploadedFiles": getattr(t, "platform_uploaded_files", {}),
                          "platformOutputPrefix": getattr(t, "platform_output_prefix", ""),
@@ -4682,28 +5290,82 @@ def restore_tasks():
             t.run_result = row.get("runResult") if isinstance(row.get("runResult"), dict) else {}
             t.modeling_plan = row.get("modelingPlan") if isinstance(row.get("modelingPlan"), dict) else {}
             t.status = "idle" if row.get("status") == "working" else str(row.get("status") or "idle")
-            t.log = row.get("log") if isinstance(row.get("log"), list) else []
-            if not t.log:
-                t.log = t.rebuild_log_from_conversation()
-            archived = _load_task_history(t.id)
-            if archived:
-                # The archive may contain an event written just before a
-                # process interruption, after the state snapshot was saved.
-                # Restore it as the in-memory source of truth too.
-                t.log = archived
+            snapshot_log = row.get("log") if isinstance(row.get("log"), list) else []
+            # Only the bounded hot window stays in memory; the journal is the
+            # full fact source.
+            t.log = snapshot_log[-EVENT_LOG_HOT_WINDOW:]
+            t.active_execution_id = str(row.get("activeExecutionId") or "")
+            t.execution_started_at = float(row.get("executionStartedAt") or 0)
+            journal_path = _task_history_path(t.id)
+            if os.path.exists(journal_path):
+                # The journal is the source of truth for the event counter:
+                # the snapshot's eventSeq may lag behind the last appended
+                # event written just before an interruption.
+                last_seq = _journal_last_valid_seq(journal_path, lock=TASK_HISTORY_LOCK)
+                if last_seq is not None:
+                    t.event_seq = int(last_seq) + 1
+                else:
+                    t.event_seq = int(row.get("eventSeq") or 0)
+                t.log = _journal_tail_events(
+                    journal_path, EVENT_LOG_HOT_WINDOW, lock=TASK_HISTORY_LOCK)
+            elif snapshot_log:
+                # Legacy snapshot: migrate the stored log into the journal
+                # exactly once.  A second restart finds the journal and never
+                # re-imports the snapshot.
+                migrated = _seed_task_history(t.id, snapshot_log)
+                seqs = [int(event["seq"]) for event in snapshot_log
+                        if isinstance(event, dict)
+                        and str(event.get("seq") or "").lstrip("-").isdigit()]
+                t.event_seq = ((max(seqs) + 1) if seqs
+                               else int(row.get("eventSeq") or len(snapshot_log)))
+                if not migrated:
+                    # Journal creation was blocked (e.g. persistence disabled
+                    # in tests); keep the snapshot window as the in-memory
+                    # source so restore still resumes correctly.
+                    t.log = snapshot_log[-EVENT_LOG_HOT_WINDOW:]
             else:
-                _seed_task_history(t.id, t.log)
-            # Resume the monotonic event counter past every restored event so
-            # new recordings never collide with archive/legacy sequences.
-            seqs = [int(event["seq"]) for event in t.log
-                    if isinstance(event, dict) and str(event.get("seq") or "").lstrip("-").isdigit()]
-            t.event_seq = (max(seqs) + 1) if seqs else 0
+                recovered = t.rebuild_log_from_conversation()
+                if recovered:
+                    _seed_task_history(t.id, recovered)
+                t.event_seq = int(row.get("eventSeq") or (len(recovered) if recovered else 0))
+            # A "working"/"queued" snapshot has no live worker in THIS
+            # process.  With a durable lease store, an unexpired lease owned
+            # by another process/instance means the execution is genuinely
+            # still running there: keep the task visible as in-progress (new
+            # sends 409 ACTIVE_RUN_EXISTS via the lease) instead of
+            # force-interrupting it.  An expired or missing lease (crashed
+            # worker) is interrupted and retryable.
+            externally_owned = False
+            if row.get("status") in {"working", "queued"} and t.lease_store is not None:
+                lease = t.lease_store.read(t.id)
+                if lease is not None and not lease.expired(time.time()) \
+                        and lease.owner_id != t._lease_owner_id:
+                    externally_owned = True
+                    t.status = str(row.get("status") or "working")
+                    t.active_execution_id = lease.execution_id
+                    t.execution_started_at = lease.acquired_at
+            if row.get("status") in {"working", "queued"} and not externally_owned:
+                t.status = "error"
+                _append_task_history(t.id, {
+                    "type": "error",
+                    "error": "服务器重启中断了执行，可重新开始或继续执行",
+                    "code": "SERVER_RESTARTED_DURING_EXECUTION",
+                    "recoverable": True,
+                })
+            if not externally_owned:
+                t.active_execution_id = ""
+                t.execution_started_at = 0.0
+            t._rebuild_client_message_index(t.log)
             # Reconcile persisted upload hashes with the artifact plan on
             # restart so task summaries and the task-information modal agree.
             t.refresh_modeling_artifacts()
             TASKS[t.id] = t
         except Exception:
             traceback.print_exc()
+    try:
+        persist_tasks()
+    except Exception:
+        pass
 
 
 def mission_project_name(repository_id: str, task_code: str) -> str:
@@ -5001,6 +5663,10 @@ class Handler(BaseHTTPRequestHandler):
                 "ontology_knowledge": "on_demand",
                 "document_parser": "on_demand",
             }
+            if EXECUTION_COORDINATOR is not None:
+                coordinator_metrics = EXECUTION_COORDINATOR.metrics()
+                snapshot["concurrency"] = coordinator_metrics.get("concurrency", {})
+                snapshot["coordination"] = coordinator_metrics.get("coordination", {})
             self._send_json(snapshot)
             return
         # Vite assets are public static resources; API and workspace routes
@@ -5096,39 +5762,51 @@ class Handler(BaseHTTPRequestHandler):
                 items.sort(key=lambda t: t.updated, reverse=True)
                 self._send_json({"tasks": [t.summary() for t in items]})
         else:
+            m = re.match(r"^/api/tasks/([0-9a-f]+)/events$", path)
+            if m:
+                event_query = parse_qs(urlparse(self.path).query)
+                requested_repo = (event_query.get("repositoryId") or [""])[0]
+                requested_code = (event_query.get("taskCode") or [""])[0]
+                task = self._owned_task_for_detail(m.group(1), requested_repo, requested_code)
+                if not task:
+                    return
+                total = getattr(task, "event_seq", 0)
+                # Shared 47314 cursor protocol: tail/before/since with the
+                # unified eventStart/eventEnd/eventTotal/eventHasMore/nextCursor
+                # window response.
+                start, end = _parse_event_window(event_query, total)
+                events = _read_task_event_window(task, start, end)
+                self._send_json(_event_window_response(
+                    events, start, end, total, scope_id=task.id,
+                    scope_key="taskId"))
+                return
             m = re.match(r"^/api/tasks/([0-9a-f]+)$", path)
             if m:
                 detail_query = parse_qs(urlparse(self.path).query)
                 requested_repo = (detail_query.get("repositoryId") or [""])[0]
                 requested_code = (detail_query.get("taskCode") or [""])[0]
                 task = self._owned_task_for_detail(m.group(1), requested_repo, requested_code)
-                if not task: return
-                archived = _load_task_history(task.id)
-                if archived:
-                    task.log = archived
-                elif not task.log:
-                    task.log = task.rebuild_log_from_conversation()
-                    if task.log:
-                        _seed_task_history(task.id, task.log)
-                        persist_tasks()
-                replay = task.replay_events()
-                total = len(replay)
-                try:
-                    limit = max(1, min(200, int((detail_query.get("limit") or ["80"])[0])))
-                except (TypeError, ValueError):
-                    limit = 80
-                windowed = "before" in detail_query or "tail" in detail_query
-                try:
-                    if "before" in detail_query:
-                        end = max(0, min(total, int(detail_query["before"][0])))
-                    else:
-                        end = total
-                except (TypeError, ValueError):
-                    end = total
-                start = max(0, end - limit) if windowed else 0
-                self._send_json({**task.summary(), "log": replay[start:end],
+                if not task:
+                    return
+                total = getattr(task, "event_seq", 0)
+                # The detail endpoint returns the task summary by default and
+                # only a limit-capped window when explicitly asked, so opening
+                # a session never downloads the full journal.
+                include_events = ("tail" in detail_query or "before" in detail_query
+                                  or (detail_query.get("includeEvents", ["false"])[0].lower()
+                                      not in {"0", "false", "no"}))
+                if include_events:
+                    start, end = _parse_event_window(detail_query, total)
+                    events = _read_task_event_window(task, start, end)
+                else:
+                    start, end = 0, 0
+                    events = []
+                self._send_json({**task.summary(), "log": events,
                                  "logStart": start, "logTotal": total,
-                                 "logHasMore": start > 0})
+                                 "logHasMore": start > 0,
+                                 "eventStart": start, "eventEnd": end,
+                                 "eventTotal": total, "eventHasMore": start > 0,
+                                 "nextCursor": end})
                 return
             self.send_error(404)
 
@@ -5357,6 +6035,12 @@ class Handler(BaseHTTPRequestHandler):
                      or str(task.repository_id or "") != repo_id):
             self._send_json({"error": "任务标识与当前会话不一致"}, status=403)
             return
+        # P1/P2 lifecycle gate: queued/working or a live execution claim must
+        # block result uploads before any FileServer call is made.
+        conflict = task_lifecycle_conflict(task, "上传结果文件")
+        if conflict:
+            self._send_json(conflict, status=409)
+            return
         persisted_expected_files = normalize_expected_files(
             (getattr(task, "mission_context", {}) or {}).get("expectedFiles"))
         if task:
@@ -5488,8 +6172,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "任务状态或结果正在变更，请稍后重试"}, status=409)
             return
         try:
-            if task.status == "working":
-                self._send_json({"error": "任务仍在执行中，请等待本轮执行结束后再上传结果"}, status=409)
+            # Re-check under the lifecycle lock: the early gate above may
+            # have passed while an execution was claimed concurrently.
+            conflict = task_lifecycle_conflict(task, "上传结果文件")
+            if conflict:
+                self._send_json(conflict, status=409)
                 return
             if task.platform_status == "COMPLETED":
                 reopened, reopen_error = reopen_completed_mission(
@@ -5556,6 +6243,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if action not in {"complete", "edit"}:
             self._send_json({"error": "不支持的状态操作，仅支持 complete 或 edit"}, status=400)
+            return
+        # P1/P2 lifecycle gate: a queued/working execution must block both
+        # complete and edit before any platform callback is sent.
+        conflict = task_lifecycle_conflict(task, "变更任务状态")
+        if conflict:
+            self._send_json(conflict, status=409)
             return
         if not task.platform_lock.acquire(blocking=False):
             self._send_json({"error": "任务状态正在变更，请稍后重试"}, status=409)
@@ -5628,8 +6321,9 @@ class Handler(BaseHTTPRequestHandler):
             task = self._owned_task_for_detail(task_id, repository_id, task_code)
             if not task:
                 return
-            if task.status == "working":
-                self._send_json({"error": "任务仍在执行中，不能变更输入文件"}, status=409)
+            conflict = task_lifecycle_conflict(task, "变更输入文件")
+            if conflict:
+                self._send_json(conflict, status=409)
                 return
             if normalize_platform_status(task.platform_status) == "COMPLETED":
                 self._send_json({"error": "任务已完成，请先点击“修改”再变更输入文件"}, status=409)
@@ -6032,47 +6726,137 @@ class Handler(BaseHTTPRequestHandler):
                 }, status=422)
                 return
 
+        # P0-3: short-lock atomic execution claim.  A second execute/chat
+        # request while an execution is active is rejected immediately with
+        # ACTIVE_RUN_EXISTS instead of blocking on the long Agent turn lock.
+        # The claim happens before the SSE response and before any user event,
+        # RUNNING callback or tool execution is recorded.
+        execution_id = ""
         if task.task_code and task_execution_request:
             if not task.platform_lock.acquire(blocking=False):
                 self._send_json({"error": "任务状态或结果正在变更，请稍后重试"}, status=409)
                 return
             try:
-                if task.status == "working":
-                    self._send_json({"error": "任务已有一轮执行正在进行，请等待完成"}, status=409)
+                # Claim inside the platform lifecycle lock so upload, complete
+                # and edit transitions stay mutually exclusive with execution.
+                execution_id, active_id = task.claim_execution()
+                if not execution_id:
+                    self._send_json({
+                        "code": "ACTIVE_RUN_EXISTS",
+                        "error": "该任务已有执行正在进行",
+                        "taskId": task.id,
+                        "executionId": active_id,
+                    }, status=409)
                     return
                 # A confirmed mission can be continued only through an explicit
-                # execution intent. Reopen and RUNNING callback share the same
-                # lock as upload/complete/edit transitions.
+                # execution intent. Reopen shares the same lock as
+                # upload/complete/edit transitions; the RUNNING callback is
+                # sent after queue admission so the platform only sees
+                # RUNNING once the execution actually starts.
                 if task.platform_status == "COMPLETED":
                     reopened, reopen_error = reopen_completed_mission(
                         task, authorization=self.headers.get("Authorization") or "")
                     if not reopened:
+                        task.release_execution(execution_id)
                         self._send_json({"error": reopen_error}, status=502)
                         return
-                if task.platform_status != "RUNNING":
-                    started = task_status_callback(
-                        task, "RUNNING",
-                        authorization=self.headers.get("Authorization") or "")
-                    if not started.get("ok"):
-                        task.status = "error"
-                        task.platform_last_error = "RUNNING 状态回调失败: " + str(started.get("error") or "未知错误")[:800]
-                        set_task_run_result(task, "ORCHESTRATION_FAILED",
-                                            errors=["RUNNING_CALLBACK_FAILED", task.platform_last_error])
-                        task.platform_updated = time.time()
-                        task.updated = time.time()
-                        persist_tasks()
-                        self._send_json({"error": task.platform_last_error}, status=502)
-                        return
-                    task.platform_status = "RUNNING"
-                    task.platform_last_error = ""
-                    task.platform_updated = time.time()
-                # Close the small gap in which an upload could start after the
-                # RUNNING callback but before stream_turn marks itself working.
-                task.status = "working"
-                task.updated = time.time()
-                persist_tasks()
             finally:
                 task.platform_lock.release()
+        else:
+            # Chat turns (and tasks without a platform binding) take the same
+            # short claim so a chat cannot start a second Agent turn while
+            # another execution is running.
+            execution_id, active_id = task.claim_execution()
+            if not execution_id:
+                self._send_json({
+                    "code": "ACTIVE_RUN_EXISTS",
+                    "error": "该任务已有执行正在进行",
+                    "taskId": task.id,
+                    "executionId": active_id,
+                }, status=409)
+                return
+
+        # P1/P2: bounded worker-pool admission via the shared coordinator.
+        # ``claim`` never blocks: it either admits immediately (the worker
+        # pool starts the turn in the background), enqueues the execution, or
+        # returns an explicit error.  The HTTP handler returns 202 right away,
+        # so a queued execution never occupies a ThreadingHTTPServer thread.
+        # The coordinator is the single owner of the durable lease, queue and
+        # fence; ``Task.claim_execution`` above only provides the process-local
+        # short lock, so there is exactly one claim per execution.
+        coordinator = EXECUTION_COORDINATOR
+        if coordinator is not None:
+            adapter = coordinator.adapter
+            # Register the request before claiming so coordinator callbacks
+            # (``on_queued`` fires synchronously inside ``claim``) can resolve
+            # the task even when it is queued.
+            if isinstance(adapter, _TaskExecutionAdapter):
+                adapter.register(
+                    execution_id, task.id, text, display_text,
+                    conversational_turn, client_message_id,
+                    self.headers.get("Authorization") or "",
+                    platform_execution=bool(task.task_code and task_execution_request))
+            attempt = int(getattr(task, "attempt_number", 0) or 0) + 1
+            claim = coordinator.claim(task.id, execution_id, task.user_id,
+                                      attempt=attempt)
+            if claim.decision == "active_exists":
+                task.release_execution(execution_id)
+                if isinstance(adapter, _TaskExecutionAdapter):
+                    adapter.unregister(execution_id, task.id)
+                self._send_json({
+                    "code": "ACTIVE_RUN_EXISTS",
+                    "error": "该任务已有执行正在进行",
+                    "taskId": task.id,
+                    "executionId": execution_id,
+                }, status=409)
+                return
+            if claim.decision in {"user_queue_limit", "global_queue_full"}:
+                task.release_execution(execution_id)
+                if isinstance(adapter, _TaskExecutionAdapter):
+                    adapter.unregister(execution_id, task.id)
+                self._send_json({
+                    "code": claim.error_code,
+                    "error": claim.error,
+                    "taskId": task.id,
+                    "executionId": execution_id,
+                    "maxQueuedPerUser": coordinator.config.max_queued_per_user,
+                    "maxQueued": coordinator.config.max_queued,
+                }, status=429)
+                return
+            self._send_json({
+                "taskId": task.id,
+                "executionId": execution_id,
+                "status": "queued" if claim.decision == "queued" else "working",
+                "queuePosition": claim.queue_position,
+                "queueLength": claim.queue_length,
+                "nextCursor": int(getattr(task, "event_seq", 0) or 0),
+                "code": "QUEUED" if claim.decision == "queued" else "ACCEPTED",
+            }, status=202)
+            return
+
+        # Legacy fallback: in-process scheduler + SSE streaming, used only
+        # when the coordinator is disabled (e.g. some tests).
+        scheduler = TASK_SCHEDULER
+        waiter = None
+        if scheduler is not None:
+            try:
+                waiter = scheduler.enqueue(task.id, task.user_id, execution_id)
+            except SchedulerLimitError as exc:
+                task.release_execution(execution_id)
+                self._send_json({
+                    "code": exc.code,
+                    "error": str(exc),
+                    "taskId": task.id,
+                    "executionId": execution_id,
+                    **exc.details,
+                }, status=429)
+                return
+            task.status = "queued"
+            task.updated = time.time()
+            try:
+                persist_tasks()
+            except Exception:
+                pass
 
         self.close_connection = True
         self.send_response(200)
@@ -6094,19 +6878,93 @@ class Handler(BaseHTTPRequestHandler):
                 # Agent 错误；后续事件仍由 rec() 记录，重连时可回放。
                 pass
 
-        if task.task_code and task_execution_request and task.platform_status != "RUNNING":
-            emit({"type": "error", "error": task.platform_last_error or "无法回写 RUNNING 状态，未开始执行"})
-            emit({"type": "done", "status": "error"})
-            return
         try:
-            task.stream_turn(text, emit, display_text,
-                             platform_authorization=self.headers.get("Authorization") or "",
-                             conversational=conversational_turn,
-                             client_message_id=client_message_id)
+            if waiter is not None:
+                position, queue_length = scheduler.position(waiter)
+                queued_event = task._record_event({
+                    "type": "run_queued",
+                    "position": position,
+                    "queueLength": queue_length,
+                    "maxActive": scheduler.max_active,
+                })
+                emit(queued_event)
+                scheduler.wait_for_slot(waiter)
+                started_event = task._record_event({"type": "run_started"})
+                emit(started_event)
+                task.status = "working"
+                task.updated = time.time()
+                try:
+                    persist_tasks()
+                except Exception:
+                    pass
+            # The platform RUNNING callback fires only after queue admission.
+            if task.task_code and task_execution_request:
+                if not task.platform_lock.acquire(blocking=False):
+                    emit({"type": "error", "error": "任务状态或结果正在变更，请稍后重试"})
+                    emit({"type": "done", "status": "error"})
+                    return
+                try:
+                    if task.platform_status != "RUNNING":
+                        started = task_status_callback(
+                            task, "RUNNING",
+                            authorization=self.headers.get("Authorization") or "")
+                        if not started.get("ok"):
+                            task.status = "error"
+                            task.platform_last_error = "RUNNING 状态回调失败: " + str(started.get("error") or "未知错误")[:800]
+                            set_task_run_result(task, "ORCHESTRATION_FAILED",
+                                                errors=["RUNNING_CALLBACK_FAILED", task.platform_last_error])
+                            task.platform_updated = time.time()
+                            task.updated = time.time()
+                            persist_tasks()
+                            emit({"type": "error", "error": task.platform_last_error})
+                            emit({"type": "done", "status": "error"})
+                            return
+                        task.platform_status = "RUNNING"
+                        task.platform_last_error = ""
+                        task.platform_updated = time.time()
+                    task.updated = time.time()
+                    try:
+                        persist_tasks()
+                    except Exception:
+                        pass
+                finally:
+                    task.platform_lock.release()
+
+            if task.task_code and task_execution_request and task.platform_status != "RUNNING":
+                emit({"type": "error", "error": task.platform_last_error or "无法回写 RUNNING 状态，未开始执行"})
+                emit({"type": "done", "status": "error"})
+                return
+            uses_database = bool(_find_database_config(task.mission_context))
+            if scheduler is not None and uses_database:
+                with scheduler.provider_slots, scheduler.database_slots:
+                    task.stream_turn(text, emit, display_text,
+                                     platform_authorization=self.headers.get("Authorization") or "",
+                                     conversational=conversational_turn,
+                                     client_message_id=client_message_id,
+                                     execution_id=execution_id)
+            elif scheduler is not None:
+                with scheduler.provider_slots:
+                    task.stream_turn(text, emit, display_text,
+                                     platform_authorization=self.headers.get("Authorization") or "",
+                                     conversational=conversational_turn,
+                                     client_message_id=client_message_id,
+                                     execution_id=execution_id)
+            else:
+                task.stream_turn(text, emit, display_text,
+                                 platform_authorization=self.headers.get("Authorization") or "",
+                                 conversational=conversational_turn,
+                                 client_message_id=client_message_id,
+                                 execution_id=execution_id)
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Client disconnected mid-stream; the turn state is already saved.
             pass
-
+        finally:
+            # stream_turn releases its own claim in its finally; this guards
+            # the early-return paths (queue full, RUNNING callback failure).
+            if execution_id:
+                task.release_execution(execution_id)
+            if waiter is not None:
+                scheduler.release(waiter)
 
 def main():
     parser = argparse.ArgumentParser(description="Codex-style web server for open-claude")
@@ -6120,8 +6978,23 @@ def main():
     # bridge uses OC_READONLY_FS instead; here the agent keeps full tools but
     # can only touch sandbox/ (see execute_tool in open_claude/tools.py).
     os.environ["OC_SANDBOX_ROOT"] = SANDBOX_DIR
+    # P2: durable execution leases.  Configured before restore so a snapshot
+    # left by another process/instance (or by a crashed worker) is recovered
+    # by lease state instead of being force-interrupted.  File backend by
+    # default; set TASKS_LEASE_STORE=redis + REDIS_URL for multi-instance.
+    configure_task_leases()
     restore_tasks()
     BOOT.mark("common_ready", detail="task store restored")
+    # P1: bounded fair worker scheduler.  Built from environment variables
+    # (TASKS_MAX_ACTIVE / TASKS_MAX_QUEUED / ...); a queued task snapshot left
+    # by a previous process is recovered as interrupted by restore_tasks().
+    configure_task_scheduler(_build_task_scheduler())
+    BOOT.mark("scheduler_ready", detail="task scheduler configured")
+    # P1/P2: shared execution coordinator (worker pool + fair queue + slots +
+    # lease heartbeat).  Configured after restore so the coordinator sees the
+    # same lease store bound to tasks.
+    configure_execution_coordinator()
+    BOOT.mark("coordinator_ready", detail="execution coordinator configured")
 
     crypto = startup_crypto_check()
     print(f"[codex] credential crypto: {crypto['mode']} ({crypto['algorithm']})",

@@ -28,6 +28,7 @@ from standalone_modeling_server import (
     StateTransitionError,
     _normalize_database_config,
 )
+from open_claude.execution_coordinator import ExecutionCoordinator
 
 
 class StandaloneModelingWorkspaceTests(unittest.TestCase):
@@ -113,6 +114,67 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertIn("readiness", payload)
         self.assertIn("stages", payload["readiness"])
         self.assertEqual(payload["capabilities"]["database_metadata"], "on_demand")
+
+    def test_manager_routes_through_shared_coordinator(self):
+        manager = self._manager()
+        self.assertIsInstance(manager.coordinator, ExecutionCoordinator)
+        self.assertEqual(manager.coordinator.config.service_namespace,
+                         "ontology:47314")
+        run = self.store.create("DATABASE", "coordinator claim", user_id="u1")
+        with patch.object(manager, "_execute", return_value=None):
+            manager.execute(run)
+            manager.threads[run.run_id].join(timeout=2)
+        self.assertEqual(run.status, "ANALYZING")
+        deadline = time.time() + 5
+        while (manager.coordinator.read_lease(run.run_id) is not None
+               and time.time() < deadline):
+            time.sleep(0.01)
+        self.assertIsNone(manager.coordinator.read_lease(run.run_id))
+        manager.close()
+
+    def test_health_reports_unified_coordination_metrics(self):
+        manager = self._manager()
+        httpd = self._http_server(manager)
+        status, payload = self._get(httpd, "/health")
+        self.assertEqual(status, 200)
+        self.assertIn("concurrency", payload)
+        self.assertIn("coordination", payload)
+        concurrency = payload["concurrency"]
+        for key in ("activeRuns", "queuedRuns", "maxActiveRuns",
+                    "maxActivePerUser", "maxQueuedPerUser", "maxQueuedRuns",
+                    "oldestQueuedSeconds", "providerConcurrency",
+                    "providerInUse", "databaseConcurrency", "databaseInUse"):
+            self.assertIn(key, concurrency)
+        coordination = payload["coordination"]
+        for key in ("backend", "instanceId", "multiProcessSafe",
+                    "multiHostSafe", "leaseSeconds", "heartbeatSeconds",
+                    "activeLeases", "expiredLeasesRecovered"):
+            self.assertIn(key, coordination)
+        self.assertEqual(coordination["backend"], "file")
+        self.assertTrue(coordination["multiProcessSafe"])
+        self.assertFalse(coordination["multiHostSafe"])
+        manager.close()
+
+    def test_lease_lost_marks_run_failed_and_blocks_upload(self):
+        manager = self._manager()
+        run = self.store.create("DATABASE", "lease lost", user_id="u1")
+        self.store.transition(run, "QUEUED")
+        self.store.transition(run, "CLAIMED")
+        adapter = standalone_modeling_server._StandaloneExecutionAdapter(manager)
+        adapter.record_event(run.run_id, {
+            "type": "error", "code": "LEASE_LOST",
+            "error": "执行租约丢失，已停止本轮执行",
+        })
+        self.assertEqual(run.status, "FAILED")
+        self.assertEqual(run.error, "WORKER_LEASE_EXPIRED")
+        self.assertTrue(any(event.get("code") == "LEASE_LOST"
+                            for event in run.events))
+        # The stale worker must never overwrite the lost lease's terminal
+        # state: the store transition CAS rejects its final SUCCEEDED write.
+        with self.assertRaises(StateTransitionError):
+            self.store.transition(run, "SUCCEEDED",
+                                  allowed_from={"ANALYZING", "VALIDATING"})
+        manager.close()
 
     def test_runtime_workspace_is_one_isolated_input_work_output_space(self):
         run = self.store.create("DATABASE", "build ontology")
@@ -223,7 +285,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
                     system_prompt="",
                 )
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 self.conversational = conversational
                 emit({"type": "assistant", "text": "这是一个问题回答"})
 
@@ -259,7 +321,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             def session_id(self):
                 return "session-after-retry"
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 captured["prompt"] = text
 
         with patch("oc_codex_server.Task", FakeTask):
@@ -302,7 +364,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             def session_id(self):
                 return "session-after-retry"
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 captured["prompt"] = text
 
         with patch("oc_codex_server.Task", FakeTask):
@@ -346,7 +408,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             def session_id(self):
                 return "session-400"
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 emit({"type": "provider_retry", "attempt": 2,
                       "text": "模型网关思考模式校验失败，已自动重试并继续执行"})
 
@@ -388,7 +450,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             def session_id(self):
                 return "session-resume"
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 captured["prompt"] = text
 
         def fake_validate(run, internal=False):
@@ -474,7 +536,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             def session_id(self):
                 return "session-resume-2"
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 captured["prompt"] = text
 
         def fake_validate(run, internal=False):
@@ -514,7 +576,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             def session_id(self):
                 return "session-question"
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 captured["prompt"] = text
                 captured["conversational"] = conversational
 
@@ -548,7 +610,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             def session_id(self):
                 return "session-reuse"
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 self.status = "blocked"
 
         with patch("oc_codex_server.Task", FakeTask):
@@ -564,6 +626,79 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             self.assertEqual(len(instances), 1)
             self.assertIs(manager.tasks[run.run_id], instances[0])
         self.assertEqual(run.status, "BLOCKED")
+
+    def test_314_cancelled_token_never_writes_final_success(self):
+        from open_claude.execution_coordinator import (
+            CancellationToken,
+            ExecutionCancelled,
+        )
+        manager = self._manager()
+        run = self.store.create("DATABASE", "lease lost run", user_id="u1")
+        self.store.transition(run, "ANALYZING")
+        manager.execution_modes[run.run_id] = (False, "INPUT_READY")
+        manager.execution_prompts[run.run_id] = "继续建模"
+        token = CancellationToken()
+        token.cancel("LEASE_LOST")
+
+        class FakeTask:
+            status = "idle"
+
+            def __init__(self, *args, **kwargs):
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
+                # The worker dies mid-turn (heartbeat lost): it must never
+                # return a normal end_turn or reach the finalize gate.
+                raise ExecutionCancelled("LEASE_LOST")
+
+        with patch("oc_codex_server.Task", FakeTask):
+            manager._execute(run, token=token)
+        # The run is interrupted as a retryable failure; it must never be
+        # reported as SUCCEEDED and never emit a formal finalize event.
+        self.assertEqual(run.status, "FAILED")
+        self.assertNotIn("validation_finished",
+                         [event["type"] for event in run.events])
+        self.assertNotIn("run_ready",
+                         [event["type"] for event in run.events])
+
+    def test_314_token_checked_after_stream_turn_before_state_write(self):
+        from open_claude.execution_coordinator import (
+            CancellationToken,
+            ExecutionCancelled,
+        )
+        manager = self._manager()
+        run = self.store.create("DATABASE", "late cancel", user_id="u1")
+        self.store.transition(run, "ANALYZING")
+        manager.execution_modes[run.run_id] = (False, "INPUT_READY")
+        token = CancellationToken()
+
+        class FakeTask:
+            status = "idle"
+
+            def __init__(self, *args, **kwargs):
+                self.conv = SimpleNamespace(
+                    model="test-model",
+                    permissions=SimpleNamespace(mode="default"),
+                    system_prompt="",
+                )
+
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
+                # A normal-looking turn ends, but the lease was lost right
+                # after the last token; the guard must still stop the run.
+                emit({"type": "assistant", "text": "ok"})
+                token.cancel("LEASE_LOST")
+
+        with patch("oc_codex_server.Task", FakeTask):
+            manager._execute(run, token=token)
+        self.assertEqual(run.status, "FAILED")
+        self.assertNotIn("validation_finished",
+                         [event["type"] for event in run.events])
+        self.assertNotIn("run_ready",
+                         [event["type"] for event in run.events])
 
     def test_input_api_cannot_write_runtime_namespaces(self):
         run = self.store.create("DATABASE", "input boundary")
@@ -672,7 +807,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def blocked_execute(_run):
+        def blocked_execute(_run, **_kwargs):
             started.set()
             self.assertTrue(release.wait(2))
 
@@ -698,7 +833,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def blocked_execute(_run):
+        def blocked_execute(_run, **_kwargs):
             started.set()
             self.assertTrue(release.wait(2))
 
@@ -904,7 +1039,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def blocked_execute(_run):
+        def blocked_execute(_run, **_kwargs):
             started.set()
             self.assertTrue(release.wait(2))
 
@@ -939,7 +1074,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         active_count = 0
         active_lock = threading.Lock()
 
-        def blocked(_run):
+        def blocked(_run, **_kwargs):
             nonlocal active_count
             with active_lock:
                 active_count += 1
@@ -967,7 +1102,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         count = 0
         count_lock = threading.Lock()
 
-        def blocked(_run):
+        def blocked(_run, **_kwargs):
             nonlocal count
             with count_lock:
                 count += 1
@@ -993,7 +1128,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
                                      max_queued_runs=50)
         release = threading.Event()
         active = self.store.create("DATABASE", "active", user_id="active")
-        with patch.object(manager, "_execute", side_effect=lambda _run: release.wait()):
+        with patch.object(manager, "_execute", side_effect=lambda _run, **_kwargs: release.wait()):
             manager.execute(active)
             deadline = time.time() + 2
             while active.status != "ANALYZING" and time.time() < deadline:
@@ -1014,7 +1149,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
                                      max_queued_runs=50)
         release = threading.Event()
         first = self.store.create("DATABASE", "active", user_id="u1")
-        with patch.object(manager, "_execute", side_effect=lambda _run: release.wait()):
+        with patch.object(manager, "_execute", side_effect=lambda _run, **_kwargs: release.wait()):
             manager.execute(first)
             deadline = time.time() + 2
             while first.status != "ANALYZING" and time.time() < deadline:
@@ -1094,7 +1229,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             def session_id(self):
                 return "session-question"
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 captured["prompt"] = text
                 captured["conversational"] = conversational
 
@@ -1139,7 +1274,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
             def session_id(self):
                 return "session-question"
 
-            def stream_turn(self, text, emit, conversational=False):
+            def stream_turn(self, text, emit, conversational=False, **_kwargs):
                 captured["prompt"] = text
 
         with patch("oc_codex_server.Task", FakeTask):
@@ -1180,7 +1315,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         run_id = body["runId"]
         release = threading.Event()
 
-        def blocked_execute(_run):
+        def blocked_execute(_run, **_kwargs):
             self.assertTrue(release.wait(2))
 
         try:

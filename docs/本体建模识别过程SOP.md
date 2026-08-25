@@ -160,7 +160,7 @@ CREATED/INPUT_READY → QUEUED → CLAIMED → ANALYZING → VALIDATING → SUCC
   - 续跑时用户输入先作为 `user` 事件持久化（原始 `run.prompt` 不被覆盖），事件按“原始提示 → 历史事件 → 续跑用户气泡 → run_queued/run_started → …”顺序渲染；续跑只追加 checkpoint 约束，不重头开始。
   - 服务重启时已 claim/处理中的 run 恢复为 `FAILED`（`WORKER_LEASE_EXPIRED`）；worker 心跳丢失由 lease recovery 标记失败，尚未 claim 的 `QUEUED` run 由新调度器接续。
   - 执行中状态不允许上传输入、重复执行或重复校验；外部 `validate` 不允许借用内部的 `ANALYZING → VALIDATING` 转换。
-- 并发与限额：47314 使用有界 worker pool 和公平调度（全局 active 默认 10、单用户 active 3、单用户队列 3、全局队列 50，可配置）；超过 active 上限进入 `QUEUED`，超过队列上限返回 429；工作台单 run 并发门禁 `409 ACTIVE_RUN_EXISTS`。
+- 并发与限额：47313/47314 共用 `ExecutionCoordinator`（有界 worker pool、公平轮转、全局 active 默认 10、单用户 active 3、单用户队列 3、全局队列 50、provider/database 并发 10，可配置）；超过 active 上限进入 `QUEUED`，超过队列上限返回 429，同任务重复执行返回 `409 ACTIVE_RUN_EXISTS`。协调后端默认 file（同主机多进程安全），Redis 后端启用跨实例配额与租约（313：`TASKS_COORDINATOR_BACKEND=redis`；314：`MODELING_SERVER_COORDINATOR_BACKEND=redis` + `MODELING_REDIS_URL`）；`/health` 统一输出 `concurrency` 与 `coordination` 指标。
 - 交付：`SUCCEEDED` 后 `output/` 即正式产物；文件 API 只允许 `input/`、`work/`、`output/` 并按 run 隔离，路径穿越/绝对路径/symlink 越界被拒绝。
 
 ---

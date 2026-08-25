@@ -14,7 +14,12 @@ key_file="${MODELING_SERVER_KEY_FILE:-$repo_root/.standalone-modeling-api-key}"
 cd "$repo_root"
 
 shared_venv="${ONTOLOGY_AGENT_SHARED_VENV:-$repo_root/.venv}"
+# Redis coordination requires the redis client dependency in the shared venv.
+if [[ "${MODELING_SERVER_COORDINATOR_BACKEND:-file}" == "redis" ]]; then
+  export ONTOLOGY_AGENT_VENV_EXTRA="${ONTOLOGY_AGENT_VENV_EXTRA:-redis}"
+fi
 ONTOLOGY_AGENT_ROOT="$repo_root" ONTOLOGY_AGENT_SHARED_VENV="$shared_venv" \
+  ONTOLOGY_AGENT_VENV_EXTRA="${ONTOLOGY_AGENT_VENV_EXTRA:-}" \
   "$repo_root/scripts/ensure_agent_venv.sh" >/dev/null
 export ONTOLOGY_AGENT_SHARED_VENV="$shared_venv"
 python_bin="$shared_venv/bin/python"

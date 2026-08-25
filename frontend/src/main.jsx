@@ -1182,6 +1182,8 @@ function eventDuration(events, index) {
 function eventTitle(event) {
   const names = { Read: "读取文件", Write: "写入文件", Edit: "修改文件", Bash: "执行命令", Glob: "查找文件", Grep: "搜索内容", Agent: "调用子智能体", TaskCreate: "创建任务" };
   if (event.type === "error" || event.is_error) return "提示";
+  if (event.type === "run_queued") return "排队中";
+  if (event.type === "run_started") return "开始执行";
   if (event.type === "thinking") return "思考中";
   if (event.type === "model_switch") return "模型切换";
   if (event.type === "tool_result") return "工具结果";
@@ -1198,6 +1200,10 @@ function eventStatus(event) {
 function eventDescription(event) {
   if (event.type === "thinking" || event.type === "text" || event.type === "assistant") return event.text || "";
   if (event.type === "tool_result") return String(event.content || "").slice(0, 1200);
+  if (event.type === "run_queued") return event.position
+    ? `当前第 ${event.position} 位，队列共 ${event.queueLength ?? "—"} 个任务`
+    : "任务已排队，等待空闲执行槽";
+  if (event.type === "run_started") return "已获得执行槽，开始本轮执行";
   if (event.type === "error") return `提示：${event.error || "本轮执行未完成，可继续执行"}`;
   if (event.type === "approval_request") return `${event.summary || "需要确认"}${event.detail ? `：${event.detail}` : ""}`;
   if (event.type === "approval_result") return event.approved ? "已允许执行" : "已拒绝执行";
@@ -1241,8 +1247,8 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
   const isAudit = event.type === "audit";
   const isTaskUpdate = event.type === "tool_use" && event.name === "TaskUpdate";
   const isCommand = event.type === "tool_use" && event.name === "Bash";
-  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.type === "error" || event.is_error ? "error" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : isReadTool ? "read-file" : isWriteTool ? "write-file" : isEditTool ? "edit-file" : isAudit ? "audit" : isTaskUpdate ? "task-update" : isCommand ? "command" : "tool-use";
-  const icon = event.type === "thinking" ? <ThinkingIcon /> : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "ℹ" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : isReadTool ? <ReadFileIcon /> : isWriteTool || isEditTool ? <WriteFileIcon /> : isAudit ? <AuditIcon /> : isTaskUpdate ? <TaskUpdateIcon /> : isCommand ? <CommandIcon /> : "·";
+  const kind = event.type === "thinking" ? "thinking" : event.type === "model_switch" ? "model-switch" : event.type === "tool_result" ? "tool-result" : event.type === "approval_result" ? "approval-result" : event.type === "error" || event.is_error ? "error" : event.type === "run_queued" ? "queued" : event.type === "run_started" ? "started" : event.name === "TaskCreate" ? "task-create" : event.type === "approval_request" ? "approval" : isReadTool ? "read-file" : isWriteTool ? "write-file" : isEditTool ? "edit-file" : isAudit ? "audit" : isTaskUpdate ? "task-update" : isCommand ? "command" : "tool-use";
+  const icon = event.type === "thinking" ? <ThinkingIcon /> : event.type === "model_switch" ? "↻" : event.type === "tool_result" ? "✓" : event.type === "approval_result" && event.approved ? "✓" : event.type === "error" || event.is_error ? "ℹ" : event.type === "run_queued" ? "⏳" : event.type === "run_started" ? "▶" : event.name === "TaskCreate" ? "＋" : event.type === "approval_request" ? "?" : isReadTool ? <ReadFileIcon /> : isWriteTool || isEditTool ? <WriteFileIcon /> : isAudit ? <AuditIcon /> : isTaskUpdate ? <TaskUpdateIcon /> : isCommand ? <CommandIcon /> : "·";
   const detail = eventDescription(event);
   const approved = event.type === "approval_request" && approvalResult?.approved === true;
   const durationLabel = durationMs != null && !loading ? event.type === "thinking" ? `已思考 ${formatDuration(durationMs)}` : formatDuration(durationMs) : "";
@@ -1602,6 +1608,9 @@ function App() {
   const busyRequestRef = useRef(0);
   const logWindowRef = useRef(new Map());
   const olderLogLoadingRef = useRef(new Set());
+  // Task-level event poll lock (per task id) so session A's polling can never
+  // block or release session B's first poll after a quick switch.
+  const taskPollInFlightRef = useRef(new Set());
   const previewImageUrlRef = useRef("");
   const previewRequestRef = useRef(0);
   const [messageApi, contextHolder] = message.useMessage();
@@ -1750,6 +1759,37 @@ function App() {
     return Boolean(logWindowRef.current.get(task.id)?.start > 0);
   };
 
+  const pollTaskEvents = async (taskId) => {
+    if (!taskId || activeTaskIdRef.current !== taskId || taskPollInFlightRef.current.has(taskId)) return;
+    const window = logWindowRef.current.get(taskId);
+    if (!window) return;
+    taskPollInFlightRef.current.add(taskId);
+    try {
+      const cursor = Number(window.cursor ?? window.total ?? 0);
+      const taskMission = missionIdentity(active || { id: taskId });
+      const identity = taskMission
+        ? `&repositoryId=${encodeURIComponent(taskMission.repositoryId)}&taskCode=${encodeURIComponent(taskMission.taskCode)}`
+        : "";
+      const result = await api(`/api/tasks/${taskId}/events?since=${cursor}${identity}`);
+      if (activeTaskIdRef.current !== taskId || result.error) return;
+      const delta = normalizeEvents(result);
+      if (delta.length) {
+        setEvents((current) => activeTaskIdRef.current === taskId
+          ? mergeEvents(current, delta, `task:${taskId}`)
+          : current);
+      }
+      const currentWindow = logWindowRef.current.get(taskId);
+      const next = nextCursor(result, delta);
+      logWindowRef.current.set(taskId, {
+        ...(currentWindow || window),
+        total: Number(result.eventTotal ?? window.total ?? next),
+        cursor: next,
+      });
+    } finally {
+      taskPollInFlightRef.current.delete(taskId);
+    }
+  };
+
   const openTask = async (task) => {
     const taskMission = missionIdentity(task);
     const identityQuery = taskMission ? `&repositoryId=${encodeURIComponent(taskMission.repositoryId)}&taskCode=${encodeURIComponent(taskMission.taskCode)}` : "";
@@ -1765,7 +1805,9 @@ function App() {
     const recentEvents = normalizeEvents(current);
     const logStart = Number(result.logStart ?? 0);
     const logTotal = Number(result.logTotal ?? recentEvents.length);
-    logWindowRef.current.set(current.id, { start: logStart, total: logTotal, generation: Date.now() });
+    // The tail window ends at the journal end, so the next unread cursor is
+    // the server-absolute logTotal; never derive it from client node counts.
+    logWindowRef.current.set(current.id, { start: logStart, total: logTotal, cursor: logTotal, generation: Date.now() });
     activeTaskIdRef.current = current.id;
     setActive(current);
     setEvents(mergeEvents([], recentEvents, `task:${current.id}`));
@@ -1805,6 +1847,21 @@ function App() {
       if (historyHasMore) await loadOlderTaskEvents(current);
     });
   };
+
+  useEffect(() => {
+    // Poll the active task's journal with the absolute since-cursor while a
+    // turn is active but no SSE stream is open (e.g. after refresh), so a
+    // dropped stream cannot stall the visible progress.  While `busy` is true
+    // the live SSE already carries streamed `text` tokens, which are not
+    // persisted as seq'd events; merging the journal's `assistant` events on
+    // top of them would duplicate the text, so polling is gated on `!busy`.
+    // The idempotent merge keeps every other path exactly once.
+    if (!active?.id || view !== "task" || busy) return undefined;
+    if (!["working", "queued", "blocked", "error"].includes(active.status)) return undefined;
+    const taskId = active.id;
+    const timer = window.setInterval(() => { void pollTaskEvents(taskId); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [active?.id, active?.status, view, busy]);
 
   const loadFiles = async (task = active) => {
     setFilesLoading(true);
@@ -1903,7 +1960,52 @@ function App() {
     try {
       response = await fetch(`/api/tasks/${taskId}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId }) });
     } catch (error) { if (busyRequestRef.current === requestId) appendEvent({ type: "error", error: error.message }); finishBusy(); return; }
-    if (!response.ok || !response.body) { if (busyRequestRef.current === requestId) appendEvent({ type: "error", error: `请求失败(${response.status})` }); finishBusy(); return; }
+    if (!response.ok || !response.body) {
+      let payload = null;
+      try { payload = await response.json(); } catch { /* non-JSON error body */ }
+      if (busyRequestRef.current === requestId) {
+        if (payload?.code === "ACTIVE_RUN_EXISTS") {
+          // Another execution already owns this task: drop the optimistic
+          // bubble, keep the existing execution's progress and resume syncing
+          // from the persisted cursor instead of showing a generic failure.
+          setEvents((current) => current.filter((event) => event.clientMessageId !== clientMessageId));
+          messageApi.info("任务正在执行，已恢复当前进度");
+          void loadTasks();
+          void pollTaskEvents(taskId);
+        } else {
+          appendEvent({ type: "error", error: payload?.error || `请求失败(${response.status})` });
+        }
+      }
+      finishBusy();
+      return;
+    }
+    // P1/P2: the server accepts the execution with HTTP 202 and runs it on a
+    // background worker pool.  The response carries the queue position and
+    // the journal cursor; progress is delivered through /events polling, so
+    // the browser never blocks an HTTP thread and a refresh cannot lose the
+    // running turn.  The 202 body may contain a stale historical run.error
+    // from a previous attempt; it is a domain field, not an API failure.
+    if (response.status === 202) {
+      let payload = null;
+      try { payload = await response.json(); } catch { /* non-JSON body */ }
+      finishBusy();
+      if (activeTaskIdRef.current !== taskId) return;
+      if (payload) {
+        setActive((previous) => previous && previous.id === taskId
+          ? { ...previous, status: payload.status || previous.status, queuePosition: payload.queuePosition || 0 }
+          : previous);
+        if (!logWindowRef.current.get(taskId)) {
+          const cursor = Number(payload.nextCursor ?? payload.eventTotal ?? 0);
+          logWindowRef.current.set(taskId, { start: 0, total: cursor, cursor, generation: Date.now() });
+        }
+        if (payload.status === "queued" && payload.queuePosition) {
+          messageApi.info(`任务已排队（第 ${payload.queuePosition} 位），将在空闲后自动执行`);
+        }
+      }
+      void loadTasks();
+      if (logWindowRef.current.get(taskId)) void pollTaskEvents(taskId);
+      return;
+    }
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
     const consume = (chunk) => {
       if (activeTaskIdRef.current !== taskId) return;
@@ -1953,7 +2055,7 @@ function App() {
       messageApi.info("任务已完成，请先点击“修改”再上传新的输入文件");
       return;
     }
-    if (busy || active?.status === "working" || platformActionLoading) {
+    if (busy || active?.status === "working" || active?.status === "queued" || platformActionLoading) {
       messageApi.info("任务执行或状态变更期间不能修改输入文件");
       return;
     }
@@ -2065,7 +2167,7 @@ function App() {
         <div className="sidebar-scroll">
           <Button className="new-task" onClick={handleNewSession}>+ 新会话</Button>
           <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}><HistoryIcon />历史会话</button>
-          {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新会话"}</span><small><i className={task.status === "working" ? "working" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有会话" />}</div>}
+          {historyOpen && <div className="task-list">{sidebarTasks.length ? sidebarTasks.map((task) => <button className={`task-row ${active?.id === task.id ? "active" : ""}`} key={task.id} onClick={() => openTask(task)}><span>{task.title || "新会话"}</span><small><i className={task.status === "working" ? "working" : task.status === "queued" ? "queued" : task.status === "error" ? "error" : ""} />{task.workspace || task.project} · {relativeTime(task.updated)}{task.status === "working" ? " · 执行中" : task.status === "queued" ? " · 排队中" : task.status === "blocked" ? " · 已阻断" : ""}</small></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有会话" />}</div>}
           <Button className="settings-button" onClick={() => setSettingsOpen(true)}><ModelSettingsIcon /> 大语言模型设置</Button>
           {MISSION && <div className="current-mission">
             <Button type="text" className="current-mission-trigger" onClick={() => setMissionInfoOpen(true)}><CurrentMissionIcon /> 当前任务信息</Button>
@@ -2079,12 +2181,12 @@ function App() {
       </aside>
       <main className="main-content">
         {view === "home" ? <section className="home-view"><h1>{MISSION ? (MISSION.taskType === "integration" ? "智能消歧与整合" : "智能建模") : "本体智能体"}</h1><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={false} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} /></section> : <section className="task-view">
-          <header className="task-header"><i className={active?.status === "working" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{isMissionTask && active?.platformStatus !== "FAILED" && <Button type={active?.platformStatus === "COMPLETED" ? "default" : "primary"} icon={active?.platformStatus === "COMPLETED" ? <TaskEditIcon /> : <TaskCompleteIcon />} loading={platformActionLoading} disabled={busy || active?.status === "working" || minioUploading || (active?.platformStatus !== "COMPLETED" && active?.completionReady === false)} title={active?.platformStatus !== "COMPLETED" && active?.completionReady === false ? "请先上传全部任务结果" : ""} onClick={changePlatformStatus}>{active?.platformStatus === "COMPLETED" ? "修改" : "完成"}</Button>}<Button icon={<TaskFilesIcon />} onClick={() => { setFilesOpen(true); loadFiles(); }}>文件</Button></header>
+          <header className="task-header"><i className={active?.status === "working" || active?.status === "queued" || busy ? "status-dot working" : "status-dot"} /><strong title={active?.title || "当前任务"}>{truncateTitle(active?.title || "当前任务")}</strong><Tag>{active?.workspace || active?.project}</Tag><span className="header-spacer" />{isMissionTask && active?.platformStatus !== "FAILED" && <Button type={active?.platformStatus === "COMPLETED" ? "default" : "primary"} icon={active?.platformStatus === "COMPLETED" ? <TaskEditIcon /> : <TaskCompleteIcon />} loading={platformActionLoading} disabled={busy || active?.status === "working" || active?.status === "queued" || minioUploading || (active?.platformStatus !== "COMPLETED" && active?.completionReady === false)} title={active?.platformStatus !== "COMPLETED" && active?.completionReady === false ? "请先上传全部任务结果" : ""} onClick={changePlatformStatus}>{active?.platformStatus === "COMPLETED" ? "修改" : "完成"}</Button>}<Button icon={<TaskFilesIcon />} onClick={() => { setFilesOpen(true); loadFiles(); }}>文件</Button></header>
           <div ref={feedRef} className="feed" onScroll={handleFeedScroll}><EventFeed events={events} onApprove={approve} files={files} onFile={openFile} busy={busy} scope={`task:${active?.id || "task"}`} /></div>
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} autoApprove={autoApprove} onToggleAutoApprove={toggleAutoApprove} showAutoApprove={isMissionTask} /></div>
         </section>}
       </main>
-      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || platformActionLoading} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
+      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || active?.status === "queued" || platformActionLoading} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
       {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={closePreview}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
