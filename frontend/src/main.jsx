@@ -1523,16 +1523,20 @@ function OntologyTreePreview({ data }) {
       if (disposed || !containerRef.current || !scrollRef.current) return;
       chart = echarts.init(containerRef.current);
       const renderGraph = () => {
-        const viewportWidth = Math.max(980, scrollRef.current?.clientWidth || 0);
         const objectX = 110;
         const entityX = hasBusinessObjects ? 390 : 110;
         const attributeStartX = entityX + 270;
         const attributeGap = 230;
-        const attributeColumns = Math.max(2, Math.min(4, Math.floor((viewportWidth - attributeStartX - 90) / attributeGap) + 1));
+        const attributeColumns = 4;
         const graphNodes = [];
         const graphLinks = [];
         let cursorY = 40;
-        const addNode = (node, x, y) => graphNodes.push({ ...node, children: undefined, x, y });
+        const addNode = (node, x, y) => {
+          const enlargedSize = !showAttributes && Array.isArray(node.symbolSize)
+            ? [Math.round(node.symbolSize[0] * 1.3), 50]
+            : node.symbolSize;
+          graphNodes.push({ ...node, children: undefined, x, y, symbolSize: enlargedSize, ...(!showAttributes ? { label: { fontSize: 15 } } : {}) });
+        };
         const addEntity = (entity, objectId = null) => {
           const attributes = showAttributes ? (entity.children || []) : [];
           const rows = Math.max(1, Math.ceil(attributes.length / attributeColumns));
