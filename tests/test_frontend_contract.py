@@ -385,6 +385,22 @@ class FrontendContractTests(unittest.TestCase):
         history_load = source.index("await loadOlderStandaloneEvents(runId, 10);", idle_start)
         self.assertLess(files_first, history_load)
 
+    def test_mission_file_panel_draws_available_ontology_layers(self):
+        package = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
+        source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
+        styles = (ROOT / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("echarts", package["dependencies"])
+        self.assertIn('function buildOntologyTree(businessObjects, logicalEntities, businessAttributes)', source)
+        self.assertIn('return byName.has("logical_entities.csv") ? byName : null;', source)
+        self.assertIn('records.get("business_objects.csv") || []', source)
+        self.assertIn('records.get("business_attributes.csv") || []', source)
+        self.assertIn('if (!businessObjects.length) return entityNodes.map(({ node }) => node);', source)
+        self.assertIn('formatter: ({ data: node }) => node?.name || ""', source)
+        self.assertIn('>{ontologyReady ? "展示" : "画图"}</Button>', source)
+        self.assertIn('缺少逻辑实体 CSV，不能画图', source)
+        self.assertIn('preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} />', source)
+        self.assertIn('.ontology-tree-preview{', styles)
+
 
     def test_continue_run_preserves_event_cursor_and_guards_double_submit(self):
         source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")

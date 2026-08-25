@@ -133,3 +133,11 @@
 - 两服务 `/health` 均报告 `coordination.backend=file`、`quotaScope=process`（file 后端能力边界，与实现一致；未启用 Redis 模式，未安装/使用 redis 依赖）。
 - 服务器工作树保留 `.runs.json`/`.runs.sqlite3` 运行数据本地修改，未受影响。
 - 已提交、已推送；部署完成。
+
+### 7. 本体层级一键画图预览（待部署）
+
+- 47313 任务文件面板在“下载所选 / 上传到 MinIO”后新增“画图”按钮；首次点击按当前任务已有正式 CSV 动态构造 ECharts Tree，并像文件一样在预览弹窗中展示，成功后按钮改为“展示”，可直接再次打开已生成图。
+- 逻辑实体是唯一必需产物：三份产物齐全时展示“业务对象 → 逻辑实体 → 业务属性”三层；缺少业务属性时展示“业务对象 → 逻辑实体”；缺少业务对象时展示“逻辑实体 → 业务属性”；只有逻辑实体时展示实体节点；缺少 `logical_entities.csv` 时按钮禁用并说明原因。
+- 节点编码仅用于跨表关联、唯一标识与内部定位，树图标签和悬浮内容只显示名称；属性默认按需展开，支持节点展开/收起及画布缩放、平移，避免大量属性一次性铺满。
+- 新增 `echarts` 前端依赖、树图预览样式及前端契约测试；主要文件：`frontend/package.json`、`frontend/package-lock.json`、`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
+- 验证结果：`tests.test_frontend_contract` 12 个测试通过；`npm run build` 成功（ECharts 独立异步 chunk `index-CzJ1nSGZ.js`，Vite 仅报告既有的大 chunk 警告）；`git diff --check` 通过。部署前确认 47313/47314 均无 active/queued/working/analyzing/validating 任务。

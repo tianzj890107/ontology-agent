@@ -1393,6 +1393,100 @@ function parseCsv(text) {
   return rows;
 }
 
+function csvRecords(text) {
+  const rows = parseCsv(text);
+  const headers = rows[0] || [];
+  return rows.slice(1).filter((row) => row.some((value) => String(value || "").trim())).map((row) => Object.fromEntries(headers.map((header, index) => [String(header || "").trim(), String(row[index] || "").trim()])));
+}
+
+function buildOntologyTree(businessObjects, logicalEntities, businessAttributes) {
+  const attributesByEntity = new Map();
+  businessAttributes.forEach((attribute) => {
+    const entityCode = attribute["逻辑实体编码"];
+    if (!entityCode) return;
+    if (!attributesByEntity.has(entityCode)) attributesByEntity.set(entityCode, []);
+    attributesByEntity.get(entityCode).push({
+      id: `attribute:${entityCode}:${attribute["业务属性编码"]}`,
+      code: attribute["业务属性编码"],
+      name: attribute["业务属性名称"] || attribute["业务属性编码"],
+      nodeType: "attribute",
+    });
+  });
+
+  const entitiesByObject = new Map();
+  const entityNodes = logicalEntities.filter((entity) => entity["逻辑实体编码"]).map((entity) => {
+    const objectCode = entity["业务对象编码"];
+    const entityCode = entity["逻辑实体编码"];
+    const node = {
+      id: `entity:${entityCode}`,
+      code: entityCode,
+      name: entity["逻辑实体名称"] || entityCode,
+      nodeType: "entity",
+      isPrimary: entity["是否主逻辑实体"] === "Y",
+      children: attributesByEntity.get(entityCode) || [],
+    };
+    if (objectCode) {
+      if (!entitiesByObject.has(objectCode)) entitiesByObject.set(objectCode, []);
+      entitiesByObject.get(objectCode).push(node);
+    }
+    return { objectCode, node };
+  });
+
+  if (!businessObjects.length) return entityNodes.map(({ node }) => node);
+  const objectCodes = new Set(businessObjects.map((object) => object["业务对象编码"]).filter(Boolean));
+  const objectNodes = businessObjects.filter((object) => object["业务对象编码"]).map((object) => ({
+    id: `business-object:${object["业务对象编码"]}`,
+    code: object["业务对象编码"],
+    name: object["业务对象名称"] || object["业务对象编码"],
+    nodeType: "businessObject",
+    children: entitiesByObject.get(object["业务对象编码"]) || [],
+  }));
+  return [...objectNodes, ...entityNodes.filter(({ objectCode }) => !objectCodes.has(objectCode)).map(({ node }) => node)];
+}
+
+function OntologyTreePreview({ data }) {
+  const containerRef = useRef(null);
+  useEffect(() => {
+    let disposed = false;
+    let chart = null;
+    let observer = null;
+    void import("echarts").then((echarts) => {
+      if (disposed || !containerRef.current) return;
+      chart = echarts.init(containerRef.current);
+      chart.setOption({
+        tooltip: { trigger: "item", formatter: ({ data: node }) => node?.name || "" },
+        series: [{
+          type: "tree",
+          data,
+          top: 28,
+          left: 80,
+          bottom: 28,
+          right: 180,
+          orient: "LR",
+          symbol: "circle",
+          symbolSize: 9,
+          initialTreeDepth: 1,
+          expandAndCollapse: true,
+          roam: true,
+          label: { position: "left", verticalAlign: "middle", align: "right", fontSize: 13, formatter: ({ data: node }) => node?.name || "" },
+          leaves: { label: { position: "right", verticalAlign: "middle", align: "left" } },
+          emphasis: { focus: "descendant" },
+          animationDuration: 300,
+          animationDurationUpdate: 500,
+        }],
+      });
+      observer = new ResizeObserver(() => chart?.resize());
+      observer.observe(containerRef.current);
+    });
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      chart?.dispose();
+    };
+  }, [data]);
+  return <div className="ontology-tree-preview" ref={containerRef} />;
+}
+
 function CsvPreview({ text }) {
   const rows = parseCsv(text);
   const headers = rows[0] || [];
@@ -1505,7 +1599,7 @@ function Composer({ value, onChange, onSend, onAttach, pendingFiles, mission, bu
   );
 }
 
-function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onUploadToMinio, uploadingToMinio, uploadBlocked = false, onClose, onRefresh, mission, workspaceFolders = false, focusPath, platformStatus, resetKey }) {
+function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, onOpen, onDownload, onUploadToMinio, uploadingToMinio, uploadBlocked = false, onDrawOntology, drawingOntology = false, ontologyReady = false, ontologyAvailable = false, onClose, onRefresh, mission, workspaceFolders = false, focusPath, platformStatus, resetKey }) {
   const defaultCollapsedDirs = () => new Set(["root", "input"]);
   const [collapsedDirs, setCollapsedDirs] = useState(defaultCollapsedDirs);
   const displayPath = (file) => String(file?.displayPath || file?.path || "").replaceAll("\\", "/");
@@ -1556,7 +1650,7 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
   if (!open) return null;
   return <aside className="file-panel">
     <div className="panel-head"><strong>项目文件</strong><Button size="small" aria-label="刷新文件" title="刷新文件" onClick={onRefresh}><RefreshFilePanelIcon /></Button><Button size="small" aria-label="折叠文件面板" title="折叠文件面板" onClick={onClose}><CollapseFilePanelIcon /></Button></div>
-    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={() => onDownload(selected)}>下载所选</Button>{mission && <Tooltip title={uploadBlocked ? "任务执行或状态变更期间不能上传" : platformStatus === "COMPLETED" ? "上传新结果将恢复任务为执行中" : "上传选中的任务结果"}><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || uploadBlocked} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{mission && <span className="panel-note">{platformStatus === "COMPLETED" ? "上传新结果将恢复执行" : "当前任务范围"}</span>}</div>
+    <div className="file-actions"><Button size="small" icon={<DownloadSelectedIcon />} disabled={!selected.length} onClick={() => onDownload(selected)}>下载所选</Button>{mission && <Tooltip title={uploadBlocked ? "任务执行或状态变更期间不能上传" : platformStatus === "COMPLETED" ? "上传新结果将恢复任务为执行中" : "上传选中的任务结果"}><Button size="small" type="primary" icon={<UploadMinioIcon />} loading={uploadingToMinio} disabled={!selected.length || uploadingToMinio || uploadBlocked} onClick={onUploadToMinio}>上传到 MinIO</Button></Tooltip>}{mission && <Tooltip title={ontologyAvailable ? (ontologyReady ? "展示已生成的本体树图" : "根据已有产物画图") : "缺少逻辑实体 CSV，不能画图"}><Button size="small" loading={drawingOntology} disabled={!ontologyAvailable || drawingOntology} onClick={onDrawOntology}>{ontologyReady ? "展示" : "画图"}</Button></Tooltip>}{mission && <span className="panel-note">{platformStatus === "COMPLETED" ? "上传新结果将恢复执行" : "当前任务范围"}</span>}</div>
     {loading ? <Spin /> : !files.length && !mission && !workspaceFolders ? <Empty description="暂无文件" /> : <div className="file-list">{groups.map(([dir, subgroups]) => {
       const collapsed = collapsedDirs.has(dir);
       const items = [...subgroups.values()].flat();
@@ -1591,6 +1685,8 @@ function App() {
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const [minioUploading, setMinioUploading] = useState(false);
+  const [ontologyDrawing, setOntologyDrawing] = useState(false);
+  const [ontologyTree, setOntologyTree] = useState(null);
   const [platformActionLoading, setPlatformActionLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1623,6 +1719,10 @@ function App() {
   const model = meta.model || "";
   const params = meta.params || { temperature: null, max_tokens: null, thinking: false, thinking_budget: 8000 };
   const provider = meta.provider || "";
+  useEffect(() => {
+    setOntologyTree(null);
+    setOntologyDrawing(false);
+  }, [active?.id]);
   const currentMission = missionIdentity(active);
   const isMissionTask = Boolean(currentMission);
   const hasConversation = Boolean(active?.hasConversation || events.some((event) => ["user", "assistant"].includes(event.type) && String(event.text || "").trim()));
@@ -2067,6 +2167,15 @@ function App() {
   const onSaveKey = async () => { const result = await api("/api/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: keyValue }) }); if (result.error) messageApi.error(result.error); else messageApi.success("模型密钥已保存"); };
 
   const fileUrl = (path) => { const project = active?.project || ""; return `/p/${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}${missionSearch({ taskId: active?.id || "" }, active)}`; };
+  const ontologyFiles = useMemo(() => {
+    const required = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"];
+    const byName = new Map();
+    files.forEach((file) => {
+      const name = String(file?.path || "").replaceAll("\\", "/").split("/").pop();
+      if (required.includes(name) && (!byName.has(name) || String(file.path).includes("mission-output/"))) byName.set(name, file.path);
+    });
+    return byName.has("logical_entities.csv") ? byName : null;
+  }, [files]);
   const showPreview = (next) => {
     if (previewImageUrlRef.current) URL.revokeObjectURL(previewImageUrlRef.current);
     previewImageUrlRef.current = next?.image || "";
@@ -2100,6 +2209,33 @@ function App() {
       }
     } catch (error) {
       if (requestId === previewRequestRef.current) messageApi.error(`打开文件失败: ${error.message}`);
+    }
+  };
+  const drawOntology = async () => {
+    if (ontologyTree) {
+      showPreview({ path: "本体树图", ontologyTree });
+      return;
+    }
+    if (!ontologyFiles) {
+      messageApi.warning("缺少逻辑实体 CSV，不能画图");
+      return;
+    }
+    setOntologyDrawing(true);
+    try {
+      const names = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"].filter((name) => ontologyFiles.has(name));
+      const responses = await Promise.all(names.map((name) => fetch(fileUrl(ontologyFiles.get(name)), { credentials: "same-origin" })));
+      const failedIndex = responses.findIndex((response) => !response.ok);
+      if (failedIndex >= 0) throw new Error(`${names[failedIndex]} 读取失败（HTTP ${responses[failedIndex].status}）`);
+      const texts = await Promise.all(responses.map((response) => response.text()));
+      const records = new Map(names.map((name, index) => [name, csvRecords(texts[index])]));
+      const tree = buildOntologyTree(records.get("business_objects.csv") || [], records.get("logical_entities.csv") || [], records.get("business_attributes.csv") || []);
+      if (!tree.length) throw new Error("逻辑实体产物中没有可展示的数据");
+      setOntologyTree(tree);
+      showPreview({ path: "本体树图", ontologyTree: tree });
+    } catch (error) {
+      messageApi.error(`画图失败：${error.message}`);
+    } finally {
+      setOntologyDrawing(false);
     }
   };
   const download = () => { if (!selectedFiles.length) return; const project = active?.project || ""; const query = new URLSearchParams({ project }); selectedFiles.forEach((path) => query.append("path", path)); const taskMission = missionIdentity(active); if (taskMission) { query.set("repositoryId", taskMission.repositoryId); query.set("taskCode", taskMission.taskCode); query.set("taskId", active?.id || ""); } window.open(`/api/download?${query}`, "_blank"); };
@@ -2186,9 +2322,9 @@ function App() {
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} autoApprove={autoApprove} onToggleAutoApprove={toggleAutoApprove} showAutoApprove={isMissionTask} /></div>
         </section>}
       </main>
-      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || active?.status === "queued" || platformActionLoading} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
+      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || active?.status === "queued" || platformActionLoading} onDrawOntology={drawOntology} drawingOntology={ontologyDrawing} ontologyReady={Boolean(ontologyTree)} ontologyAvailable={Boolean(ontologyFiles)} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
-      {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={closePreview}>{preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+      {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={closePreview}>{preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} /> : preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
       {MISSION && <MissionInfo open={missionInfoOpen} context={missionContext} loading={missionLoading} onClose={() => setMissionInfoOpen(false)} />}
     </div>
