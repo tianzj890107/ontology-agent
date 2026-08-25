@@ -413,6 +413,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('onDrawOntology={drawStandaloneOntology}', source)
         self.assertIn('function PreviewModalTitle({ title, fullscreen, onToggle })', source)
         self.assertIn('className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"}', source)
+        self.assertIn('centered={!previewFullscreen}', source)
+        self.assertIn('wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""}', source)
         self.assertIn('symbolSize: [Math.max(92, Math.min(220, length * 14 + 32)), 38]', source)
         self.assertIn('position: "inside"', source)
         self.assertIn('preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} />', source)
