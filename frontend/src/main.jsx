@@ -1446,6 +1446,7 @@ function buildOntologyTree(businessObjects, logicalEntities, businessAttributes)
 
 function OntologyTreePreview({ data }) {
   const containerRef = useRef(null);
+  const hasBusinessObjects = data.some((node) => node.nodeType === "businessObject");
   useEffect(() => {
     let disposed = false;
     let chart = null;
@@ -1454,10 +1455,17 @@ function OntologyTreePreview({ data }) {
       if (disposed || !containerRef.current) return;
       chart = echarts.init(containerRef.current);
       chart.setOption({
-        tooltip: { trigger: "item", formatter: ({ data: node }) => node?.name || "" },
+        tooltip: { trigger: "item", formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
         series: [{
           type: "tree",
-          data,
+          data: [{
+            id: "ontology:virtual-root",
+            name: "",
+            virtualRoot: true,
+            symbolSize: 0,
+            itemStyle: { opacity: 0 },
+            children: data,
+          }],
           top: 28,
           left: 80,
           bottom: 28,
@@ -1465,10 +1473,10 @@ function OntologyTreePreview({ data }) {
           orient: "LR",
           symbol: "circle",
           symbolSize: 9,
-          initialTreeDepth: 1,
+          initialTreeDepth: hasBusinessObjects ? 2 : 1,
           expandAndCollapse: true,
           roam: true,
-          label: { position: "left", verticalAlign: "middle", align: "right", fontSize: 13, formatter: ({ data: node }) => node?.name || "" },
+          label: { position: "left", verticalAlign: "middle", align: "right", fontSize: 13, formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
           leaves: { label: { position: "right", verticalAlign: "middle", align: "left" } },
           emphasis: { focus: "descendant" },
           animationDuration: 300,
@@ -1483,7 +1491,7 @@ function OntologyTreePreview({ data }) {
       observer?.disconnect();
       chart?.dispose();
     };
-  }, [data]);
+  }, [data, hasBusinessObjects]);
   return <div className="ontology-tree-preview" ref={containerRef} />;
 }
 
@@ -1678,6 +1686,7 @@ function App() {
   const [text, setText] = useState("");
   const [pendingFiles, setPendingFiles] = useState([]);
   const [files, setFiles] = useState([]);
+  const [filesTaskId, setFilesTaskId] = useState("");
   const [filesOpen, setFilesOpen] = useState(true);
   const [filesLoading, setFilesLoading] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -1709,6 +1718,7 @@ function App() {
   const taskPollInFlightRef = useRef(new Set());
   const previewImageUrlRef = useRef("");
   const previewRequestRef = useRef(0);
+  const filesRequestRef = useRef(0);
   const [messageApi, contextHolder] = message.useMessage();
   const fileInput = useRef(null);
   const feedRef = useRef(null);
@@ -1781,6 +1791,8 @@ function App() {
   useEffect(() => { if (active && filesOpen) loadFiles(); }, [active, filesOpen]);
   useEffect(() => {
     activeTaskIdRef.current = active?.id || "";
+    setFiles([]);
+    setFilesTaskId("");
     setSelectedFiles([]);
     setFocusFile("");
     closePreview();
@@ -1909,6 +1921,9 @@ function App() {
     // the server-absolute logTotal; never derive it from client node counts.
     logWindowRef.current.set(current.id, { start: logStart, total: logTotal, cursor: logTotal, generation: Date.now() });
     activeTaskIdRef.current = current.id;
+    setFiles([]);
+    setFilesTaskId("");
+    setOntologyTree(null);
     setActive(current);
     setEvents(mergeEvents([], recentEvents, `task:${current.id}`));
     setView("task"); setText("");
@@ -1964,17 +1979,21 @@ function App() {
   }, [active?.id, active?.status, view, busy]);
 
   const loadFiles = async (task = active) => {
+    const taskId = task?.id || "";
+    const requestId = ++filesRequestRef.current;
     setFilesLoading(true);
     const project = task?.project || "";
     const query = `/api/files?project=${encodeURIComponent(project)}${missionQuery({ taskId: task?.id || "" }, task)}`;
     const result = await api(query);
     if (!result.error) {
       const loadedFiles = (result.files || []).filter((file) => !String(file.path).includes("-sheets/") && !String(file.path).endsWith("manifest.json"));
+      if (activeTaskIdRef.current !== taskId || filesRequestRef.current !== requestId) return [];
       setFiles(loadedFiles);
+      setFilesTaskId(taskId);
       setFilesLoading(false);
       return loadedFiles;
     }
-    setFilesLoading(false);
+    if (filesRequestRef.current === requestId) setFilesLoading(false);
     return [];
   };
 
@@ -2166,7 +2185,7 @@ function App() {
   const onModel = async (value) => { const result = await api("/api/model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: value }) }); if (result.error) messageApi.error(result.error); else setMeta((previous) => ({ ...previous, model: result.model, provider: (previous.models || []).find((item) => item.id === result.model)?.provider || previous.provider })); };
   const onSaveKey = async () => { const result = await api("/api/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: keyValue }) }); if (result.error) messageApi.error(result.error); else messageApi.success("模型密钥已保存"); };
 
-  const fileUrl = (path) => { const project = active?.project || ""; return `/p/${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}${missionSearch({ taskId: active?.id || "" }, active)}`; };
+  const fileUrl = (path, task = active) => { const project = task?.project || ""; return `/p/${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}${missionSearch({ taskId: task?.id || "" }, task)}`; };
   const ontologyFiles = useMemo(() => {
     const required = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"];
     const byName = new Map();
@@ -2174,8 +2193,8 @@ function App() {
       const name = String(file?.path || "").replaceAll("\\", "/").split("/").pop();
       if (required.includes(name) && (!byName.has(name) || String(file.path).includes("mission-output/"))) byName.set(name, file.path);
     });
-    return byName.has("logical_entities.csv") ? byName : null;
-  }, [files]);
+    return filesTaskId === active?.id && byName.has("logical_entities.csv") ? byName : null;
+  }, [files, filesTaskId, active?.id]);
   const showPreview = (next) => {
     if (previewImageUrlRef.current) URL.revokeObjectURL(previewImageUrlRef.current);
     previewImageUrlRef.current = next?.image || "";
@@ -2212,8 +2231,10 @@ function App() {
     }
   };
   const drawOntology = async () => {
-    if (ontologyTree) {
-      showPreview({ path: "本体树图", ontologyTree });
+    const task = active;
+    const taskId = task?.id || "";
+    if (ontologyTree?.taskId === taskId) {
+      showPreview({ path: "本体树图", ontologyTree: ontologyTree.data });
       return;
     }
     if (!ontologyFiles) {
@@ -2223,14 +2244,15 @@ function App() {
     setOntologyDrawing(true);
     try {
       const names = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"].filter((name) => ontologyFiles.has(name));
-      const responses = await Promise.all(names.map((name) => fetch(fileUrl(ontologyFiles.get(name)), { credentials: "same-origin" })));
+      const responses = await Promise.all(names.map((name) => fetch(fileUrl(ontologyFiles.get(name), task), { credentials: "same-origin" })));
       const failedIndex = responses.findIndex((response) => !response.ok);
       if (failedIndex >= 0) throw new Error(`${names[failedIndex]} 读取失败（HTTP ${responses[failedIndex].status}）`);
       const texts = await Promise.all(responses.map((response) => response.text()));
       const records = new Map(names.map((name, index) => [name, csvRecords(texts[index])]));
       const tree = buildOntologyTree(records.get("business_objects.csv") || [], records.get("logical_entities.csv") || [], records.get("business_attributes.csv") || []);
       if (!tree.length) throw new Error("逻辑实体产物中没有可展示的数据");
-      setOntologyTree(tree);
+      if (activeTaskIdRef.current !== taskId) return;
+      setOntologyTree({ taskId, data: tree });
       showPreview({ path: "本体树图", ontologyTree: tree });
     } catch (error) {
       messageApi.error(`画图失败：${error.message}`);
@@ -2322,7 +2344,7 @@ function App() {
           <div className="task-composer"><Composer value={text} onChange={setText} onSend={send} onAttach={onAttach} pendingFiles={pendingFiles} mission={MISSION} busy={busy} hasConversation={hasConversation} model={model} models={meta.models} onModel={onModel} onOpenSettings={() => setSettingsOpen(true)} placeholder={placeholder} projects={meta.projects} project={selectedProject} onProject={setSelectedProject} autoApprove={autoApprove} onToggleAutoApprove={toggleAutoApprove} showAutoApprove={isMissionTask} /></div>
         </section>}
       </main>
-      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || active?.status === "queued" || platformActionLoading} onDrawOntology={drawOntology} drawingOntology={ontologyDrawing} ontologyReady={Boolean(ontologyTree)} ontologyAvailable={Boolean(ontologyFiles)} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
+      <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || active?.status === "queued" || platformActionLoading} onDrawOntology={drawOntology} drawingOntology={ontologyDrawing} ontologyReady={ontologyTree?.taskId === active?.id} ontologyAvailable={Boolean(ontologyFiles)} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
       {preview && <Modal open title={preview.path} footer={null} width="88vw" onCancel={closePreview}>{preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} /> : preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />

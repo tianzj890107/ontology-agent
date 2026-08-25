@@ -142,3 +142,5 @@
 - 新增 `echarts` 前端依赖、树图预览样式及前端契约测试；主要文件：`frontend/package.json`、`frontend/package-lock.json`、`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/dist/`、`tests/test_frontend_contract.py`。
 - 验证结果：发布门禁 `tests.test_ontology_knowledge` + `tests.test_frontend_contract` 共 20 个测试通过；`npm run build` 成功（ECharts 独立异步 chunk `index-CzJ1nSGZ.js`，Vite 仅报告既有的大 chunk 警告）；`git diff --check` 通过。部署前确认 47313/47314 均无 active/queued/working/analyzing/validating 任务。
 - 部署结果：功能提交 `5513434` 已推送 `origin/20260727`；47313 经 `scripts/deploy_server.sh` 部署为 pid `2507913`，线上 HTML 已引用 `index-DjjgQVmz.js`；47314 重启为 pid `2509907`。两服务 `/`、`/health` 均 200，`core/coordinator` ready、active/queued 均为 0，启动日志均含 `connect=5s read=600s write=600s pool=600s` transport 基线；服务器仅保留既有运行数据文件本地修改。
+- 多业务对象显示修复：ECharts Tree 只消费单根树，旧版把多个业务对象直接作为多个根传入，导致仅绘制第一个；现统一挂载到不可见的技术根节点下，全部业务对象可同时展示，技术根不显示名称、节点或悬浮内容，并按是否存在业务对象自动调整默认展开深度。
+- 当前任务沙盒隔离修复：树图缓存改为绑定任务 ID，画图请求使用点击时当前任务的 project/task 身份和当前任务文件快照；切换任务时立即清空旧文件与旧图，异步文件列表或画图结果返回前再次校验任务 ID/请求序号，旧任务的迟到响应不能覆盖新任务，避免不同任务错误展示同一棵树。
