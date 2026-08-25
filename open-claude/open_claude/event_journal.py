@@ -172,7 +172,14 @@ def _read_all_into(path: str, events: list[dict[str, Any]]) -> None:
 
 
 def last_valid_seq(path: str, *, lock: Optional[Any] = None) -> Optional[int]:
-    """Return the ``seq`` of the last valid line, or None for an empty journal."""
+    """Return the logical position of the last valid event.
+
+    Journals written before persistent event identities were introduced do
+    not contain ``seq``.  Their line position is nevertheless the original
+    absolute event position, so recovery must use it instead of treating a
+    non-empty legacy journal as empty.  Taking the maximum also handles a
+    journal containing legacy lines followed by newly sequenced events.
+    """
     seq: Optional[int] = None
     try:
         if lock is not None:
@@ -187,17 +194,22 @@ def last_valid_seq(path: str, *, lock: Optional[Any] = None) -> Optional[int]:
 
 def _last_valid_seq_unlocked(path: str) -> Optional[int]:
     seq: Optional[int] = None
+    valid_position = -1
     with _open_text(path) as fh:
-        position = 0
         for line in fh:
-            position += 1
             try:
                 event = _parse_line(line)
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
-            if isinstance(event, dict) and isinstance(event.get("seq"), int):
-                seq = int(event["seq"])
-    return seq
+            if not isinstance(event, dict):
+                continue
+            valid_position += 1
+            if isinstance(event.get("seq"), int):
+                explicit_seq = int(event["seq"])
+                seq = explicit_seq if seq is None else max(seq, explicit_seq)
+    if valid_position < 0:
+        return None
+    return max(valid_position, seq if seq is not None else valid_position)
 
 
 def tail_events(path: str, limit: int, *, lock: Optional[Any] = None) -> list[dict[str, Any]]:

@@ -1066,6 +1066,43 @@ class TaskJournalPersistenceTests(unittest.TestCase):
                 self.assertIsNotNone(restored)
                 self.assertEqual(restored.event_seq, 7)
 
+    def test_restore_legacy_journal_without_seq_uses_event_positions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            legacy_events = [
+                {"type": "user", "text": "question"},
+                {"type": "assistant", "text": "answer"},
+                {"type": "done"},
+            ]
+            rows = [{
+                **task.summary(), "log": [], "eventSeq": 0,
+                "missionContext": {}, "platformUploadedFiles": {},
+                "platformOutputPrefix": "", "platformLastError": "",
+                "sessionId": "", "userId": task.user_id,
+                "workspace": task.workspace, "taskWorkspace": "",
+            }]
+            with patch.object(oc_codex_server, "SANDBOX_DIR", directory), \
+                    patch.object(oc_codex_server, "WEB_TASK_PERSISTENCE_ENABLED", True), \
+                    patch.object(oc_codex_server, "TASK_HISTORY_DIR",
+                                 os.path.join(directory, ".task_history")), \
+                    patch.object(oc_codex_server, "TASKS_STATE_PATH",
+                                 os.path.join(directory, ".web_tasks.json")), \
+                    patch.object(oc_codex_server, "TASKS", {}), \
+                    patch.object(oc_codex_server, "persist_tasks"):
+                os.makedirs(os.path.join(directory, "p"), exist_ok=True)
+                os.makedirs(oc_codex_server.TASK_HISTORY_DIR, exist_ok=True)
+                with open(oc_codex_server.TASKS_STATE_PATH, "w", encoding="utf-8") as fh:
+                    json.dump(rows, fh)
+                with open(oc_codex_server._task_history_path(task.id), "w",
+                          encoding="utf-8") as fh:
+                    for event in legacy_events:
+                        fh.write(json.dumps(event) + "\n")
+                oc_codex_server.restore_tasks()
+                restored = oc_codex_server.TASKS.get(task.id)
+                self.assertIsNotNone(restored)
+                self.assertEqual(restored.event_seq, 3)
+                self.assertEqual(len(restored.log), 3)
+
     def test_working_snapshot_recovers_as_interrupted_and_retryable(self):
         with tempfile.TemporaryDirectory() as directory:
             task = self._task(directory)

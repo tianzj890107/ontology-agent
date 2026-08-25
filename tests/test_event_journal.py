@@ -54,6 +54,22 @@ class EventJournalTests(unittest.TestCase):
         earlier = journal.read_range(self.path, 0, 5, lock=self.lock)
         self.assertEqual([event["seq"] for event in earlier], [0, 1, 2, 3, 4])
 
+    def test_legacy_events_without_seq_restore_by_absolute_position(self):
+        events = [
+            {"type": "user", "text": "legacy question"},
+            {"type": "assistant", "text": "legacy answer"},
+            {"type": "done"},
+        ]
+        journal.seed(self.path, events, lock=self.lock)
+        self.assertEqual(journal.last_valid_seq(self.path, lock=self.lock), 2)
+
+    def test_mixed_legacy_and_sequenced_events_restore_next_position(self):
+        journal.seed(self.path, [{"type": "user"}, {"type": "assistant"}],
+                     lock=self.lock)
+        journal.append_line(self.path, {"type": "user", "seq": 2},
+                            lock=self.lock)
+        self.assertEqual(journal.last_valid_seq(self.path, lock=self.lock), 2)
+
     def test_read_range_uses_absolute_positions(self):
         _write_lines(self.path, 1000)
         window = journal.read_range(self.path, 400, 460, lock=self.lock)

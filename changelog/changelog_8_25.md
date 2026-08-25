@@ -10,6 +10,13 @@
 
 ## 2026-08-25
 
+### 18. 47313 全部旧会话历史恢复
+
+- 问题：P0 事件 journal 上线后，47313 的 43 个任务仍存在且 `.task_history` 中约 62MB 历史数据完整，但旧 journal 事件没有 `seq` 字段；启动恢复只寻找最后一个显式 `seq`，将所有旧会话错误恢复为 `eventSeq=0`，导致点击会话返回空事件，47314 因使用独立 RunStore 不受影响。
+- 修复：共享 `event_journal.last_valid_seq()` 兼容旧格式，以有效事件的绝对位置和显式 `seq` 的较大者恢复最后事件位置；兼容纯旧 journal、纯新 journal以及旧事件后追加新序号事件的混合 journal，不重写生产历史文件，恢复后新增事件从正确绝对序号继续。
+- 测试：新增无 `seq` 旧 journal、旧新混合 journal及 47313 启动恢复集成用例；`tests.test_event_journal` + `tests.test_tasks` 共 89 项通过，`py_compile` 与 `git diff --check` 通过。
+- 主要文件：`open-claude/open_claude/event_journal.py`、`tests/test_event_journal.py`、`tests/test_tasks.py`、`changelog/changelog_8_25.md`。
+
 ### 1. 8-24 会话状态同步修复部署收尾（跨天）
 
 - 8-24 会话的「会话状态同步统一修复」功能代码 `b256e68` 已于 8-24 部署并验证（47313/47314 均 `/`、`/health` 200，默认模型 `Qwen/Qwen3-80B-AWQ`，47313 已服务新 bundle `index-DNajaSjr.js`）。
