@@ -1519,6 +1519,8 @@ function OntologyTreePreview({ data }) {
     let disposed = false;
     let chart = null;
     let observer = null;
+    let wheelTarget = null;
+    let wheelHandler = null;
     void import("echarts").then((echarts) => {
       if (disposed || !containerRef.current || !scrollRef.current) return;
       chart = echarts.init(containerRef.current);
@@ -1627,12 +1629,21 @@ function OntologyTreePreview({ data }) {
         }, { notMerge: true });
       };
       renderGraph();
+      wheelTarget = containerRef.current;
+      wheelHandler = (event) => {
+        if (event.ctrlKey) return;
+        event.preventDefault();
+        event.stopPropagation();
+        chart.dispatchAction({ type: "graphRoam", seriesIndex: 0, dx: -event.deltaX, dy: -event.deltaY });
+      };
+      wheelTarget.addEventListener("wheel", wheelHandler, { passive: false, capture: true });
       observer = new ResizeObserver(() => renderGraph());
       observer.observe(scrollRef.current);
     });
     return () => {
       disposed = true;
       observer?.disconnect();
+      if (wheelTarget && wheelHandler) wheelTarget.removeEventListener("wheel", wheelHandler, { capture: true });
       chart?.dispose();
     };
   }, [data, hasAttributes, hasBusinessObjects, showAttributes]);
