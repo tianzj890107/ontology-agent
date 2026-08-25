@@ -420,6 +420,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} />', source)
         self.assertIn('.ontology-tree-preview{', styles)
         self.assertIn('.ontology-tree-scroll{', styles)
+        self.assertIn('.preview-modal-title>button{position:absolute;top:12px;right:48px;', styles)
 
 
     def test_continue_run_preserves_event_cursor_and_guards_double_submit(self):
