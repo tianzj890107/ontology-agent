@@ -13,6 +13,7 @@
 ### 19. 本体可视化业务属性默认折叠
 
 - 47313/47314 共用的本体可视化打开时默认只展示业务对象和逻辑实体，不再自动铺开业务属性；存在属性时保留“展开业务属性”按钮，用户点击后再显示全部属性，并可再次点击隐藏。
+- 验证与部署：`tests.test_frontend_contract` 12 项通过，`npm run build` 与 `git diff --check` 通过；提交 `8579de6` 已部署，47313/47314 均返回 200 并加载新 bundle `index-3elP2Ups.js`。
 - 主要文件：`frontend/src/main.jsx`、`tests/test_frontend_contract.py`、`frontend/dist/`、`changelog/changelog_8_25.md`。
 
 ### 18. 47313 全部旧会话历史恢复
