@@ -1495,7 +1495,15 @@ function buildOntologyTree(businessObjects, logicalEntities, businessAttributes)
       ...ontologyNodeStyle(name, "#2563eb"),
     };
   });
-  return [...objectNodes, ...entityNodes.filter(({ objectCode }) => !objectCodes.has(objectCode)).map(({ node }) => node)];
+  const unassignedEntities = entityNodes.filter(({ objectCode }) => !objectCodes.has(objectCode)).map(({ node }) => ({ ...node, lineStyle: { opacity: 0 } }));
+  return [...objectNodes, ...(unassignedEntities.length ? [{
+    id: "ontology:unassigned-entities",
+    name: "",
+    virtualGroup: true,
+    symbolSize: 0,
+    itemStyle: { opacity: 0 },
+    children: unassignedEntities,
+  }] : [])];
 }
 
 function OntologyTreePreview({ data }) {
@@ -1514,7 +1522,7 @@ function OntologyTreePreview({ data }) {
         indexNodes(node.children || []);
       });
       indexNodes(data);
-      const expanded = new Set(hasBusinessObjects ? data.filter((node) => node.nodeType === "businessObject").map((node) => node.id) : []);
+      const expanded = new Set(hasBusinessObjects ? data.filter((node) => node.nodeType === "businessObject" || node.virtualGroup).map((node) => node.id) : []);
       const visibleNode = (node) => ({
         ...node,
         ...(expanded.has(node.id) && node.children?.length ? { children: node.children.map(visibleNode) } : { children: undefined }),
@@ -1539,7 +1547,7 @@ function OntologyTreePreview({ data }) {
               children: data.map((node) => ({ ...visibleNode(node), lineStyle: { opacity: 0 } })),
             }],
             top: 40,
-            left: hasBusinessObjects ? "-32%" : "-71%",
+            left: hasBusinessObjects ? "-35%" : "-71%",
             bottom: 40,
             right: 150,
             orient: "LR",
