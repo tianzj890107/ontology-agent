@@ -123,3 +123,13 @@
   - 全量 `pytest tests/`：508 passed, 13 skipped（10 个真实 Redis 集成用例在未设 `ONTOLOGY_TEST_REDIS_URL` 时 skip + 3 个 Linux bubblewrap sandbox 用例，macOS 无法运行）, 344 subtests passed。
   - `npm run build` 成功（最终 bundle `index-DAkuCftD.js`/`index-IgQ4J5mi.css`，旧 `index-DNajaSjr.js`/`index-DhhPofaH.css` 已删）；全部修改 Python 文件 `py_compile` 通过；`git diff --check` 通过；部署脚本 `bash -n` 通过。
   - 未部署、未提交、未推送。
+
+### 6. 部署记录（c58c879，47313/47314）
+
+- 2026-08-25 下午按 DEPLOYMENT.md 本地发布流程部署：门禁测试（`tests.test_ontology_knowledge` + `tests.test_frontend_contract`，19 通过）→ `npm run build` → 选择性提交（排除 `mission-input/`、`mission-output/`、`mission-work/`、`work/`、`rules/` 用户数据）→ 推送 `origin/20260727`（`4dc1f79..c58c879`）。
+- 服务器（company-server）部署前确认无 queued/working 活跃任务（43 个任务中 2 个 blocked 为稳定状态）。
+- 47313：`bash scripts/deploy_server.sh` 成功，`commit=c58c879`，新 pid 2378228，`/` 与 `/health` 均 200，启动日志含部署基线 `provider transport timeouts: connect=5s read=600s write=600s pool=600s`，`/health` 含 `coordinator_ready`。
+- 47314：重启 `standalone_modeling_server.py --port 47314`（新 pid 2380165），`/` 与 `/health` 均 200，`core: ready`，启动日志含同一 provider transport 基线。
+- 两服务 `/health` 均报告 `coordination.backend=file`、`quotaScope=process`（file 后端能力边界，与实现一致；未启用 Redis 模式，未安装/使用 redis 依赖）。
+- 服务器工作树保留 `.runs.json`/`.runs.sqlite3` 运行数据本地修改，未受影响。
+- 已提交、已推送；部署完成。
