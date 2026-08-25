@@ -1507,78 +1507,96 @@ function buildOntologyTree(businessObjects, logicalEntities, businessAttributes)
 }
 
 function OntologyTreePreview({ data }) {
+  const scrollRef = useRef(null);
   const containerRef = useRef(null);
   const hasBusinessObjects = data.some((node) => node.nodeType === "businessObject");
+  const hasAttributes = data.some((root) => {
+    const entities = root.nodeType === "entity" ? [root] : (root.children || []);
+    return entities.some((entity) => entity.nodeType === "entity" && entity.children?.length);
+  });
+  const [showAttributes, setShowAttributes] = useState(true);
   useEffect(() => {
     let disposed = false;
     let chart = null;
     let observer = null;
     void import("echarts").then((echarts) => {
-      if (disposed || !containerRef.current) return;
+      if (disposed || !containerRef.current || !scrollRef.current) return;
       chart = echarts.init(containerRef.current);
-      const nodesById = new Map();
-      const indexNodes = (nodes) => nodes.forEach((node) => {
-        nodesById.set(node.id, node);
-        indexNodes(node.children || []);
-      });
-      indexNodes(data);
-      const expanded = new Set(hasBusinessObjects ? data.filter((node) => node.nodeType === "businessObject" || node.virtualGroup).map((node) => node.id) : []);
-      const visibleNode = (node) => ({
-        ...node,
-        ...(expanded.has(node.id) && node.children?.length ? { children: node.children.map(visibleNode) } : { children: undefined }),
-      });
-      const visibleRows = (nodes) => nodes.reduce((total, node) => {
-        if (expanded.has(node.id) && node.children?.length) return total + visibleRows(node.children);
-        return total + 1;
-      }, 0);
-      const renderTree = () => {
-        const height = Math.max(520, visibleRows(data) * 58 + 80);
-        if (containerRef.current.style.height !== `${height}px`) containerRef.current.style.height = `${height}px`;
+      const renderGraph = () => {
+        const viewportWidth = Math.max(980, scrollRef.current?.clientWidth || 0);
+        const objectX = 110;
+        const entityX = hasBusinessObjects ? 390 : 110;
+        const attributeStartX = entityX + 270;
+        const attributeGap = 230;
+        const attributeColumns = Math.max(2, Math.min(4, Math.floor((viewportWidth - attributeStartX - 90) / attributeGap) + 1));
+        const graphNodes = [];
+        const graphLinks = [];
+        let cursorY = 40;
+        const addNode = (node, x, y) => graphNodes.push({ ...node, children: undefined, x, y });
+        const addEntity = (entity, objectId = null) => {
+          const attributes = showAttributes ? (entity.children || []) : [];
+          const rows = Math.max(1, Math.ceil(attributes.length / attributeColumns));
+          const bandHeight = rows * 58;
+          const entityY = cursorY + bandHeight / 2;
+          addNode(entity, entityX, entityY);
+          if (objectId) graphLinks.push({ source: objectId, target: entity.id });
+          attributes.forEach((attribute, index) => {
+            const column = index % attributeColumns;
+            const row = Math.floor(index / attributeColumns);
+            addNode(attribute, attributeStartX + column * attributeGap, cursorY + row * 58 + 29);
+            graphLinks.push({ source: entity.id, target: attribute.id });
+          });
+          cursorY += bandHeight;
+          return entityY;
+        };
+        data.forEach((root) => {
+          if (root.nodeType === "businessObject") {
+            const entityYs = (root.children || []).filter((node) => node.nodeType === "entity").map((entity) => addEntity(entity, root.id));
+            const objectY = entityYs.length ? entityYs.reduce((sum, value) => sum + value, 0) / entityYs.length : cursorY + 29;
+            addNode(root, objectX, objectY);
+            if (!entityYs.length) cursorY += 58;
+          } else if (root.virtualGroup) {
+            (root.children || []).filter((node) => node.nodeType === "entity").forEach((entity) => addEntity(entity));
+          } else if (root.nodeType === "entity") addEntity(root);
+        });
+        const height = Math.max(520, cursorY + 40);
+        const width = Math.max(980, showAttributes && hasAttributes ? attributeStartX + (attributeColumns - 1) * attributeGap + 160 : entityX + 180);
+        containerRef.current.style.width = `${width}px`;
+        containerRef.current.style.height = `${height}px`;
+        chart.resize({ width, height });
         chart.setOption({
-          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
+          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.name || "" },
           series: [{
-            type: "tree",
-            data: [{
-              id: "ontology:virtual-root",
-              name: "",
-              virtualRoot: true,
-              symbolSize: 0,
-              itemStyle: { opacity: 0 },
-              children: data.map((node) => ({ ...visibleNode(node), lineStyle: { opacity: 0 } })),
-            }],
+            type: "graph",
+            layout: "none",
+            data: graphNodes,
+            links: graphLinks,
             top: 40,
-            left: hasBusinessObjects ? "-48%" : "-71%",
+            left: 40,
             bottom: 40,
-            right: 150,
-            orient: "LR",
-            expandAndCollapse: false,
+            right: 60,
             roam: true,
-            label: { position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: 13, overflow: "truncate", formatter: ({ data: node }) => node?.virtualRoot ? "" : node?.name || "" },
-            leaves: { label: { position: "inside", verticalAlign: "middle", align: "center" } },
-            emphasis: { focus: "descendant" },
+            label: { show: true, position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: 13, overflow: "truncate", formatter: ({ data: node }) => node?.name || "" },
+            lineStyle: { color: "#94a3b8", width: 1.2, opacity: 0.8, curveness: 0.08 },
+            emphasis: { focus: "none", scale: 1.12 },
+            blur: { itemStyle: { opacity: 1 }, lineStyle: { opacity: 0.8 }, label: { opacity: 1 } },
+            selectedMode: false,
             animationDuration: 0,
             animationDurationUpdate: 0,
           }],
         }, { notMerge: true });
-        chart.resize();
       };
-      chart.on("click", ({ data: clicked }) => {
-        const original = nodesById.get(clicked?.id);
-        if (!original?.children?.length) return;
-        if (expanded.has(original.id)) expanded.delete(original.id); else expanded.add(original.id);
-        renderTree();
-      });
-      renderTree();
-      observer = new ResizeObserver(() => chart?.resize());
-      observer.observe(containerRef.current);
+      renderGraph();
+      observer = new ResizeObserver(() => renderGraph());
+      observer.observe(scrollRef.current);
     });
     return () => {
       disposed = true;
       observer?.disconnect();
       chart?.dispose();
     };
-  }, [data, hasBusinessObjects]);
-  return <div className="ontology-tree-scroll"><div className="ontology-tree-preview" ref={containerRef} /></div>;
+  }, [data, hasAttributes, hasBusinessObjects, showAttributes]);
+  return <div className="ontology-tree-shell">{hasAttributes && <div className="ontology-tree-toolbar"><Button size="small" onClick={() => setShowAttributes((value) => !value)}>{showAttributes ? "隐藏业务属性" : "展开业务属性"}</Button></div>}<div className="ontology-tree-scroll" ref={scrollRef}><div className="ontology-tree-preview" ref={containerRef} /></div></div>;
 }
 
 function PreviewModalTitle({ title, fullscreen, onToggle }) {
