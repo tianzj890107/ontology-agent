@@ -21,3 +21,4 @@
 - 缩放与漫游：节点启用 `nodeScaleRatio: 1`，初始节点尺寸、字号和线宽使用同一 fit 比例；缩小时文字与节点同步缩小，放大时文字同步增长但在 1.8 倍封顶。保留普通双指横向/纵向滑动画布平移、触控板捏合缩放、按住拖动平移；悬浮仅放大当前节点，不淡化其他节点，也没有节点折叠交互。
 - 验证：Node 布局测试 11 项通过，覆盖五层配置、外圈容量递增、6 个 220px 宽业务对象多轨无重叠、3 个逻辑实体各 40 个属性共享轨道、实际边界锚点、fit 与字号缩放；接近实际规模的 4 个业务对象、24 个实体、644 个属性压力用例共 672 节点，约 9ms 完成、无重叠，属性 12 条共享轨道容量由 22 递增到 90。相关 Python 测试 20 项通过；`npm run build` 成功（bundle `index-C4TeUgpv.js` / `index-DY8plCOl.css`，仅有既有大 chunk 警告）；`git diff --check` 通过。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/ontologyRadialLayout.js`、`frontend/src/styles.css`、`frontend/tests/ontologyRadialLayout.test.mjs`、`tests/test_frontend_contract.py`、`frontend/dist/`。
+- 部署：功能提交 `1079d26` 已推送并发布；部署前两套任务存储均无活动或排队任务，47313 pid `3679820`、47314 pid `3681321`。服务器发布门禁 20 项通过，线上 JS/CSS 为 `index-C4TeUgpv.js` / `index-DY8plCOl.css`，两服务健康检查通过。
