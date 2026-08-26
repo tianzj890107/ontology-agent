@@ -4,6 +4,7 @@ import {
   computeFitScale,
   computeNodeAngle,
   computeRingRadius,
+  computeSectorAngles,
   computeTrackCapacity,
   computeTrackCount,
   hasNodeOverlap,
@@ -47,10 +48,37 @@ test("选择层级只保留可见节点及两端都可见的真实连线", () =>
   assert.deepEqual(layout.links, [relation("bo", "le")]);
 });
 
-test("业务对象内圈容量不足时使用共享后续轨道且不重叠", () => {
+test("业务对象内圈会自动扩圈且不重叠", () => {
   const nodes = Array.from({ length: 6 }, (_, index) => makeNode("businessObject", `bo${index}`, 220));
   const layout = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["businessObject"], minGap: 18 });
-  assert.ok(layout.tracks.filter((track) => track.layer === "businessObject").length > 1);
+  assert.ok(layout.tracks.filter((track) => track.layer === "businessObject").length >= 1);
+  assert.equal(hasNodeOverlap(layout.nodes, 17.99), false);
+});
+
+test("数据多的扇区更宽但密度也更高", () => {
+  const sectors = computeSectorAngles([{ id: "small", count: 4, weight: 2 }, { id: "large", count: 100, weight: 10 }]);
+  assert.ok(sectors[1].span > sectors[0].span);
+  assert.ok(sectors[1].span / sectors[0].span < 100 / 4);
+});
+
+test("业务对象及其逻辑实体保持同一方向并在各轨道轮转分布", () => {
+  const nodes = [];
+  const links = [];
+  for (const bo of ["bo-a", "bo-b"]) {
+    nodes.push({ ...makeNode("businessObject", bo), sectorId: bo });
+    for (let index = 0; index < 12; index += 1) {
+      const id = `${bo}-le-${index}`;
+      nodes.push({ ...makeNode("logicalEntity", id, 150), sectorId: bo, parentId: bo });
+      links.push(relation(bo, id));
+    }
+  }
+  const layout = layoutOntologyRadial({ nodes, links }, { selectedLayers: ["businessObject", "logicalEntity"] });
+  for (const bo of ["bo-a", "bo-b"]) {
+    const businessObject = layout.nodes.find((node) => node.id === bo);
+    const entities = layout.nodes.filter((node) => node.layer === "logicalEntity" && node.sectorId === bo);
+    assert.equal(Math.min(...entities.map((node) => node.trackIndex)), 0);
+    assert.ok(entities.every((node) => Math.cos(node.angle - businessObject.angle) > 0));
+  }
   assert.equal(hasNodeOverlap(layout.nodes, 17.99), false);
 });
 

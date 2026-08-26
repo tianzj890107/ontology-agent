@@ -1482,6 +1482,7 @@ function buildOntologyGraph(records) {
     const code = row["业务对象编码"];
     if (!code) return;
     const node = addNode("businessObject", "businessObject", code, row["业务对象名称"] || code, "#2563eb", index);
+    node.sectorId = node.id;
     addIndex("businessObject", node, code, row["业务对象名称"]);
   });
   rows("logicalEntity").forEach((row, index) => {
@@ -1490,6 +1491,8 @@ function buildOntologyGraph(records) {
     const node = addNode("logicalEntity", "entity", code, row["逻辑实体名称"] || code, "#0f766e", index);
     addIndex("logicalEntity", node, code, row["逻辑实体名称"]);
     const parent = indexes.businessObject.get(row["业务对象编码"]) || indexes.businessObject.get(row["业务对象名称"]);
+    node.parentId = parent?.id || null;
+    node.sectorId = parent?.sectorId || "ontology:unassigned";
     if (parent) links.push({ source: parent.id, target: node.id });
   });
   rows("businessAttribute").forEach((row, index) => {
@@ -1498,6 +1501,8 @@ function buildOntologyGraph(records) {
     const node = addNode("businessAttribute", "attribute", code, row["业务属性名称"] || code, "#64748b", index);
     addIndex("businessAttribute", node, code, row["业务属性名称"]);
     const parent = indexes.logicalEntity.get(row["逻辑实体编码"]) || indexes.logicalEntity.get(row["逻辑实体名称"]);
+    node.parentId = parent?.id || null;
+    node.sectorId = parent?.sectorId || "ontology:unassigned";
     if (parent) links.push({ source: parent.id, target: node.id });
   });
   rows("metric").forEach((row, index) => {
@@ -1516,10 +1521,14 @@ function buildOntologyGraph(records) {
         linked.add(parent.id);
       }
     }));
+    const primaryParent = nodes.find((candidate) => linked.has(candidate.id));
+    node.parentId = primaryParent?.id || null;
+    node.sectorId = primaryParent?.sectorId || "ontology:metrics";
   });
   rows("businessRule").forEach((row, index) => {
     const code = row["规则编码"] || `rule-${index + 1}`;
-    addNode("businessRule", "rule", code, row["规则名称"] || code, "#c2410c", index);
+    const node = addNode("businessRule", "rule", code, row["规则名称"] || code, "#c2410c", index);
+    node.sectorId = "ontology:rules";
   });
   const availability = Object.fromEntries(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => [layer.key, nodes.some((node) => node.layer === layer.key)]));
   return { nodes, links, availability };
@@ -1570,6 +1579,8 @@ function OntologyTreePreview({ data }) {
           return;
         }
         const fitScale = computeFitScale(layout.naturalWidth, layout.naturalHeight, viewportWidth, viewportHeight);
+        const displayScale = Math.max(fitScale, 0.65);
+        const initialZoom = displayScale / Math.max(fitScale, 0.0001);
         const renderNodes = layout.nodes.map((node) => ({
           ...node,
           symbolSize: Array.isArray(node.symbolSize) ? node.symbolSize.map((value) => value * fitScale) : node.symbolSize,
@@ -1587,10 +1598,11 @@ function OntologyTreePreview({ data }) {
             bottom: 0,
             right: 0,
             roam: true,
-            zoom: 1,
+            zoom: initialZoom,
+            scaleLimit: { min: 0.15, max: 12 },
             nodeScaleRatio: 1,
-            label: { show: true, position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: scaledTypography(13, fitScale, 1), overflow: "truncate", formatter: ({ data: node }) => node?.layoutAnchor ? "" : node?.name || "" },
-            lineStyle: { color: "#94a3b8", width: Math.max(0.5, 1.2 * fitScale), opacity: 0.8, curveness: 0.08 },
+            label: { show: true, position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: scaledTypography(13, displayScale, 1), overflow: "truncate", formatter: ({ data: node }) => node?.layoutAnchor ? "" : node?.name || "" },
+            lineStyle: { color: "#94a3b8", width: Math.max(0.5, 1.2 * displayScale), opacity: 0.8, curveness: 0.08 },
             emphasis: { focus: "none", scale: 1.12 },
             blur: { itemStyle: { opacity: 1 }, lineStyle: { opacity: 0.8 }, label: { opacity: 1 } },
             selectedMode: false,
@@ -1603,7 +1615,7 @@ function OntologyTreePreview({ data }) {
         chart.on("graphRoam", (event) => {
           if (!event.zoom) return;
           roamZoom *= event.zoom;
-          chart.setOption({ series: [{ id: "ontology-graph", label: { fontSize: scaledTypography(13, fitScale, roamZoom) } }] });
+          chart.setOption({ series: [{ id: "ontology-graph", label: { fontSize: scaledTypography(13, displayScale, roamZoom) } }] });
         });
       };
       renderGraph();
