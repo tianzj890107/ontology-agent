@@ -1461,10 +1461,7 @@ function OntologyFilterIcon() {
 }
 
 function defaultOntologyLayers(availability) {
-  const preferred = ["businessObject", "logicalEntity"].filter((layer) => availability[layer]);
-  if (preferred.length) return preferred;
-  const fallback = ONTOLOGY_LAYER_DEFINITIONS.find((layer) => availability[layer.key]);
-  return fallback ? [fallback.key] : [];
+  return ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => availability[layer]);
 }
 
 function OntologyEChartsPreview({ data, appliedLayers }) {

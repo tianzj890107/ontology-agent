@@ -423,6 +423,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('export function scaledTypography(', layout_module)
         self.assertIn('const [appliedLayers, setAppliedLayers]', source)
         self.assertIn('const [draftLayers, setDraftLayers]', source)
+        self.assertIn('return ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => availability[layer]);', source)
         self.assertIn('setAppliedLayers(ONTOLOGY_LAYER_DEFINITIONS.map', source)
         self.assertIn('>确认</Button>', source)
         self.assertIn('disabled={!availability[layer.key]}', source)
