@@ -14,7 +14,7 @@
 
 ### 2. Sigma + Graphology + ForceAtlas2 本体网络图 Beta POC
 
-- 与 ECharts 并存：预览内保留“环形图 / 网络图 Beta”切换；在完成高密度径向布局后默认展示 ECharts 环形图，网络图 Beta 继续作为可选视图。两个 renderer 共用同一份当前 task/run 文件快照、统一 graph model 和 `appliedLayers`，切换视图不改变任务隔离、文件读取或五层筛选契约。
+- 与 ECharts 并存：预览内保留“环形图 / 网络图 Beta”切换，默认优先启动网络图 Beta，不初始化环形 renderer；网络图首屏可见后利用浏览器 idle 时段在后台预加载 ECharts 资源，使随后切换环形图无需等待大包下载。两个 renderer 共用同一份当前 task/run 文件快照、统一 graph model 和 `appliedLayers`，切换视图不改变任务隔离、文件读取或五层筛选契约。
 - 统一图模型：新增 `ontologyGraphModel.js`，统一把业务对象、逻辑实体、业务属性、指标、业务规则转换为标准 nodes/edges 并构建过滤后的 Graphology 图；只按正式编码/名称来源字段生成 BO→LE、LE→Attribute 和 Metric→来源节点关系，缺少可信归属字段的 Rule 仅生成孤立节点，隐藏中间层时不补造跨层关系。现有 ECharts 径向布局改为消费该共享模型，renderer 与交互实现保持原样。
 - ForceAtlas2：新增集中配置、确定性 semantic seed、按规模限制迭代、轻量节点防重叠、坐标归一化和孤立节点紧凑 packing；真实 963 节点/964 边数据对比多组参数后采用 `scalingRatio=4.5`、`gravity=0.25`、`edgeWeightInfluence=1`、`slowDown=4`、Barnes-Hut + LinLog，大图 160 次迭代约 299ms。Sigma 初次布局自动 fit，支持 pan/zoom、hover 完整标签、点击 1-hop 邻域高亮、空白取消、重新布局、ResizeObserver 和卸载 `kill()`；BO/LE 默认显示标签，Attribute 仅在放大、hover 或选中邻域时显示。
 - 验证：Node 25 项通过（统一模型、真实边、规则孤立、图层过滤、无伪边、有限坐标、稳定布局、孤立节点边界、多 BO、300+ 属性及仓库真实五层输出）；相关 Python contract 20 项通过；production build 成功，Sigma 独立异步 chunk 约 107KB gzip 约 30KB，保留既有 >500KB chunk warning；headless Chrome + 软件 WebGL 使用仓库真实 8 BO/26 LE/904 Attribute 数据完成渲染，160 次迭代较 55 次明显形成局部 cluster、减少中心毛球且无强制空心圆；`git diff --check` 通过。
@@ -31,7 +31,8 @@
 - 布局：`frontend/src/ontologyRadialLayout.js` 改为可测试的高密度语义带装箱。业务对象层以一个中心节点起步，数量增加时自动使用相邻多条内轨，避免扩大单一空心圆；其余语义层从上一层实际外边缘开始，逐节点优先回填已有最内轨，全部已有轨道无法容纳时才新建外轨。父节点角度只作为软偏好，空间不足时允许向左右空位扩展；最终碰撞以水平椭圆的屏幕 AABB 为准，并通过逐轨 `4px → 1px → 0.25px` compact pass 向内压缩到安全极限。
 - viewport 与 fit：布局接收当前预览宽高，宽画布使用与 viewport 比例匹配的横向椭圆轨道，主动利用左右空间；全屏、普通窗口和 ResizeObserver 重算均使用对应宽高。自然边界仅由实际节点、1.12 hover 余量和 12px 小边距产生；初始比例直接使用完整安全边界能容纳的最大 fit，允许大于 1，不再设置 0.65 人工下限或为未显示/无节点图层预留半径。
 - 现场修正：移除横向轨道 1.8 倍上限，按实际 viewport 宽高比（最高 3.2）生成自然布局，避免超宽预览仍由高度铺满、左右留白；筛选确认后以 `appliedLayers` 组合 key 强制重建当前 renderer，确保只用勾选后的节点重新计算轨道、边界和 fit，不复用筛选前坐标。
+- 网络图现场修正：筛选确认后 Sigma 同样按图层组合 key 完整重建 Graphology 图和 ForceAtlas2 坐标；40 个以内的稀疏结果按当前 Sigma 画布宽高比独立归一化两个坐标轴，使少量业务对象/逻辑实体在保持拓扑关系的同时铺开到横向可用空间，不再挤在原全量图的局部区域。
 - 缩放与漫游：节点启用 `nodeScaleRatio: 1`，初始节点尺寸、字号和线宽使用同一 fit 比例；缩小时文字与节点同步缩小，放大时文字同步增长但在 1.8 倍封顶。保留普通双指横向/纵向滑动画布平移、触控板捏合缩放、按住拖动平移；悬浮仅放大当前节点，不淡化其他节点，也没有节点折叠交互。
-- 验证：前端 Node 测试 32 项通过，其中径向布局覆盖少量节点密度、20 个宽业务对象中心多轨、宽/方 viewport 比例差异、筛选后轨道与边界重算、6 个业务对象 + 24 个实体 + 320 个属性无重叠压力场景、外轨容量递增、空图层零占位、真实边界与 fit > 1；相关 Python 测试 20 项通过。`npm run build` 成功（主 bundle `index-ClQiEq72.js`，仅有既有大 chunk 警告），`git diff --check` 通过。
+- 验证：前端 Node 测试 33 项通过，新增稀疏 Sigma 筛选结果按 2:1 画布双轴展开测试；径向布局继续覆盖少量节点密度、20 个宽业务对象中心多轨、宽/方 viewport 比例差异、筛选后轨道与边界重算、6 个业务对象 + 24 个实体 + 320 个属性无重叠压力场景、外轨容量递增、空图层零占位、真实边界与 fit > 1。相关 Python 测试 20 项通过；`npm run build` 成功（主 bundle `index-tluNSlXh.js`、Sigma chunk `OntologySigmaPreview-eGLRKC69.js`，仅有既有大 chunk 警告），`git diff --check` 通过。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/ontologyRadialLayout.js`、`frontend/src/styles.css`、`frontend/tests/ontologyRadialLayout.test.mjs`、`tests/test_frontend_contract.py`、`frontend/dist/`。
 - 部署：现场修正提交 `47b296a` 已推送并发布；部署前两套服务均无活动或排队任务，服务器门禁 20 项通过。47313 pid `4089384`、47314 pid `4090441`，两服务 `/`、`/health` 均为 200，线上 JS/CSS 均为 `index-ClQiEq72.js` / `index-Dkfcaex9.css`；默认环形图、真实 viewport 横向适配及筛选后强制重建均已进入线上 bundle，服务器既有运行数据文件保持原样。

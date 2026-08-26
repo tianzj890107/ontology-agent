@@ -105,7 +105,7 @@ function packIsolatedNodes(graph) {
   });
 }
 
-function normalizeCoordinates(graph) {
+function normalizeCoordinates(graph, stretchAxes = false, targetAspect = 1) {
   if (!graph.order) return;
   const xs = graph.mapNodes((node, attributes) => Number(attributes.x) || 0);
   const ys = graph.mapNodes((node, attributes) => Number(attributes.y) || 0);
@@ -113,11 +113,13 @@ function normalizeCoordinates(graph) {
   const maxX = Math.max(...xs);
   const minY = Math.min(...ys);
   const maxY = Math.max(...ys);
-  const span = Math.max(1, maxX - minX, maxY - minY);
+  const spanX = Math.max(1, maxX - minX);
+  const spanY = Math.max(1, maxY - minY);
+  const span = Math.max(spanX, spanY);
   graph.updateEachNodeAttributes((node, attributes) => ({
     ...attributes,
-    x: ((Number(attributes.x) || 0) - (minX + maxX) / 2) / span * 100,
-    y: ((Number(attributes.y) || 0) - (minY + maxY) / 2) / span * 100,
+    x: ((Number(attributes.x) || 0) - (minX + maxX) / 2) / (stretchAxes ? spanX : span) * 100 * (stretchAxes ? targetAspect : 1),
+    y: ((Number(attributes.y) || 0) - (minY + maxY) / 2) / (stretchAxes ? spanY : span) * 100,
   }));
 }
 
@@ -139,7 +141,11 @@ export function layoutOntologyForceAtlas(graph, options = {}) {
   }
   reduceOverlap(graph, options.overlapIterations ?? (graph.order > 500 ? 8 : 18));
   packIsolatedNodes(graph);
-  normalizeCoordinates(graph);
+  // Sparse filtered graphs otherwise keep the full graph's narrow cluster
+  // silhouette and waste one canvas dimension. Stretch their two coordinate
+  // axes independently after ForceAtlas2, preserving topology while making
+  // the remaining nodes use the available stage in both directions.
+  normalizeCoordinates(graph, graph.order <= 40, Math.max(1, Math.min(3.2, Number(options.targetAspect) || 1)));
   return graph;
 }
 

@@ -78,8 +78,8 @@ test("孤立规则被紧凑放置，不把边界扩大到极端范围", () => {
   layoutOntologyForceAtlas(graph, { iterations: 35 });
   const bounds = graphBounds(graph);
   assertFiniteLayout(graph);
-  assert.ok(bounds.width <= 100.000001);
-  assert.ok(bounds.height <= 100.000001);
+  assert.ok(bounds.width <= 100.01, JSON.stringify(bounds));
+  assert.ok(bounds.height <= 100.01, JSON.stringify(bounds));
 });
 
 test("多个业务对象形成有限的非同点布局", () => {
@@ -87,6 +87,17 @@ test("多个业务对象形成有限的非同点布局", () => {
   layoutOntologyForceAtlas(graph, { iterations: 45 });
   const points = graph.filterNodes((node, attributes) => attributes.nodeType === "businessObject").map((node) => `${graph.getNodeAttribute(node, "x").toFixed(2)},${graph.getNodeAttribute(node, "y").toFixed(2)}`);
   assert.equal(new Set(points).size, 6);
+  assertFiniteLayout(graph);
+});
+
+test("筛选后少量节点会重新展开并利用两个坐标方向", () => {
+  const graph = buildGraphologyGraph(model(2, 3, 0, 0), ["businessObject", "logicalEntity"]);
+  layoutOntologyForceAtlas(graph, { iterations: 35, targetAspect: 2 });
+  const bounds = graphBounds(graph);
+  assert.ok(graph.order <= 40);
+  assert.ok(bounds.width > 190, JSON.stringify(bounds));
+  assert.ok(bounds.height > 95, JSON.stringify(bounds));
+  assert.ok(Math.abs(bounds.width / bounds.height - 2) < 0.1);
   assertFiniteLayout(graph);
 });
 

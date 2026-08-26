@@ -20,7 +20,7 @@ export default function OntologySigmaPreview({ data, appliedLayers }) {
     layoutTimer = window.setTimeout(() => {
       if (disposed || !containerRef.current) return;
       const graph = buildGraphologyGraph(data, appliedLayers);
-      layoutOntologyForceAtlas(graph);
+      layoutOntologyForceAtlas(graph, { targetAspect: containerRef.current.clientWidth / Math.max(1, containerRef.current.clientHeight) });
       if (disposed || !containerRef.current) return;
 
       let hoveredNode = null;
@@ -112,7 +112,7 @@ export default function OntologySigmaPreview({ data, appliedLayers }) {
   }, [data, appliedLayers, layoutVersion]);
 
   return <div className="ontology-sigma-shell">
-    <div className="ontology-sigma-actions"><span>ForceAtlas2 Beta</span><button type="button" disabled={layoutRunning} onClick={() => setLayoutVersion((value) => value + 1)}>{layoutRunning ? "布局中…" : "重新布局"}</button></div>
+    <div className="ontology-sigma-actions"><span>ForceAtlas2</span><button type="button" disabled={layoutRunning} onClick={() => setLayoutVersion((value) => value + 1)}>{layoutRunning ? "布局中…" : "重新布局"}</button></div>
     <div className="ontology-sigma-preview" ref={containerRef} aria-label="Sigma ForceAtlas2 本体网络图" />
   </div>;
 }

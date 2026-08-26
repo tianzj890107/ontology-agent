@@ -1562,13 +1562,25 @@ function OntologyTreePreview({ data }) {
   const [appliedLayers, setAppliedLayers] = useState(() => defaultOntologyLayers(availability));
   const [draftLayers, setDraftLayers] = useState(() => defaultOntologyLayers(availability));
   const [filterOpen, setFilterOpen] = useState(false);
-  const [viewMode, setViewMode] = useState("echarts");
+  const [viewMode, setViewMode] = useState("sigma");
+  useEffect(() => {
+    let cancelled = false;
+    const preload = () => { if (!cancelled) void import("echarts"); };
+    const idleId = typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback(preload, { timeout: 1500 })
+      : window.setTimeout(preload, 600);
+    return () => {
+      cancelled = true;
+      if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(idleId);
+      else window.clearTimeout(idleId);
+    };
+  }, []);
   const filterContent = <div className="ontology-layer-menu">
     <div className="ontology-layer-options">{ONTOLOGY_LAYER_DEFINITIONS.map((layer) => <Checkbox key={layer.key} disabled={!availability[layer.key]} checked={draftLayers.includes(layer.key)} onChange={(event) => setDraftLayers((current) => event.target.checked ? [...current, layer.key] : current.filter((item) => item !== layer.key))}>{layer.label}</Checkbox>)}</div>
     <div className="ontology-layer-actions"><Button size="small" onClick={() => { setDraftLayers(appliedLayers); setFilterOpen(false); }}>取消</Button><Button size="small" type="primary" disabled={!draftLayers.length} onClick={() => { setAppliedLayers(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => draftLayers.includes(layer))); setFilterOpen(false); }}>确认</Button></div>
   </div>;
   return <div className="ontology-tree-shell">
-    <div className="ontology-view-switch" role="group" aria-label="本体可视化视图"><button type="button" className={viewMode === "echarts" ? "active" : ""} onClick={() => setViewMode("echarts")}>环形图</button><button type="button" className={viewMode === "sigma" ? "active" : ""} onClick={() => setViewMode("sigma")}>网络图 Beta</button></div>
+    <div className="ontology-view-switch" role="group" aria-label="本体可视化视图"><button type="button" className={viewMode === "echarts" ? "active" : ""} onClick={() => setViewMode("echarts")}>环形图</button><button type="button" className={viewMode === "sigma" ? "active" : ""} onClick={() => setViewMode("sigma")}>网络图</button></div>
     <Popover open={filterOpen} placement="leftTop" trigger="click" content={filterContent} onOpenChange={(open) => { if (open) setDraftLayers(appliedLayers); setFilterOpen(open); }}><button type="button" className="ontology-layer-filter-button" aria-label="筛选可视化层级" title="筛选可视化层级"><OntologyFilterIcon /></button></Popover>
     {viewMode === "echarts" ? <OntologyEChartsPreview key={`echarts:${appliedLayers.join("|")}`} data={data} appliedLayers={appliedLayers} /> : <React.Suspense fallback={<div className="ontology-sigma-loading"><Spin tip="正在加载网络图…" /></div>}><OntologySigmaPreview key={`sigma:${appliedLayers.join("|")}`} data={data} appliedLayers={appliedLayers} /></React.Suspense>}
   </div>;
