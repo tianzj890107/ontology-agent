@@ -34,4 +34,4 @@
 - 缩放与漫游：节点启用 `nodeScaleRatio: 1`，初始节点尺寸、字号和线宽使用同一 fit 比例；缩小时文字与节点同步缩小，放大时文字同步增长但在 1.8 倍封顶。保留普通双指横向/纵向滑动画布平移、触控板捏合缩放、按住拖动平移；悬浮仅放大当前节点，不淡化其他节点，也没有节点折叠交互。
 - 验证：前端 Node 测试 32 项通过，其中径向布局覆盖少量节点密度、20 个宽业务对象中心多轨、宽/方 viewport 比例差异、筛选后轨道与边界重算、6 个业务对象 + 24 个实体 + 320 个属性无重叠压力场景、外轨容量递增、空图层零占位、真实边界与 fit > 1；相关 Python 测试 20 项通过。`npm run build` 成功（主 bundle `index-ClQiEq72.js`，仅有既有大 chunk 警告），`git diff --check` 通过。
 - 主要文件：`frontend/src/main.jsx`、`frontend/src/ontologyRadialLayout.js`、`frontend/src/styles.css`、`frontend/tests/ontologyRadialLayout.test.mjs`、`tests/test_frontend_contract.py`、`frontend/dist/`。
-- 部署：高密度装箱与 viewport 宽高比适配提交 `6b8ebd4` 已推送并发布；部署前两套服务均无活动或排队任务，服务器门禁 20 项通过。47313 pid `4049679`、47314 pid `4050802`，两服务 `/`、`/health` 均为 200，线上 JS/CSS 均为 `index-DlVqG37S.js` / `index-Dkfcaex9.css`，启动日志符合 provider transport 超时基线；服务器既有运行数据文件保持原样。
+- 部署：现场修正提交 `47b296a` 已推送并发布；部署前两套服务均无活动或排队任务，服务器门禁 20 项通过。47313 pid `4089384`、47314 pid `4090441`，两服务 `/`、`/health` 均为 200，线上 JS/CSS 均为 `index-ClQiEq72.js` / `index-Dkfcaex9.css`；默认环形图、真实 viewport 横向适配及筛选后强制重建均已进入线上 bundle，服务器既有运行数据文件保持原样。
