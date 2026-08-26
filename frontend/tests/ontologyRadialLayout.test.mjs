@@ -1,189 +1,105 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  computeSectorWeights,
-  computeSectorAngles,
+  computeFitScale,
   computeNodeAngle,
+  computeRingRadius,
   computeTrackCapacity,
   computeTrackCount,
-  computeRingRadius,
-  polarToCartesian,
+  hasNodeOverlap,
   layoutOntologyRadial,
-  normalizeOntologyData,
+  nodeHeight,
   nodeWidth,
+  ONTOLOGY_LAYER_DEFINITIONS,
+  polarToCartesian,
+  scaledTypography,
 } from "../src/ontologyRadialLayout.js";
 
-const TAU = Math.PI * 2;
-const obj = (id, code, entities = []) => ({
-  id, code, name: code, nodeType: "businessObject", symbolSize: [92, 38], children: entities,
-});
-const ent = (id, code, attributes = []) => ({
-  id, code, name: code, nodeType: "entity", symbolSize: [92, 38], children: attributes,
-});
-const attr = (id, code) => ({ id, code, name: code, nodeType: "attribute", symbolSize: [92, 38] });
+const makeNode = (layer, id, width = 92, height = 38) => ({ id, layer, nodeType: layer, name: id, symbolSize: [width, height] });
+const relation = (source, target) => ({ source, target });
 
-test("computeSectorWeights 按后代节点数量分配扇区权重", () => {
-  const entitiesByObject = new Map([
-    ["o1", [ent("e1", "E1"), ent("e2", "E2", [attr("a1", "A1"), attr("a2", "A2")])]],
-    ["o2", [ent("e3", "E3")]],
-  ]);
-  const attributesByEntity = new Map([
-    ["e1", []],
-    ["e2", [attr("a1", "A1"), attr("a2", "A2")]],
-    ["e3", []],
-  ]);
-  const weights = computeSectorWeights([{ id: "o1" }, { id: "o2" }], entitiesByObject, attributesByEntity);
-  // o1: 1 + (1+2) = 4；o2: 1 + 0 = 1
-  assert.deepEqual(weights, [4, 1]);
+test("五个语义层按固定配置顺序声明", () => {
+  assert.deepEqual(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key), ["businessObject", "logicalEntity", "businessAttribute", "metric", "businessRule"]);
 });
 
-test("computeSectorAngles 权重占比对应角度占比且预留扇区间隙", () => {
-  const sectors = computeSectorAngles([3, 1], 0.1);
-  assert.equal(sectors.length, 2);
-  // 首个扇区起点到末个扇区终点 = 整圆减去末段间隙（0.1）
-  const totalSpan = sectors[1].end - sectors[0].start;
-  assert.ok(Math.abs(totalSpan - (TAU - 0.1)) < 1e-9);
-  const first = sectors[0].end - sectors[0].start;
-  const second = sectors[1].end - sectors[1].start;
-  assert.ok(Math.abs(first / second - 3) < 1e-9);
-  assert.ok(sectors[0].start < sectors[0].end && sectors[0].end < sectors[1].start);
+test("节点尺寸、轨道容量、轨道数和半径计算", () => {
+  assert.equal(nodeWidth({ symbolSize: [120, 40] }), 120);
+  assert.equal(nodeHeight({ symbolSize: [120, 40] }), 40);
+  assert.equal(computeTrackCapacity(300, Math.PI * 2, 92, 18), Math.floor(300 * Math.PI * 2 / 110));
+  assert.ok(computeTrackCount(80, 150, Math.PI * 2, 92, 18) > 1);
+  assert.equal(computeRingRadius(100, 38, 50, 18), 162);
 });
 
-test("computeNodeAngle 均匀分布且单节点取中心", () => {
+test("外圈半径更大时容量自然增加", () => {
+  assert.ok(computeTrackCapacity(500, Math.PI * 2, 92, 18) > computeTrackCapacity(200, Math.PI * 2, 92, 18));
+});
+
+test("角度与极坐标转换正确", () => {
   assert.equal(computeNodeAngle(0, 1, 0, 1), 0.5);
-  assert.ok(Math.abs(computeNodeAngle(0, 1, 0, 2) - 0.25) < 1e-9);
-  assert.ok(Math.abs(computeNodeAngle(0, 1, 1, 2) - 0.75) < 1e-9);
+  const point = polarToCartesian(100, 100, 50, 0);
+  assert.deepEqual(point, { x: 150, y: 100 });
 });
 
-test("computeTrackCapacity 保证最小安全间距", () => {
-  const radius = 300;
-  const span = 1.0;
-  const maxWidth = 92;
-  const minGap = 18;
-  const capacity = computeTrackCapacity(radius, span, maxWidth, minGap);
-  const arc = radius * span;
-  assert.equal(capacity, Math.floor(arc / (maxWidth + minGap)));
+test("选择层级只保留可见节点及两端都可见的真实连线", () => {
+  const graph = { nodes: [makeNode("businessObject", "bo"), makeNode("logicalEntity", "le"), makeNode("businessAttribute", "ba")], links: [relation("bo", "le"), relation("le", "ba")] };
+  const layout = layoutOntologyRadial(graph, { selectedLayers: ["businessObject", "logicalEntity"] });
+  assert.deepEqual(new Set(layout.nodes.map((node) => node.layer)), new Set(["businessObject", "logicalEntity"]));
+  assert.deepEqual(layout.links, [relation("bo", "le")]);
 });
 
-test("computeTrackCount 节点过多时自动增加多条轨道", () => {
-  const firstRadius = 150;
-  const span = 0.8;
-  const maxWidth = 92;
-  const minGap = 18;
-  const one = computeTrackCount(3, firstRadius, span, maxWidth, minGap);
-  const many = computeTrackCount(80, firstRadius, span, maxWidth, minGap);
-  assert.ok(many >= one);
-  assert.ok(many > 1);
+test("业务对象内圈容量不足时使用共享后续轨道且不重叠", () => {
+  const nodes = Array.from({ length: 6 }, (_, index) => makeNode("businessObject", `bo${index}`, 220));
+  const layout = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["businessObject"], minGap: 18 });
+  assert.ok(layout.tracks.filter((track) => track.layer === "businessObject").length > 1);
+  assert.equal(hasNodeOverlap(layout.nodes, 17.99), false);
 });
 
-test("computeRingRadius 依赖前后层最大节点尺寸与安全间距", () => {
-  const r1 = computeRingRadius(100, 92, 92, 18, 0);
-  assert.equal(r1, 100 + 46 + 18 + 46);
-  const r2 = computeRingRadius(100, 92, 120, 18, 0);
-  assert.ok(r2 > r1);
-  const r3 = computeRingRadius(100, 92, 92, 18, 2);
-  assert.equal(r3, r1 + 2 * (92 + 18));
-});
-
-test("polarToCartesian 极坐标转笛卡尔", () => {
-  const p = polarToCartesian(400, 300, 100, 0);
-  assert.ok(Math.abs(p.x - 500) < 1e-9 && Math.abs(p.y - 300) < 1e-9);
-  const q = polarToCartesian(400, 300, 100, Math.PI / 2);
-  assert.ok(Math.abs(q.x - 400) < 1e-9 && Math.abs(q.y - 400) < 1e-9);
-});
-
-test("normalizeOntologyData 展平对象/实体/属性并保留归属", () => {
-  const data = [
-    obj("o1", "O1", [ent("e1", "E1", [attr("a1", "A1")])]),
-    ent("e2", "E2"),
-  ];
-  const { objects, entities, attributes } = normalizeOntologyData(data);
-  assert.equal(objects.length, 1);
-  assert.equal(entities.length, 2);
-  assert.equal(attributes.length, 1);
-  assert.equal(entities[0].objectId, "o1");
-  assert.equal(entities[1].objectId, null);
-  assert.equal(attributes[0].entityId, "e1");
-});
-
-test("nodeWidth 返回名称长度决定的宽度，缺失时使用兜底", () => {
-  assert.equal(nodeWidth({ symbolSize: [120, 38] }), 120);
-  assert.equal(nodeWidth({}), 92);
-  assert.equal(nodeWidth({}, 64), 64);
-});
-
-test("业务属性默认隐藏：showAttributes=false 时不生成属性节点", () => {
-  const data = [obj("o1", "O1", [ent("e1", "E1", [attr("a1", "A1")])])];
-  const hidden = layoutOntologyRadial(data, { width: 800, height: 600 });
-  const shown = layoutOntologyRadial(data, { width: 800, height: 600, showAttributes: true });
-  assert.ok(hidden.nodes.every((node) => node.nodeType !== "attribute"));
-  assert.ok(shown.nodes.some((node) => node.nodeType === "attribute"));
-});
-
-test("没有业务对象时逻辑实体位于最内层", () => {
-  const data = [ent("e1", "E1"), ent("e2", "E2")];
-  const layout = layoutOntologyRadial(data, { width: 800, height: 600 });
-  assert.ok(layout.nodes.every((node) => node.nodeType === "entity"));
-  const minRadius = Math.min(...layout.nodes.map((node) => Math.hypot(node.x - layout.centerX, node.y - layout.centerY)));
-  const firstRadius = 92 / 2 + 18;
-  assert.ok(Math.abs(minRadius - firstRadius) < 1e-6);
-});
-
-test("只生成真实 links：对象->实体 与 实体->属性", () => {
-  const data = [
-    obj("o1", "O1", [ent("e1", "E1", [attr("a1", "A1"), attr("a2", "A2")]), ent("e2", "E2")]),
-    ent("e3", "E3"), // 无归属实体：不生成对象连线
-  ];
-  const layout = layoutOntologyRadial(data, { width: 800, height: 600, showAttributes: true });
-  const ids = new Set(layout.nodes.map((node) => node.id));
-  assert.ok(layout.links.every((link) => ids.has(link.source) && ids.has(link.target)));
-  assert.equal(layout.links.length, 2 + 2); // o1->e1, o1->e2, e1->a1, e1->a2
-  const o1e3 = layout.links.find((link) => link.source === "o1" && link.target === "e3");
-  assert.equal(o1e3, undefined);
-});
-
-test("属性层支持多轨道且节点不重叠（角度间距 >= 安全间距）", () => {
-  const manyAttrs = Array.from({ length: 40 }, (_, i) => attr(`a${i}`, `A${i}`));
-  const data = [obj("o1", "O1", [ent("e1", "E1", manyAttrs)])];
-  const layout = layoutOntologyRadial(data, { width: 1200, height: 900, showAttributes: true });
-  const attrNodes = layout.nodes.filter((node) => node.nodeType === "attribute");
-  assert.equal(attrNodes.length, 40);
-  const radii = new Set(attrNodes.map((node) => Math.hypot(node.x - layout.centerX, node.y - layout.centerY)));
-  assert.ok(radii.size >= 2, "属性应分布在多条轨道");
-  // 同轨道相邻节点角度差对应弧长 >= 节点宽度 + 间距
-  const grouped = new Map();
-  attrNodes.forEach((node) => {
-    const r = Math.hypot(node.x - layout.centerX, node.y - layout.centerY);
-    const angle = Math.atan2(node.y - layout.centerY, node.x - layout.centerX);
-    if (!grouped.has(r)) grouped.set(r, []);
-    grouped.get(r).push(angle);
-  });
-  grouped.forEach((angles, r) => {
-    angles.sort((a, b) => a - b);
-    for (let i = 1; i < angles.length; i += 1) {
-      const arc = r * (angles[i] - angles[i - 1]);
-      assert.ok(arc >= 92 - 1e-6, `同轨道弧长 ${arc} 小于节点宽度`);
+test("多个逻辑实体的属性共享全局属性轨道", () => {
+  const nodes = [makeNode("businessObject", "bo"), ...Array.from({ length: 3 }, (_, index) => makeNode("logicalEntity", `le${index}`, 120))];
+  const links = Array.from({ length: 3 }, (_, index) => relation("bo", `le${index}`));
+  for (let entity = 0; entity < 3; entity += 1) {
+    for (let index = 0; index < 40; index += 1) {
+      const id = `ba${entity}-${index}`;
+      nodes.push(makeNode("businessAttribute", id, 120));
+      links.push(relation(`le${entity}`, id));
     }
-  });
+  }
+  const layout = layoutOntologyRadial({ nodes, links }, { selectedLayers: ["businessObject", "logicalEntity", "businessAttribute"], minGap: 18 });
+  const attributeTracks = layout.tracks.filter((track) => track.layer === "businessAttribute");
+  assert.ok(attributeTracks.length > 1);
+  assert.ok(attributeTracks.slice(1).some((track, index) => track.capacity > attributeTracks[index].capacity));
+  assert.equal(hasNodeOverlap(layout.nodes, 17.99), false);
+  const actualMaxTrack = Math.max(...layout.nodes.filter((node) => node.layer === "businessAttribute").map((node) => node.trackIndex));
+  assert.equal(actualMaxTrack + 1, attributeTracks.length);
 });
 
-test("首尾节点不会被画布边界裁切（含悬浮放大余量）", () => {
-  const manyAttrs = Array.from({ length: 30 }, (_, i) => attr(`a${i}`, `A${i}`));
-  const data = [obj("o1", "O1", [ent("e1", "E1", manyAttrs)])];
-  const layout = layoutOntologyRadial(data, { width: 800, height: 600, showAttributes: true });
+test("边界由实际放置结果生成并包含两个不可见锚点", () => {
+  const nodes = Array.from({ length: 50 }, (_, index) => makeNode("businessAttribute", `ba${index}`, 140));
+  const layout = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["businessAttribute"], padding: 32, hoverScale: 1.12 });
+  assert.equal(layout.boundaryAnchors.length, 2);
+  assert.equal(layout.boundaryAnchors[0].x, 0);
+  assert.equal(layout.boundaryAnchors[0].y, 0);
+  assert.equal(layout.boundaryAnchors[1].x, layout.naturalWidth);
+  assert.equal(layout.boundaryAnchors[1].y, layout.naturalHeight);
   layout.nodes.forEach((node) => {
-    const half = 92 / 2;
-    assert.ok(node.x - half >= 0, `节点 ${node.id} 左边界越界`);
-    assert.ok(node.y - half >= 0, `节点 ${node.id} 上边界越界`);
-    assert.ok(node.x + half <= layout.canvasWidth, `节点 ${node.id} 右边界越界`);
-    assert.ok(node.y + half <= layout.canvasHeight, `节点 ${node.id} 下边界越界`);
+    assert.ok(node.x - nodeWidth(node) * 1.12 / 2 >= 0);
+    assert.ok(node.y - nodeHeight(node) * 1.12 / 2 >= 0);
+    assert.ok(node.x + nodeWidth(node) * 1.12 / 2 <= layout.naturalWidth);
+    assert.ok(node.y + nodeHeight(node) * 1.12 / 2 <= layout.naturalHeight);
   });
 });
 
-test("画布在需要时扩大，允许滚动缩放平移", () => {
-  const manyAttrs = Array.from({ length: 60 }, (_, i) => attr(`a${i}`, `A${i}`));
-  const data = [obj("o1", "O1", [ent("e1", "E1", manyAttrs)])];
-  const layout = layoutOntologyRadial(data, { width: 800, height: 600, showAttributes: true });
-  assert.ok(layout.canvasWidth >= 800 && layout.canvasHeight >= 600);
-  assert.ok(layout.canvasWidth > 800 || layout.canvasHeight > 600);
+test("fit 将完整自然布局等比放入 viewport", () => {
+  assert.equal(computeFitScale(1000, 500, 500, 500, 0), 0.5);
+  assert.equal(computeFitScale(400, 800, 800, 400, 0), 0.5);
+});
+
+test("文字随缩放缩小并在放大时封顶", () => {
+  const base = scaledTypography(13, 0.5, 1);
+  assert.equal(scaledTypography(13, 0.5, 0.5), base * 0.5);
+  assert.equal(scaledTypography(13, 0.5, 5), 13 * 0.5 * 1.8);
+});
+
+test("没有可见节点时不生成布局", () => {
+  assert.equal(layoutOntologyRadial({ nodes: [makeNode("metric", "m1")], links: [] }, { selectedLayers: ["logicalEntity"] }), null);
 });

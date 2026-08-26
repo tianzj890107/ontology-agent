@@ -12,14 +12,12 @@
 
 ## 2026-08-26
 
-### 1. 本体可视化改为径向分层多轨道环形布局
+### 1. 本体可视化五层筛选与径向共享轨道布局
 
-- 布局：以画布中心为圆心，由内向外为业务对象（第一层）→ 逻辑实体（第二层）→ 业务属性（第三层，默认隐藏）；每层是环形区域，节点过多时按扇区/角度自动增加多条相邻轨道；业务对象各占独立扇区，扇区角度与后代节点数量成正比（不平均、不写死）。
-- 新增 `frontend/src/ontologyRadialLayout.js` 纯函数模块：`normalizeOntologyData`、`computeSectorWeights`（扇区权重）、`computeTrackCapacity`（单轨容量，含最小安全间距）、`computeTrackCount`（轨道数量）、`computeRingRadius`（轨道半径）、`computeNodeAngle`（节点角度）、`polarToCartesian`（极坐标转笛卡尔）、`layoutOntologyRadial`（生成最终 ECharts nodes/links）。
-- 半径与画布：每层半径按上一层最大节点尺寸、当前层最大尺寸、节点数量、画布尺寸与最小安全间距动态计算；放不下时扩大内部画布（滚动/缩放/平移），外圈预留节点半径与悬浮放大空间，不裁切气泡；不通过缩小气泡硬塞。
-- 连线只保留真实关系：业务对象→逻辑实体、逻辑实体→业务属性；移除隐藏技术根 `ontology:unassigned-entities`/`virtualGroup`；无业务对象时逻辑实体作为最内层；无逻辑实体时不生成图；无属性时只绘制已有层级。
-- 交互：保留全局“展开业务属性/隐藏业务属性”按钮，切换后重建完整环形布局；触控板双指滑动平移（wheel→graphRoam）、捏合缩放（ctrlKey 放行给 ECharts roam）、拖拽平移（`roam:true`）；ResizeObserver 在窗口/全屏变化后重算；不允许点击折叠；悬浮仅轻微放大（scale 1.12，focus none）。
-- 样式沿用：业务对象蓝、逻辑实体绿、业务属性灰、横向椭圆、白色居中截断标签、浅灰连线、扇区间明显间隔。
-- 测试：新增 `frontend/tests/ontologyRadialLayout.test.mjs`（`node --test` 15 项：扇区权重、轨道容量/数量、半径、极坐标、无对象时实体最内层、属性默认隐藏、只生成真实 links、属性多轨道不重叠、边界不裁切、画布扩大）；`tests/test_frontend_contract.py` 本体可视化契约更新为径向布局断言（Graph/layout none、无 Tree、无隐藏技术根、纯函数存在、多轨道、安全间距、无点击折叠、双指平移、捏合缩放、ResizeObserver）。
-- 验证：全量 `pytest tests/` 512 passed, 13 skipped, 344 subtests passed；node 测试 15/15；`npm run build` 成功（新 bundle `index-CpekmpJY.js`/`index-I8FPupji.css`，echarts 按需 chunk `index-CzJ1nSGZ.js`；仅存既有大 chunk 警告）；`git diff --check` 通过。
-- 主要文件：`frontend/src/ontologyRadialLayout.js`（新增）、`frontend/src/main.jsx`、`frontend/tests/ontologyRadialLayout.test.mjs`（新增）、`tests/test_frontend_contract.py`、`frontend/dist/`。
+- 图层筛选：移除画布上方“展开/隐藏业务属性”按钮，在预览卡片右上角的全屏与关闭按钮左侧新增漏斗图标；弹层固定提供业务对象、逻辑实体、业务属性、指标、业务规则五项 Checkbox，当前工作区缺少或没有有效数据的图层置灰。默认应用业务对象与逻辑实体；筛选使用 `draftLayers` / `appliedLayers` 两阶段状态，勾选只修改草稿，点击“确认”才重建一次图，取消、关闭弹层或点外部不会改变当前图。
+- 文件兼容：47313/47314 均从当前 task/run 文件快照读取五层产物并保持沙盒隔离；指标优先使用正式 `metrics.csv`，兼容 `indicators.csv`、`indicator.csv`、`atomic_indicators.csv`、`composite_indicators.csv`，规则兼容 `business_rules.csv` / `rules.csv`。指标仅在来源业务对象、逻辑实体或业务属性能按编码/名称解析时生成真实连线；当前规则正式表没有归属字段，只显示规则节点，不虚构关系。
+- 布局：`frontend/src/ontologyRadialLayout.js` 改为由 `ONTOLOGY_LAYER_DEFINITIONS` 驱动的配置化五层布局。每个语义层全局共享轨道，同一属性圈可同时容纳不同逻辑实体的属性；每生成更外轨道都按实际半径重新计算更大的周长容量，径向初始间距使用节点高度，并通过实际椭圆包围盒碰撞检查逐步扩圈，业务对象内圈容量不足也自动使用共享后续轨道。
+- fit 与边界：先生成完整、无重叠的自然坐标，再根据当前 viewport 统一等比 fit；两个不可见、无连线、无交互的边界锚点固定 ECharts Graph 的自然坐标边界，避免首尾节点中心被二次映射到画布边缘。每次确认筛选或 ResizeObserver 检测到尺寸变化时重置视图并重新铺满画布。
+- 缩放与漫游：节点启用 `nodeScaleRatio: 1`，初始节点尺寸、字号和线宽使用同一 fit 比例；缩小时文字与节点同步缩小，放大时文字同步增长但在 1.8 倍封顶。保留普通双指横向/纵向滑动画布平移、触控板捏合缩放、按住拖动平移；悬浮仅放大当前节点，不淡化其他节点，也没有节点折叠交互。
+- 验证：Node 布局测试 11 项通过，覆盖五层配置、外圈容量递增、6 个 220px 宽业务对象多轨无重叠、3 个逻辑实体各 40 个属性共享轨道、实际边界锚点、fit 与字号缩放；接近实际规模的 4 个业务对象、24 个实体、644 个属性压力用例共 672 节点，约 9ms 完成、无重叠，属性 12 条共享轨道容量由 22 递增到 90。相关 Python 测试 20 项通过；`npm run build` 成功（bundle `index-C4TeUgpv.js` / `index-DY8plCOl.css`，仅有既有大 chunk 警告）；`git diff --check` 通过。
+- 主要文件：`frontend/src/main.jsx`、`frontend/src/ontologyRadialLayout.js`、`frontend/src/styles.css`、`frontend/tests/ontologyRadialLayout.test.mjs`、`tests/test_frontend_contract.py`、`frontend/dist/`。

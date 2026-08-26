@@ -24,7 +24,7 @@ import {
 import "./styles.css";
 import { formatDisplayValue, isNumericDisplayValue } from "./numberFormat.js";
 import { appendStreamEvent, eventKey, mergeEvents, nextCursor } from "./eventSync.js";
-import { layoutOntologyRadial } from "./ontologyRadialLayout.js";
+import { computeFitScale, layoutOntologyRadial, ONTOLOGY_LAYER_DEFINITIONS, scaledTypography } from "./ontologyRadialLayout.js";
 
 const MISSION = window.__MISSION__?.taskCode ? window.__MISSION__ : null;
 const STANDALONE = Boolean(window.__STANDALONE_MODELING__);
@@ -104,6 +104,30 @@ const STANDALONE_ARTIFACT_LABELS = {
   "terms.csv": "术语",
   "indicators.csv": "指标",
 };
+
+const ONTOLOGY_ARTIFACT_ALIASES = {
+  businessObject: ["business_objects.csv"],
+  logicalEntity: ["logical_entities.csv"],
+  businessAttribute: ["business_attributes.csv"],
+  metric: ["metrics.csv", "indicators.csv", "indicator.csv", "atomic_indicators.csv", "composite_indicators.csv"],
+  businessRule: ["business_rules.csv", "rules.csv"],
+};
+const ONTOLOGY_ARTIFACT_NAMES = new Set(Object.values(ONTOLOGY_ARTIFACT_ALIASES).flat());
+
+function selectOntologyArtifacts(files, outputMarker) {
+  const byName = new Map();
+  (files || []).forEach((file) => {
+    const path = String(file?.path || "");
+    const name = path.replaceAll("\\", "/").split("/").pop();
+    if (ONTOLOGY_ARTIFACT_NAMES.has(name) && (!byName.has(name) || path.includes(outputMarker))) byName.set(name, path);
+  });
+  const selected = new Map();
+  Object.entries(ONTOLOGY_ARTIFACT_ALIASES).forEach(([layer, aliases]) => {
+    const name = aliases.find((candidate) => byName.has(candidate));
+    if (name) selected.set(layer, { name, path: byName.get(name) });
+  });
+  return selected.has("logicalEntity") ? selected : null;
+}
 
 function standaloneRunTitle(run) {
   const explicit = [run?.title, run?.name]
@@ -269,15 +293,7 @@ function StandaloneApp() {
   const continueInFlightRef = useRef(false);
   const standaloneFileInputRef = useRef(null);
   const standaloneFeedPrependAnchorRef = useRef(null);
-  const standaloneOntologyFiles = useMemo(() => {
-    const required = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"];
-    const byName = new Map();
-    (run?.files || []).forEach((file) => {
-      const name = String(file?.path || "").replaceAll("\\", "/").split("/").pop();
-      if (required.includes(name) && (!byName.has(name) || String(file.path).includes("output/"))) byName.set(name, file.path);
-    });
-    return byName.has("logical_entities.csv") ? byName : null;
-  }, [run?.files, run?.runId]);
+  const standaloneOntologyFiles = useMemo(() => selectOntologyArtifacts(run?.files, "output/"), [run?.files, run?.runId]);
   useEffect(() => { setStandaloneOntologyDrawing(false); setPreviewFullscreen(false); }, [run?.runId]);
 
   const loadRuns = async () => {
@@ -839,16 +855,16 @@ function StandaloneApp() {
     setStandaloneOntologyDrawing(true);
     setError("");
     try {
-      const names = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"].filter((name) => standaloneOntologyFiles.has(name));
-      const responses = await Promise.all(names.map((name) => standaloneFileResponse(`/api/modeling-runs/${encodeURIComponent(runId)}/files/content?path=${encodeURIComponent(standaloneOntologyFiles.get(name))}`)));
+      const artifacts = [...standaloneOntologyFiles.entries()];
+      const responses = await Promise.all(artifacts.map(([, artifact]) => standaloneFileResponse(`/api/modeling-runs/${encodeURIComponent(runId)}/files/content?path=${encodeURIComponent(artifact.path)}`)));
       const failedIndex = responses.findIndex((result) => result.error || !result.response?.ok);
-      if (failedIndex >= 0) throw new Error(`${names[failedIndex]} 读取失败`);
+      if (failedIndex >= 0) throw new Error(`${artifacts[failedIndex][1].name} 读取失败`);
       const texts = await Promise.all(responses.map((result) => result.response.text()));
       if (selectedRunIdRef.current !== runId) return;
-      const records = new Map(names.map((name, index) => [name, csvRecords(texts[index])]));
-      const tree = buildOntologyTree(records.get("business_objects.csv") || [], records.get("logical_entities.csv") || [], records.get("business_attributes.csv") || []);
-      if (!tree.length) throw new Error("逻辑实体产物中没有可展示的数据");
-      setPreview({ path: "本体可视化", ontologyTree: tree });
+      const records = new Map(artifacts.map(([layer], index) => [layer, csvRecords(texts[index])]));
+      const graph = buildOntologyGraph(records);
+      if (!graph.availability.logicalEntity) throw new Error("逻辑实体产物中没有可展示的数据");
+      setPreview({ path: "本体可视化", ontologyGraph: graph });
     } catch (drawError) {
       if (selectedRunIdRef.current === runId) setError(`本体可视化失败：${drawError.message}`);
     } finally {
@@ -869,7 +885,7 @@ function StandaloneApp() {
         </main>
       </div>
       <input ref={standaloneFileInputRef} type="file" multiple hidden onChange={onStandaloneFilesSelected} />
-      {preview && <Modal open centered={!previewFullscreen} wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""} className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "82vw"} onCancel={() => { setPreview(null); setPreviewFullscreen(false); }}>{preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+      {preview && <Modal open centered={!previewFullscreen} wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""} className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "82vw"} onCancel={() => { setPreview(null); setPreviewFullscreen(false); }}>{preview.ontologyGraph ? <OntologyTreePreview data={preview.ontologyGraph} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
     </div>
   </ConfigProvider>;
 }
@@ -1446,69 +1462,87 @@ function ontologyNodeStyle(name, color) {
   };
 }
 
-function buildOntologyTree(businessObjects, logicalEntities, businessAttributes) {
-  const attributesByEntity = new Map();
-  businessAttributes.forEach((attribute) => {
-    const entityCode = attribute["逻辑实体编码"];
-    if (!entityCode) return;
-    if (!attributesByEntity.has(entityCode)) attributesByEntity.set(entityCode, []);
-    const name = attribute["业务属性名称"] || attribute["业务属性编码"];
-    attributesByEntity.get(entityCode).push({
-      id: `attribute:${entityCode}:${attribute["业务属性编码"]}`,
-      code: attribute["业务属性编码"],
-      name,
-      nodeType: "attribute",
-      ...ontologyNodeStyle(name, "#64748b"),
-    });
-  });
+function ontologyReferences(value) {
+  return String(value || "").split(/[，,、;；|]/).map((item) => item.trim()).filter(Boolean);
+}
 
-  const entitiesByObject = new Map();
-  const entityNodes = logicalEntities.filter((entity) => entity["逻辑实体编码"]).map((entity) => {
-    const objectCode = entity["业务对象编码"];
-    const entityCode = entity["逻辑实体编码"];
-    const name = entity["逻辑实体名称"] || entityCode;
-    const node = {
-      id: `entity:${entityCode}`,
-      code: entityCode,
-      name,
-      nodeType: "entity",
-      isPrimary: entity["是否主逻辑实体"] === "Y",
-      children: attributesByEntity.get(entityCode) || [],
-      ...ontologyNodeStyle(name, "#0f766e"),
-    };
-    if (objectCode) {
-      if (!entitiesByObject.has(objectCode)) entitiesByObject.set(objectCode, []);
-      entitiesByObject.get(objectCode).push(node);
-    }
-    return { objectCode, node };
-  });
+function buildOntologyGraph(records) {
+  const rows = (layer) => records.get(layer) || [];
+  const nodes = [];
+  const links = [];
+  const indexes = { businessObject: new Map(), logicalEntity: new Map(), businessAttribute: new Map() };
+  const addIndex = (layer, node, ...values) => values.filter(Boolean).forEach((value) => indexes[layer].set(String(value).trim(), node));
+  const addNode = (layer, nodeType, code, name, color, index) => {
+    const node = { id: `${nodeType}:${code || index}`, code: code || "", name: name || code || `${nodeType}${index + 1}`, layer, nodeType, ...ontologyNodeStyle(name || code, color) };
+    nodes.push(node);
+    return node;
+  };
 
-  if (!businessObjects.length) return entityNodes.map(({ node }) => node);
-  const objectCodes = new Set(businessObjects.map((object) => object["业务对象编码"]).filter(Boolean));
-  const objectNodes = businessObjects.filter((object) => object["业务对象编码"]).map((object) => {
-    const name = object["业务对象名称"] || object["业务对象编码"];
-    return {
-      id: `business-object:${object["业务对象编码"]}`,
-      code: object["业务对象编码"],
-      name,
-      nodeType: "businessObject",
-      children: entitiesByObject.get(object["业务对象编码"]) || [],
-      ...ontologyNodeStyle(name, "#2563eb"),
-    };
+  rows("businessObject").forEach((row, index) => {
+    const code = row["业务对象编码"];
+    if (!code) return;
+    const node = addNode("businessObject", "businessObject", code, row["业务对象名称"] || code, "#2563eb", index);
+    addIndex("businessObject", node, code, row["业务对象名称"]);
   });
-  const unassignedEntities = entityNodes.filter(({ objectCode }) => !objectCodes.has(objectCode)).map(({ node }) => ({ ...node, lineStyle: { opacity: 0 } }));
-  return [...objectNodes, ...unassignedEntities];
+  rows("logicalEntity").forEach((row, index) => {
+    const code = row["逻辑实体编码"];
+    if (!code) return;
+    const node = addNode("logicalEntity", "entity", code, row["逻辑实体名称"] || code, "#0f766e", index);
+    addIndex("logicalEntity", node, code, row["逻辑实体名称"]);
+    const parent = indexes.businessObject.get(row["业务对象编码"]) || indexes.businessObject.get(row["业务对象名称"]);
+    if (parent) links.push({ source: parent.id, target: node.id });
+  });
+  rows("businessAttribute").forEach((row, index) => {
+    const code = row["业务属性编码"];
+    if (!code) return;
+    const node = addNode("businessAttribute", "attribute", code, row["业务属性名称"] || code, "#64748b", index);
+    addIndex("businessAttribute", node, code, row["业务属性名称"]);
+    const parent = indexes.logicalEntity.get(row["逻辑实体编码"]) || indexes.logicalEntity.get(row["逻辑实体名称"]);
+    if (parent) links.push({ source: parent.id, target: node.id });
+  });
+  rows("metric").forEach((row, index) => {
+    const code = row["指标编码"] || `metric-${index + 1}`;
+    const node = addNode("metric", "metric", code, row["指标名称"] || code, "#7c3aed", index);
+    const sources = [
+      ["来源业务属性", "businessAttribute"],
+      ["来源逻辑实体", "logicalEntity"],
+      ["来源业务对象", "businessObject"],
+    ];
+    const linked = new Set();
+    sources.forEach(([field, layer]) => ontologyReferences(row[field]).forEach((reference) => {
+      const parent = indexes[layer].get(reference);
+      if (parent && !linked.has(parent.id)) {
+        links.push({ source: parent.id, target: node.id });
+        linked.add(parent.id);
+      }
+    }));
+  });
+  rows("businessRule").forEach((row, index) => {
+    const code = row["规则编码"] || `rule-${index + 1}`;
+    addNode("businessRule", "rule", code, row["规则名称"] || code, "#c2410c", index);
+  });
+  const availability = Object.fromEntries(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => [layer.key, nodes.some((node) => node.layer === layer.key)]));
+  return { nodes, links, availability };
+}
+
+function OntologyFilterIcon() {
+  return <svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true"><path d="M0 0h16v16H0z"/><path fillRule="evenodd" fill="currentColor" d="m2.826 4.602 3.138 3.665a.826.826 0 0 1 .2.542v3.363c0 .38.086.706.256.98.17.275.425.496.766.664l.966.477c.194.096.385.139.574.13.189-.01.375-.071.559-.185a1.16 1.16 0 0 0 .413-.42c.092-.164.138-.355.138-.571V8.809a.827.827 0 0 1 .2-.542l3.138-3.665c.254-.297.404-.61.45-.936.045-.326-.014-.667-.178-1.023-.163-.355-.384-.622-.661-.8-.278-.178-.612-.267-1.004-.267H4.22c-.392 0-.726.09-1.004.267-.277.178-.498.445-.662.8-.163.356-.222.697-.177 1.023.046.327.196.639.45.936Zm4.228 3.57a1.82 1.82 0 0 0-.33-.556L3.586 3.952a.828.828 0 0 1-.205-.426.828.828 0 0 1 .08-.465.827.827 0 0 1 .302-.363.828.828 0 0 1 .456-.122h7.562c.178 0 .33.04.456.122.126.08.227.202.301.363a.828.828 0 0 1 .08.465.828.828 0 0 1-.204.426L9.276 7.616a1.82 1.82 0 0 0-.33.556c-.074.199-.11.41-.11.637v4.438a.165.165 0 0 1-.02.082.166.166 0 0 1-.059.06.163.163 0 0 1-.08.026.167.167 0 0 1-.082-.019l-.966-.477a.827.827 0 0 1-.348-.301.828.828 0 0 1-.117-.446V8.809c0-.226-.036-.438-.11-.637Z"/></svg>;
+}
+
+function defaultOntologyLayers(availability) {
+  const preferred = ["businessObject", "logicalEntity"].filter((layer) => availability[layer]);
+  if (preferred.length) return preferred;
+  const fallback = ONTOLOGY_LAYER_DEFINITIONS.find((layer) => availability[layer.key]);
+  return fallback ? [fallback.key] : [];
 }
 
 function OntologyTreePreview({ data }) {
   const scrollRef = useRef(null);
   const containerRef = useRef(null);
-  const hasBusinessObjects = data.some((node) => node.nodeType === "businessObject");
-  const hasAttributes = data.some((root) => {
-    const entities = root.nodeType === "entity" ? [root] : (root.children || []);
-    return entities.some((entity) => entity.nodeType === "entity" && entity.children?.length);
-  });
-  const [showAttributes, setShowAttributes] = useState(false);
+  const availability = data.availability || {};
+  const [appliedLayers, setAppliedLayers] = useState(() => defaultOntologyLayers(availability));
+  const [draftLayers, setDraftLayers] = useState(() => defaultOntologyLayers(availability));
+  const [filterOpen, setFilterOpen] = useState(false);
   useEffect(() => {
     let disposed = false;
     let chart = null;
@@ -1522,36 +1556,41 @@ function OntologyTreePreview({ data }) {
         const viewportWidth = Math.max(320, scrollRef.current.clientWidth || 0);
         const viewportHeight = Math.max(520, scrollRef.current.clientHeight || 0);
         const layout = layoutOntologyRadial(data, {
-          width: viewportWidth,
-          height: viewportHeight,
-          showAttributes: showAttributes && hasAttributes,
+          selectedLayers: appliedLayers,
           minGap: 18,
-          sectorGap: 0.05,
-          padding: 56,
+          layerGap: 28,
+          padding: 32,
           hoverScale: 1.12,
         });
-        const { nodes = [], links = [], canvasWidth = viewportWidth, canvasHeight = viewportHeight } = layout || {};
-        containerRef.current.style.width = `${canvasWidth}px`;
-        containerRef.current.style.height = `${canvasHeight}px`;
-        chart.resize({ width: canvasWidth, height: canvasHeight });
+        containerRef.current.style.width = `${viewportWidth}px`;
+        containerRef.current.style.height = `${viewportHeight}px`;
+        chart.resize({ width: viewportWidth, height: viewportHeight });
         if (!layout) {
           chart.clear();
           return;
         }
+        const fitScale = computeFitScale(layout.naturalWidth, layout.naturalHeight, viewportWidth, viewportHeight);
+        const renderNodes = layout.nodes.map((node) => ({
+          ...node,
+          symbolSize: Array.isArray(node.symbolSize) ? node.symbolSize.map((value) => value * fitScale) : node.symbolSize,
+        }));
         chart.setOption({
-          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.name || "" },
+          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.layoutAnchor ? "" : node?.name || "" },
           series: [{
+            id: "ontology-graph",
             type: "graph",
             layout: "none",
-            data: nodes,
-            links,
+            data: [...renderNodes, ...layout.boundaryAnchors],
+            links: layout.links,
             top: 0,
             left: 0,
             bottom: 0,
             right: 0,
             roam: true,
-            label: { show: true, position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: 13, overflow: "truncate", formatter: ({ data: node }) => node?.name || "" },
-            lineStyle: { color: "#94a3b8", width: 1.2, opacity: 0.8, curveness: 0.08 },
+            zoom: 1,
+            nodeScaleRatio: 1,
+            label: { show: true, position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: scaledTypography(13, fitScale, 1), overflow: "truncate", formatter: ({ data: node }) => node?.layoutAnchor ? "" : node?.name || "" },
+            lineStyle: { color: "#94a3b8", width: Math.max(0.5, 1.2 * fitScale), opacity: 0.8, curveness: 0.08 },
             emphasis: { focus: "none", scale: 1.12 },
             blur: { itemStyle: { opacity: 1 }, lineStyle: { opacity: 0.8 }, label: { opacity: 1 } },
             selectedMode: false,
@@ -1559,6 +1598,13 @@ function OntologyTreePreview({ data }) {
             animationDurationUpdate: 0,
           }],
         }, { notMerge: true });
+        let roamZoom = 1;
+        chart.off("graphRoam");
+        chart.on("graphRoam", (event) => {
+          if (!event.zoom) return;
+          roamZoom *= event.zoom;
+          chart.setOption({ series: [{ id: "ontology-graph", label: { fontSize: scaledTypography(13, fitScale, roamZoom) } }] });
+        });
       };
       renderGraph();
       wheelTarget = containerRef.current;
@@ -1578,8 +1624,12 @@ function OntologyTreePreview({ data }) {
       if (wheelTarget && wheelHandler) wheelTarget.removeEventListener("wheel", wheelHandler, { capture: true });
       chart?.dispose();
     };
-  }, [data, hasAttributes, hasBusinessObjects, showAttributes]);
-  return <div className="ontology-tree-shell">{hasAttributes && <div className="ontology-tree-toolbar"><Button size="small" onClick={() => setShowAttributes((value) => !value)}>{showAttributes ? "隐藏业务属性" : "展开业务属性"}</Button></div>}<div className="ontology-tree-scroll" ref={scrollRef}><div className="ontology-tree-preview" ref={containerRef} /></div></div>;
+  }, [data, appliedLayers]);
+  const filterContent = <div className="ontology-layer-menu">
+    <div className="ontology-layer-options">{ONTOLOGY_LAYER_DEFINITIONS.map((layer) => <Checkbox key={layer.key} disabled={!availability[layer.key]} checked={draftLayers.includes(layer.key)} onChange={(event) => setDraftLayers((current) => event.target.checked ? [...current, layer.key] : current.filter((item) => item !== layer.key))}>{layer.label}</Checkbox>)}</div>
+    <div className="ontology-layer-actions"><Button size="small" onClick={() => { setDraftLayers(appliedLayers); setFilterOpen(false); }}>取消</Button><Button size="small" type="primary" disabled={!draftLayers.length} onClick={() => { setAppliedLayers(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => draftLayers.includes(layer))); setFilterOpen(false); }}>确认</Button></div>
+  </div>;
+  return <div className="ontology-tree-shell"><Popover open={filterOpen} placement="leftTop" trigger="click" content={filterContent} onOpenChange={(open) => { if (open) setDraftLayers(appliedLayers); setFilterOpen(open); }}><button type="button" className="ontology-layer-filter-button" aria-label="筛选可视化层级" title="筛选可视化层级"><OntologyFilterIcon /></button></Popover><div className="ontology-tree-scroll" ref={scrollRef}><div className="ontology-tree-preview" ref={containerRef} /></div></div>;
 }
 
 function PreviewModalTitle({ title, fullscreen, onToggle }) {
@@ -2276,15 +2326,7 @@ function App() {
   const onSaveKey = async () => { const result = await api("/api/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: keyValue }) }); if (result.error) messageApi.error(result.error); else messageApi.success("模型密钥已保存"); };
 
   const fileUrl = (path, task = active) => { const project = task?.project || ""; return `/p/${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}${missionSearch({ taskId: task?.id || "" }, task)}`; };
-  const ontologyFiles = useMemo(() => {
-    const required = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"];
-    const byName = new Map();
-    files.forEach((file) => {
-      const name = String(file?.path || "").replaceAll("\\", "/").split("/").pop();
-      if (required.includes(name) && (!byName.has(name) || String(file.path).includes("mission-output/"))) byName.set(name, file.path);
-    });
-    return filesTaskId === active?.id && byName.has("logical_entities.csv") ? byName : null;
-  }, [files, filesTaskId, active?.id]);
+  const ontologyFiles = useMemo(() => filesTaskId === active?.id ? selectOntologyArtifacts(files, "mission-output/") : null, [files, filesTaskId, active?.id]);
   const showPreview = (next) => {
     if (previewImageUrlRef.current) URL.revokeObjectURL(previewImageUrlRef.current);
     previewImageUrlRef.current = next?.image || "";
@@ -2329,16 +2371,16 @@ function App() {
     }
     setOntologyDrawing(true);
     try {
-      const names = ["business_objects.csv", "logical_entities.csv", "business_attributes.csv"].filter((name) => ontologyFiles.has(name));
-      const responses = await Promise.all(names.map((name) => fetch(fileUrl(ontologyFiles.get(name), task), { credentials: "same-origin" })));
+      const artifacts = [...ontologyFiles.entries()];
+      const responses = await Promise.all(artifacts.map(([, artifact]) => fetch(fileUrl(artifact.path, task), { credentials: "same-origin" })));
       const failedIndex = responses.findIndex((response) => !response.ok);
-      if (failedIndex >= 0) throw new Error(`${names[failedIndex]} 读取失败（HTTP ${responses[failedIndex].status}）`);
+      if (failedIndex >= 0) throw new Error(`${artifacts[failedIndex][1].name} 读取失败（HTTP ${responses[failedIndex].status}）`);
       const texts = await Promise.all(responses.map((response) => response.text()));
-      const records = new Map(names.map((name, index) => [name, csvRecords(texts[index])]));
-      const tree = buildOntologyTree(records.get("business_objects.csv") || [], records.get("logical_entities.csv") || [], records.get("business_attributes.csv") || []);
-      if (!tree.length) throw new Error("逻辑实体产物中没有可展示的数据");
+      const records = new Map(artifacts.map(([layer], index) => [layer, csvRecords(texts[index])]));
+      const graph = buildOntologyGraph(records);
+      if (!graph.availability.logicalEntity) throw new Error("逻辑实体产物中没有可展示的数据");
       if (activeTaskIdRef.current !== taskId) return;
-      showPreview({ path: "本体可视化", ontologyTree: tree });
+      showPreview({ path: "本体可视化", ontologyGraph: graph });
     } catch (error) {
       messageApi.error(`本体可视化失败：${error.message}`);
     } finally {
@@ -2431,7 +2473,7 @@ function App() {
       </main>
       <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || active?.status === "queued" || platformActionLoading} onDrawOntology={drawOntology} drawingOntology={ontologyDrawing} ontologyAvailable={Boolean(ontologyFiles)} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
-      {preview && <Modal open centered={!previewFullscreen} wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""} className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "88vw"} onCancel={() => { closePreview(); setPreviewFullscreen(false); }}>{preview.ontologyTree ? <OntologyTreePreview data={preview.ontologyTree} /> : preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+      {preview && <Modal open centered={!previewFullscreen} wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""} className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "88vw"} onCancel={() => { closePreview(); setPreviewFullscreen(false); }}>{preview.ontologyGraph ? <OntologyTreePreview data={preview.ontologyGraph} /> : preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
       {MISSION && <MissionInfo open={missionInfoOpen} context={missionContext} loading={missionLoading} onClose={() => setMissionInfoOpen(false)} />}
     </div>
