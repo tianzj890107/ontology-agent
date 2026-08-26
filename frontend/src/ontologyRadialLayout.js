@@ -226,8 +226,8 @@ export function layoutOntologyRadial(graph, options = {}) {
   if (!sourceNodes.length) return null;
   const visibleIds = new Set(sourceNodes.map((node) => node.id));
   const links = (graph?.links || []).filter((link) => visibleIds.has(link.source) && visibleIds.has(link.target));
-  const targetAspect = Math.max(0.75, Math.min(2.4, Number(options.viewportWidth) / Math.max(1, Number(options.viewportHeight)) || 1));
-  const aspectScale = Math.max(1, Math.min(1.8, targetAspect));
+  const targetAspect = Math.max(0.75, Math.min(3.2, Number(options.viewportWidth) / Math.max(1, Number(options.viewportHeight)) || 1));
+  const aspectScale = Math.max(1, targetAspect);
   const settings = { horizontalGap: options.horizontalGap ?? options.minGap ?? 10, verticalGap: options.verticalGap ?? options.minGap ?? 6, radialGap: options.radialGap ?? 8, aspectScale, targetAspect };
   const placed = []; const tracks = []; const placedById = new Map(); let previousLayerNodes = [];
   for (const definition of ONTOLOGY_LAYER_DEFINITIONS) {

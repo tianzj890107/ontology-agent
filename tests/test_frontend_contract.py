@@ -464,12 +464,13 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('.ontology-layer-filter-button{', styles)
         self.assertIn('.preview-modal-title>button{position:absolute;top:12px;right:48px;', styles)
         # The existing visualization button now opens Sigma/ForceAtlas2 by
-        # default; ECharts remains an explicit fallback using the same graph.
-        self.assertIn('const [viewMode, setViewMode] = useState("sigma");', source)
+        # The compact radial renderer is the default; Sigma remains available.
+        self.assertIn('const [viewMode, setViewMode] = useState("echarts");', source)
+        self.assertIn('key={`echarts:${appliedLayers.join("|")}`}', source)
         self.assertIn('>环形图</button>', source)
         self.assertIn('>网络图 Beta</button>', source)
-        self.assertIn('<OntologyEChartsPreview data={data} appliedLayers={appliedLayers} />', source)
-        self.assertIn('<OntologySigmaPreview data={data} appliedLayers={appliedLayers} />', source)
+        self.assertIn('<OntologyEChartsPreview key={`echarts:${appliedLayers.join("|")}`} data={data} appliedLayers={appliedLayers} />', source)
+        self.assertIn('<OntologySigmaPreview key={`sigma:${appliedLayers.join("|")}`} data={data} appliedLayers={appliedLayers} />', source)
         self.assertIn('import Sigma from "sigma";', sigma_preview)
         self.assertIn('buildGraphologyGraph(data, appliedLayers)', sigma_preview)
         self.assertIn('layoutOntologyForceAtlas(graph)', sigma_preview)

@@ -111,7 +111,20 @@ test("宽画布生成横向轨道并减少未使用的横向空间", () => {
   const square = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["logicalEntity"], viewportWidth: 700, viewportHeight: 700 });
   assert.ok(wide.aspectScale > square.aspectScale);
   assert.ok(wide.naturalWidth / wide.naturalHeight > square.naturalWidth / square.naturalHeight);
+  assert.ok(Math.abs(wide.naturalWidth / wide.naturalHeight - 2) < 0.35);
   assert.equal(hasNodeOverlap(wide.nodes, 9.99, 5.99), false);
+});
+
+test("图层筛选后只用可见节点重新计算轨道和自然边界", () => {
+  const nodes = [{ ...makeNode("businessObject", "bo", 150), sectorId: "bo" }];
+  for (let index = 0; index < 8; index += 1) nodes.push({ ...makeNode("logicalEntity", `le${index}`, 140), parentId: "bo", sectorId: "bo" });
+  for (let index = 0; index < 100; index += 1) nodes.push({ ...makeNode("businessAttribute", `ba${index}`, 120), parentId: `le${index % 8}`, sectorId: "bo" });
+  const all = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["businessObject", "logicalEntity", "businessAttribute"], viewportWidth: 1400, viewportHeight: 700 });
+  const twoLayers = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["businessObject", "logicalEntity"], viewportWidth: 1400, viewportHeight: 700 });
+  assert.equal(twoLayers.nodes.length, 9);
+  assert.ok(twoLayers.naturalWidth < all.naturalWidth);
+  assert.ok(twoLayers.naturalHeight < all.naturalHeight);
+  assert.notDeepEqual(twoLayers.tracks, all.tracks);
 });
 
 test("大量属性自动增加共享轨道且外轨容量递增", () => {
