@@ -1481,9 +1481,12 @@ function OntologyEChartsPreview({ data, appliedLayers }) {
         const viewportHeight = Math.max(520, scrollRef.current.clientHeight || 0);
         const layout = layoutOntologyRadial(data, {
           selectedLayers: appliedLayers,
-          minGap: 18,
-          layerGap: 28,
-          padding: 32,
+          viewportWidth,
+          viewportHeight,
+          horizontalGap: 10,
+          verticalGap: 6,
+          radialGap: 8,
+          padding: 12,
           hoverScale: 1.12,
         });
         containerRef.current.style.width = `${viewportWidth}px`;
@@ -1494,8 +1497,7 @@ function OntologyEChartsPreview({ data, appliedLayers }) {
           return;
         }
         const fitScale = computeFitScale(layout.naturalWidth, layout.naturalHeight, viewportWidth, viewportHeight);
-        const displayScale = Math.max(fitScale, 0.65);
-        const initialZoom = displayScale / Math.max(fitScale, 0.0001);
+        const displayScale = fitScale;
         const renderNodes = layout.nodes.map((node) => ({
           ...node,
           symbolSize: Array.isArray(node.symbolSize) ? node.symbolSize.map((value) => value * fitScale) : node.symbolSize,
@@ -1513,7 +1515,7 @@ function OntologyEChartsPreview({ data, appliedLayers }) {
             bottom: 0,
             right: 0,
             roam: true,
-            zoom: initialZoom,
+            zoom: 1,
             scaleLimit: { min: 0.15, max: 12 },
             nodeScaleRatio: 1,
             label: { show: true, position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: scaledTypography(13, displayScale, 1), overflow: "truncate", formatter: ({ data: node }) => node?.layoutAnchor ? "" : node?.name || "" },

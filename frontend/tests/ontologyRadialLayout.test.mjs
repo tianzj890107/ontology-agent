@@ -8,6 +8,7 @@ import {
   computeTrackCapacity,
   computeTrackCount,
   hasNodeOverlap,
+  layoutQualityMetrics,
   layoutOntologyRadial,
   nodeHeight,
   nodeWidth,
@@ -52,7 +53,7 @@ test("业务对象内圈会自动扩圈且不重叠", () => {
   const nodes = Array.from({ length: 6 }, (_, index) => makeNode("businessObject", `bo${index}`, 220));
   const layout = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["businessObject"], minGap: 18 });
   assert.ok(layout.tracks.filter((track) => track.layer === "businessObject").length >= 1);
-  assert.equal(hasNodeOverlap(layout.nodes, 17.99), false);
+  assert.equal(hasNodeOverlap(layout.nodes, 9.99, 5.99), false);
 });
 
 test("数据多的扇区更宽但密度也更高", () => {
@@ -61,7 +62,7 @@ test("数据多的扇区更宽但密度也更高", () => {
   assert.ok(sectors[1].span / sectors[0].span < 100 / 4);
 });
 
-test("业务对象及其逻辑实体保持同一方向并在各轨道轮转分布", () => {
+test("父节点角度作为软偏好且后代可跨区填充空位", () => {
   const nodes = [];
   const links = [];
   for (const bo of ["bo-a", "bo-b"]) {
@@ -76,10 +77,74 @@ test("业务对象及其逻辑实体保持同一方向并在各轨道轮转分�
   for (const bo of ["bo-a", "bo-b"]) {
     const businessObject = layout.nodes.find((node) => node.id === bo);
     const entities = layout.nodes.filter((node) => node.layer === "logicalEntity" && node.sectorId === bo);
-    assert.equal(Math.min(...entities.map((node) => node.trackIndex)), 0);
-    assert.ok(entities.every((node) => Math.cos(node.angle - businessObject.angle) > 0));
+    assert.ok(entities.some((node) => Math.cos(node.angle - businessObject.angle) > 0));
   }
-  assert.equal(hasNodeOverlap(layout.nodes, 17.99), false);
+  assert.equal(hasNodeOverlap(layout.nodes, 9.99, 5.99), false);
+});
+
+test("大量宽业务对象形成中心多轨区域而不是扩大单一空心圆", () => {
+  const nodes = Array.from({ length: 20 }, (_, index) => ({ ...makeNode("businessObject", `bo${index}`, 180), sectorId: `bo${index}` }));
+  const layout = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["businessObject"], viewportWidth: 1200, viewportHeight: 700 });
+  const tracks = layout.tracks.filter((track) => track.layer === "businessObject");
+  assert.equal(tracks[0].radius, 0);
+  assert.ok(tracks.length > 2);
+  assert.ok(tracks.length < nodes.length);
+  assert.ok(layout.quality.outerRadius < 300);
+  assert.equal(hasNodeOverlap(layout.nodes, 9.99, 5.99), false);
+});
+
+test("少量两层节点保持高密度自然边界", () => {
+  const nodes = [
+    { ...makeNode("businessObject", "bo-a", 150), sectorId: "bo-a" },
+    { ...makeNode("businessObject", "bo-b", 150), sectorId: "bo-b" },
+    ...Array.from({ length: 5 }, (_, index) => ({ ...makeNode("logicalEntity", `le-${index}`, 140), parentId: index % 2 ? "bo-b" : "bo-a", sectorId: index % 2 ? "bo-b" : "bo-a" })),
+  ];
+  const layout = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["businessObject", "logicalEntity"], viewportWidth: 1200, viewportHeight: 700 });
+  assert.ok(layout.quality.density > 0.35);
+  assert.ok(layout.naturalWidth < 600);
+  assert.ok(layout.naturalHeight < 350);
+});
+
+test("宽画布生成横向轨道并减少未使用的横向空间", () => {
+  const nodes = Array.from({ length: 40 }, (_, index) => makeNode("logicalEntity", `le${index}`, 130));
+  const wide = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["logicalEntity"], viewportWidth: 1400, viewportHeight: 700 });
+  const square = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["logicalEntity"], viewportWidth: 700, viewportHeight: 700 });
+  assert.ok(wide.aspectScale > square.aspectScale);
+  assert.ok(wide.naturalWidth / wide.naturalHeight > square.naturalWidth / square.naturalHeight);
+  assert.equal(hasNodeOverlap(wide.nodes, 9.99, 5.99), false);
+});
+
+test("大量属性自动增加共享轨道且外轨容量递增", () => {
+  const nodes = [];
+  const links = [];
+  for (let index = 0; index < 6; index += 1) nodes.push({ ...makeNode("businessObject", `bo${index}`, 150), sectorId: `bo${index}` });
+  for (let index = 0; index < 24; index += 1) {
+    const parent = `bo${index % 6}`;
+    nodes.push({ ...makeNode("logicalEntity", `le${index}`, 140), parentId: parent, sectorId: parent });
+    links.push(relation(parent, `le${index}`));
+  }
+  for (let index = 0; index < 320; index += 1) {
+    const parent = `le${index % 24}`;
+    nodes.push({ ...makeNode("businessAttribute", `ba${index}`, 120), parentId: parent, sectorId: `bo${index % 6}` });
+    links.push(relation(parent, `ba${index}`));
+  }
+  const layout = layoutOntologyRadial({ nodes, links }, { viewportWidth: 1400, viewportHeight: 760 });
+  const attributes = layout.tracks.filter((track) => track.layer === "businessAttribute");
+  assert.ok(attributes.length > 1);
+  assert.ok(attributes.at(-1).capacity > attributes[0].capacity);
+  assert.equal(hasNodeOverlap(layout.nodes, 9.99, 5.99), false);
+  const scale = computeFitScale(layout.naturalWidth, layout.naturalHeight, 1400, 760);
+  assert.ok(layout.naturalWidth * scale <= 1400);
+  assert.ok(layout.naturalHeight * scale <= 760);
+});
+
+test("没有实际节点的语义层不占半径", () => {
+  const nodes = Array.from({ length: 12 }, (_, index) => makeNode("logicalEntity", `le${index}`, 130));
+  const onlyEntity = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["logicalEntity"], viewportWidth: 1000, viewportHeight: 600 });
+  const withEmptyLayers = layoutOntologyRadial({ nodes, links: [] }, { selectedLayers: ["businessObject", "logicalEntity", "businessAttribute", "metric", "businessRule"], viewportWidth: 1000, viewportHeight: 600 });
+  assert.equal(withEmptyLayers.naturalWidth, onlyEntity.naturalWidth);
+  assert.equal(withEmptyLayers.naturalHeight, onlyEntity.naturalHeight);
+  assert.deepEqual(withEmptyLayers.tracks, onlyEntity.tracks);
 });
 
 test("多个逻辑实体的属性共享全局属性轨道", () => {
@@ -120,6 +185,15 @@ test("边界由实际放置结果生成并包含两个不可见锚点", () => {
 test("fit 将完整自然布局等比放入 viewport", () => {
   assert.equal(computeFitScale(1000, 500, 500, 500, 0), 0.5);
   assert.equal(computeFitScale(400, 800, 800, 400, 0), 0.5);
+  assert.equal(computeFitScale(200, 100, 800, 400, 0), 4);
+});
+
+test("质量指标量化边界、密度、外半径和最近邻", () => {
+  const metrics = layoutQualityMetrics([makeNode("logicalEntity", "a"), { ...makeNode("logicalEntity", "b"), x: 120, y: 0 }].map((node) => ({ x: 0, y: 0, ...node })));
+  assert.ok(metrics.nodeArea > 0);
+  assert.ok(metrics.boundingArea > 0);
+  assert.ok(metrics.density > 0);
+  assert.ok(metrics.averageNearestNeighborDistance > 0);
 });
 
 test("文字随缩放缩小并在放大时封顶", () => {
