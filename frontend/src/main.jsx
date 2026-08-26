@@ -24,6 +24,7 @@ import {
 import "./styles.css";
 import { formatDisplayValue, isNumericDisplayValue } from "./numberFormat.js";
 import { appendStreamEvent, eventKey, mergeEvents, nextCursor } from "./eventSync.js";
+import { layoutOntologyRadial } from "./ontologyRadialLayout.js";
 
 const MISSION = window.__MISSION__?.taskCode ? window.__MISSION__ : null;
 const STANDALONE = Boolean(window.__STANDALONE_MODELING__);
@@ -1496,14 +1497,7 @@ function buildOntologyTree(businessObjects, logicalEntities, businessAttributes)
     };
   });
   const unassignedEntities = entityNodes.filter(({ objectCode }) => !objectCodes.has(objectCode)).map(({ node }) => ({ ...node, lineStyle: { opacity: 0 } }));
-  return [...objectNodes, ...(unassignedEntities.length ? [{
-    id: "ontology:unassigned-entities",
-    name: "",
-    virtualGroup: true,
-    symbolSize: 0,
-    itemStyle: { opacity: 0 },
-    children: unassignedEntities,
-  }] : [])];
+  return [...objectNodes, ...unassignedEntities];
 }
 
 function OntologyTreePreview({ data }) {
@@ -1525,94 +1519,32 @@ function OntologyTreePreview({ data }) {
       if (disposed || !containerRef.current || !scrollRef.current) return;
       chart = echarts.init(containerRef.current);
       const renderGraph = () => {
-        const attributeColumns = 4;
-        const objectNodes = data.filter((node) => node.nodeType === "businessObject");
-        const entityNodes = data.flatMap((root) => root.nodeType === "entity" ? [root] : (root.children || []).filter((node) => node.nodeType === "entity"));
-        const displaySize = (node) => {
-          if (!Array.isArray(node.symbolSize)) return [92, showAttributes ? 38 : 50];
-          return showAttributes ? node.symbolSize : [Math.round(node.symbolSize[0] * 1.3), 50];
-        };
-        const maxWidth = (nodes, fallback = 92) => Math.max(fallback, ...nodes.map((node) => displaySize(node)[0]));
-        const attributeWidths = Array.from({ length: attributeColumns }, (_, column) => maxWidth(entityNodes.flatMap((entity) => (entity.children || []).filter((_, index) => index % attributeColumns === column))));
-        const objectWidth = maxWidth(objectNodes);
-        const entityWidth = maxWidth(entityNodes);
         const viewportWidth = Math.max(320, scrollRef.current.clientWidth || 0);
-        const padding = 28;
-        const minimumGap = 24;
-        let width;
-        let objectX = null;
-        let entityX;
-        let attributeXs = [];
-        if (!showAttributes) {
-          if (hasBusinessObjects) {
-            width = Math.max(viewportWidth, objectWidth + entityWidth + minimumGap * 2 + padding * 2);
-            objectX = Math.max(padding + objectWidth / 2, width * 0.25);
-            entityX = Math.min(width - padding - entityWidth / 2, width * 0.75);
-          } else {
-            width = Math.max(viewportWidth, entityWidth + padding * 2);
-            entityX = width / 2;
-          }
-        } else {
-          const columnWidths = [...(hasBusinessObjects ? [objectWidth] : []), entityWidth, ...attributeWidths];
-          width = Math.max(viewportWidth, columnWidths.reduce((sum, value) => sum + value, 0) + minimumGap * (columnWidths.length - 1) + padding * 2);
-          const gap = (width - padding * 2 - columnWidths.reduce((sum, value) => sum + value, 0)) / (columnWidths.length - 1);
-          const centers = [];
-          let x = padding;
-          columnWidths.forEach((columnWidth) => {
-            centers.push(x + columnWidth / 2);
-            x += columnWidth + gap;
-          });
-          objectX = hasBusinessObjects ? centers[0] : null;
-          entityX = centers[hasBusinessObjects ? 1 : 0];
-          attributeXs = centers.slice(hasBusinessObjects ? 2 : 1);
-        }
-        const graphNodes = [];
-        const graphLinks = [];
-        let cursorY = 40;
-        const addNode = (node, x, y) => {
-          graphNodes.push({ ...node, children: undefined, x, y, symbolSize: displaySize(node), ...(!showAttributes ? { label: { fontSize: 15 } } : {}) });
-        };
-        const addEntity = (entity, objectId = null) => {
-          const attributes = showAttributes ? (entity.children || []) : [];
-          const rows = Math.max(1, Math.ceil(attributes.length / attributeColumns));
-          const bandHeight = rows * 58;
-          const entityY = cursorY + bandHeight / 2;
-          addNode(entity, entityX, entityY);
-          if (objectId) graphLinks.push({ source: objectId, target: entity.id });
-          attributes.forEach((attribute, index) => {
-            const column = index % attributeColumns;
-            const row = Math.floor(index / attributeColumns);
-            addNode(attribute, attributeXs[column], cursorY + row * 58 + 29);
-            graphLinks.push({ source: entity.id, target: attribute.id });
-          });
-          cursorY += bandHeight;
-          return entityY;
-        };
-        data.forEach((root) => {
-          if (root.nodeType === "businessObject") {
-            const entityYs = (root.children || []).filter((node) => node.nodeType === "entity").map((entity) => addEntity(entity, root.id));
-            const objectY = entityYs.length ? entityYs.reduce((sum, value) => sum + value, 0) / entityYs.length : cursorY + 29;
-            addNode(root, objectX, objectY);
-            if (!entityYs.length) cursorY += 58;
-          } else if (root.virtualGroup) {
-            (root.children || []).filter((node) => node.nodeType === "entity").forEach((entity) => addEntity(entity));
-          } else if (root.nodeType === "entity") addEntity(root);
+        const viewportHeight = Math.max(520, scrollRef.current.clientHeight || 0);
+        const layout = layoutOntologyRadial(data, {
+          width: viewportWidth,
+          height: viewportHeight,
+          showAttributes: showAttributes && hasAttributes,
+          minGap: 18,
+          sectorGap: 0.05,
+          padding: 56,
+          hoverScale: 1.12,
         });
-        const height = Math.max(520, cursorY + 40);
-        const layoutAnchors = [
-          { id: "ontology:layout-top-left", name: "", layoutAnchor: true, x: 0, y: 0, symbolSize: 0, itemStyle: { opacity: 0 }, label: { show: false } },
-          { id: "ontology:layout-bottom-right", name: "", layoutAnchor: true, x: width, y: height, symbolSize: 0, itemStyle: { opacity: 0 }, label: { show: false } },
-        ];
-        containerRef.current.style.width = `${width}px`;
-        containerRef.current.style.height = `${height}px`;
-        chart.resize({ width, height });
+        const { nodes = [], links = [], canvasWidth = viewportWidth, canvasHeight = viewportHeight } = layout || {};
+        containerRef.current.style.width = `${canvasWidth}px`;
+        containerRef.current.style.height = `${canvasHeight}px`;
+        chart.resize({ width: canvasWidth, height: canvasHeight });
+        if (!layout) {
+          chart.clear();
+          return;
+        }
         chart.setOption({
-          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.layoutAnchor ? "" : node?.name || "" },
+          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.name || "" },
           series: [{
             type: "graph",
             layout: "none",
-            data: [...graphNodes, ...layoutAnchors],
-            links: graphLinks,
+            data: nodes,
+            links,
             top: 0,
             left: 0,
             bottom: 0,
