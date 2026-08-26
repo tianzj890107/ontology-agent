@@ -12,6 +12,15 @@
 
 ## 2026-08-26
 
+### 2. Sigma + Graphology + ForceAtlas2 本体网络图 Beta POC
+
+- 与 ECharts 并存：现有文件面板“本体可视化”按钮打开后默认展示“网络图 Beta”，预览内保留“环形图 / 网络图 Beta”切换，随时可回退现有 ECharts 环形图；两个 renderer 共用同一份当前 task/run 文件快照、统一 graph model 和 `appliedLayers`，切换视图不改变任务隔离、文件读取或五层筛选契约。
+- 统一图模型：新增 `ontologyGraphModel.js`，统一把业务对象、逻辑实体、业务属性、指标、业务规则转换为标准 nodes/edges 并构建过滤后的 Graphology 图；只按正式编码/名称来源字段生成 BO→LE、LE→Attribute 和 Metric→来源节点关系，缺少可信归属字段的 Rule 仅生成孤立节点，隐藏中间层时不补造跨层关系。现有 ECharts 径向布局改为消费该共享模型，renderer 与交互实现保持原样。
+- ForceAtlas2：新增集中配置、确定性 semantic seed、按规模限制迭代、轻量节点防重叠、坐标归一化和孤立节点紧凑 packing；真实 963 节点/964 边数据对比多组参数后采用 `scalingRatio=4.5`、`gravity=0.25`、`edgeWeightInfluence=1`、`slowDown=4`、Barnes-Hut + LinLog，大图 160 次迭代约 299ms。Sigma 初次布局自动 fit，支持 pan/zoom、hover 完整标签、点击 1-hop 邻域高亮、空白取消、重新布局、ResizeObserver 和卸载 `kill()`；BO/LE 默认显示标签，Attribute 仅在放大、hover 或选中邻域时显示。
+- 验证：Node 25 项通过（统一模型、真实边、规则孤立、图层过滤、无伪边、有限坐标、稳定布局、孤立节点边界、多 BO、300+ 属性及仓库真实五层输出）；相关 Python contract 20 项通过；production build 成功，Sigma 独立异步 chunk 约 107KB gzip 约 30KB，保留既有 >500KB chunk warning；headless Chrome + 软件 WebGL 使用仓库真实 8 BO/26 LE/904 Attribute 数据完成渲染，160 次迭代较 55 次明显形成局部 cluster、减少中心毛球且无强制空心圆；`git diff --check` 通过。
+- 当前限制：POC 仍在主线程同步执行有限布局，当前约千节点可接受，更大数据可能需要 ForceAtlas2 worker；密集 cluster 仍允许交叉边和少量 BO/LE 标签碰撞；未做位置持久化、编辑、社区发现或服务端布局。`npm audit` 仍报告既有 `xlsx` 与传递依赖 `nanoid` 共 2 个 high 项，本次未做越界依赖升级。
+- 主要文件：`frontend/src/ontologyGraphModel.js`、`frontend/src/ontologyForceLayout.js`、`frontend/src/OntologySigmaPreview.jsx`、`frontend/src/main.jsx`、`frontend/src/ontologyRadialLayout.js`、`frontend/src/styles.css`、`frontend/tests/ontologyGraphModel.test.mjs`、`frontend/tests/ontologyForceLayout.test.mjs`、`tests/test_frontend_contract.py`、`frontend/package*.json`、`frontend/dist/`。
+
 ### 1. 本体可视化五层筛选与径向共享轨道布局
 
 - 图层筛选：移除画布上方“展开/隐藏业务属性”按钮，在预览卡片右上角的全屏与关闭按钮左侧新增漏斗图标；弹层固定提供业务对象、逻辑实体、业务属性、指标、业务规则五项 Checkbox，当前工作区缺少或没有有效数据的图层置灰。默认应用业务对象与逻辑实体；筛选使用 `draftLayers` / `appliedLayers` 两阶段状态，勾选只修改草稿，点击“确认”才重建一次图，取消、关闭弹层或点外部不会改变当前图。

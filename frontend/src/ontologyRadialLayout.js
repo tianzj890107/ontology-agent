@@ -1,12 +1,8 @@
-const TAU = Math.PI * 2;
+import { ONTOLOGY_LAYER_DEFINITIONS } from "./ontologyGraphModel.js";
 
-export const ONTOLOGY_LAYER_DEFINITIONS = [
-  { key: "businessObject", label: "业务对象", baseRadius: 88 },
-  { key: "logicalEntity", label: "逻辑实体", baseRadius: 188 },
-  { key: "businessAttribute", label: "业务属性", baseRadius: 300 },
-  { key: "metric", label: "指标", baseRadius: 412 },
-  { key: "businessRule", label: "业务规则", baseRadius: 524 },
-];
+export { ONTOLOGY_LAYER_DEFINITIONS } from "./ontologyGraphModel.js";
+
+const TAU = Math.PI * 2;
 
 export const nodeWidth = (node) => Array.isArray(node?.symbolSize) ? Number(node.symbolSize[0]) || 92 : Number(node?.symbolSize) || 92;
 export const nodeHeight = (node) => Array.isArray(node?.symbolSize) ? Number(node.symbolSize[1]) || 38 : Number(node?.symbolSize) || 38;

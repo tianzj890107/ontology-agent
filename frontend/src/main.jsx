@@ -25,6 +25,9 @@ import "./styles.css";
 import { formatDisplayValue, isNumericDisplayValue } from "./numberFormat.js";
 import { appendStreamEvent, eventKey, mergeEvents, nextCursor } from "./eventSync.js";
 import { computeFitScale, layoutOntologyRadial, ONTOLOGY_LAYER_DEFINITIONS, scaledTypography } from "./ontologyRadialLayout.js";
+import { buildOntologyGraph } from "./ontologyGraphModel.js";
+
+const OntologySigmaPreview = React.lazy(() => import("./OntologySigmaPreview.jsx"));
 
 const MISSION = window.__MISSION__?.taskCode ? window.__MISSION__ : null;
 const STANDALONE = Boolean(window.__STANDALONE_MODELING__);
@@ -1453,87 +1456,6 @@ function csvRecords(text) {
   return rows.slice(1).filter((row) => row.some((value) => String(value || "").trim())).map((row) => Object.fromEntries(headers.map((header, index) => [String(header || "").trim(), String(row[index] || "").trim()])));
 }
 
-function ontologyNodeStyle(name, color) {
-  const length = Array.from(String(name || "")).length;
-  return {
-    symbol: "circle",
-    symbolSize: [Math.max(92, Math.min(220, length * 14 + 32)), 38],
-    itemStyle: { color, borderColor: "#fff", borderWidth: 1.5 },
-  };
-}
-
-function ontologyReferences(value) {
-  return String(value || "").split(/[，,、;；|]/).map((item) => item.trim()).filter(Boolean);
-}
-
-function buildOntologyGraph(records) {
-  const rows = (layer) => records.get(layer) || [];
-  const nodes = [];
-  const links = [];
-  const indexes = { businessObject: new Map(), logicalEntity: new Map(), businessAttribute: new Map() };
-  const addIndex = (layer, node, ...values) => values.filter(Boolean).forEach((value) => indexes[layer].set(String(value).trim(), node));
-  const addNode = (layer, nodeType, code, name, color, index) => {
-    const node = { id: `${nodeType}:${code || index}`, code: code || "", name: name || code || `${nodeType}${index + 1}`, layer, nodeType, ...ontologyNodeStyle(name || code, color) };
-    nodes.push(node);
-    return node;
-  };
-
-  rows("businessObject").forEach((row, index) => {
-    const code = row["业务对象编码"];
-    if (!code) return;
-    const node = addNode("businessObject", "businessObject", code, row["业务对象名称"] || code, "#2563eb", index);
-    node.sectorId = node.id;
-    addIndex("businessObject", node, code, row["业务对象名称"]);
-  });
-  rows("logicalEntity").forEach((row, index) => {
-    const code = row["逻辑实体编码"];
-    if (!code) return;
-    const node = addNode("logicalEntity", "entity", code, row["逻辑实体名称"] || code, "#0f766e", index);
-    addIndex("logicalEntity", node, code, row["逻辑实体名称"]);
-    const parent = indexes.businessObject.get(row["业务对象编码"]) || indexes.businessObject.get(row["业务对象名称"]);
-    node.parentId = parent?.id || null;
-    node.sectorId = parent?.sectorId || "ontology:unassigned";
-    if (parent) links.push({ source: parent.id, target: node.id });
-  });
-  rows("businessAttribute").forEach((row, index) => {
-    const code = row["业务属性编码"];
-    if (!code) return;
-    const node = addNode("businessAttribute", "attribute", code, row["业务属性名称"] || code, "#64748b", index);
-    addIndex("businessAttribute", node, code, row["业务属性名称"]);
-    const parent = indexes.logicalEntity.get(row["逻辑实体编码"]) || indexes.logicalEntity.get(row["逻辑实体名称"]);
-    node.parentId = parent?.id || null;
-    node.sectorId = parent?.sectorId || "ontology:unassigned";
-    if (parent) links.push({ source: parent.id, target: node.id });
-  });
-  rows("metric").forEach((row, index) => {
-    const code = row["指标编码"] || `metric-${index + 1}`;
-    const node = addNode("metric", "metric", code, row["指标名称"] || code, "#7c3aed", index);
-    const sources = [
-      ["来源业务属性", "businessAttribute"],
-      ["来源逻辑实体", "logicalEntity"],
-      ["来源业务对象", "businessObject"],
-    ];
-    const linked = new Set();
-    sources.forEach(([field, layer]) => ontologyReferences(row[field]).forEach((reference) => {
-      const parent = indexes[layer].get(reference);
-      if (parent && !linked.has(parent.id)) {
-        links.push({ source: parent.id, target: node.id });
-        linked.add(parent.id);
-      }
-    }));
-    const primaryParent = nodes.find((candidate) => linked.has(candidate.id));
-    node.parentId = primaryParent?.id || null;
-    node.sectorId = primaryParent?.sectorId || "ontology:metrics";
-  });
-  rows("businessRule").forEach((row, index) => {
-    const code = row["规则编码"] || `rule-${index + 1}`;
-    const node = addNode("businessRule", "rule", code, row["规则名称"] || code, "#c2410c", index);
-    node.sectorId = "ontology:rules";
-  });
-  const availability = Object.fromEntries(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => [layer.key, nodes.some((node) => node.layer === layer.key)]));
-  return { nodes, links, availability };
-}
-
 function OntologyFilterIcon() {
   return <svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true"><path d="M0 0h16v16H0z"/><path fillRule="evenodd" fill="currentColor" d="m2.826 4.602 3.138 3.665a.826.826 0 0 1 .2.542v3.363c0 .38.086.706.256.98.17.275.425.496.766.664l.966.477c.194.096.385.139.574.13.189-.01.375-.071.559-.185a1.16 1.16 0 0 0 .413-.42c.092-.164.138-.355.138-.571V8.809a.827.827 0 0 1 .2-.542l3.138-3.665c.254-.297.404-.61.45-.936.045-.326-.014-.667-.178-1.023-.163-.355-.384-.622-.661-.8-.278-.178-.612-.267-1.004-.267H4.22c-.392 0-.726.09-1.004.267-.277.178-.498.445-.662.8-.163.356-.222.697-.177 1.023.046.327.196.639.45.936Zm4.228 3.57a1.82 1.82 0 0 0-.33-.556L3.586 3.952a.828.828 0 0 1-.205-.426.828.828 0 0 1 .08-.465.827.827 0 0 1 .302-.363.828.828 0 0 1 .456-.122h7.562c.178 0 .33.04.456.122.126.08.227.202.301.363a.828.828 0 0 1 .08.465.828.828 0 0 1-.204.426L9.276 7.616a1.82 1.82 0 0 0-.33.556c-.074.199-.11.41-.11.637v4.438a.165.165 0 0 1-.02.082.166.166 0 0 1-.059.06.163.163 0 0 1-.08.026.167.167 0 0 1-.082-.019l-.966-.477a.827.827 0 0 1-.348-.301.828.828 0 0 1-.117-.446V8.809c0-.226-.036-.438-.11-.637Z"/></svg>;
 }
@@ -1545,13 +1467,9 @@ function defaultOntologyLayers(availability) {
   return fallback ? [fallback.key] : [];
 }
 
-function OntologyTreePreview({ data }) {
+function OntologyEChartsPreview({ data, appliedLayers }) {
   const scrollRef = useRef(null);
   const containerRef = useRef(null);
-  const availability = data.availability || {};
-  const [appliedLayers, setAppliedLayers] = useState(() => defaultOntologyLayers(availability));
-  const [draftLayers, setDraftLayers] = useState(() => defaultOntologyLayers(availability));
-  const [filterOpen, setFilterOpen] = useState(false);
   useEffect(() => {
     let disposed = false;
     let chart = null;
@@ -1637,11 +1555,24 @@ function OntologyTreePreview({ data }) {
       chart?.dispose();
     };
   }, [data, appliedLayers]);
+  return <div className="ontology-tree-scroll" ref={scrollRef}><div className="ontology-tree-preview" ref={containerRef} /></div>;
+}
+
+function OntologyTreePreview({ data }) {
+  const availability = data.availability || {};
+  const [appliedLayers, setAppliedLayers] = useState(() => defaultOntologyLayers(availability));
+  const [draftLayers, setDraftLayers] = useState(() => defaultOntologyLayers(availability));
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [viewMode, setViewMode] = useState("sigma");
   const filterContent = <div className="ontology-layer-menu">
     <div className="ontology-layer-options">{ONTOLOGY_LAYER_DEFINITIONS.map((layer) => <Checkbox key={layer.key} disabled={!availability[layer.key]} checked={draftLayers.includes(layer.key)} onChange={(event) => setDraftLayers((current) => event.target.checked ? [...current, layer.key] : current.filter((item) => item !== layer.key))}>{layer.label}</Checkbox>)}</div>
     <div className="ontology-layer-actions"><Button size="small" onClick={() => { setDraftLayers(appliedLayers); setFilterOpen(false); }}>取消</Button><Button size="small" type="primary" disabled={!draftLayers.length} onClick={() => { setAppliedLayers(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => draftLayers.includes(layer))); setFilterOpen(false); }}>确认</Button></div>
   </div>;
-  return <div className="ontology-tree-shell"><Popover open={filterOpen} placement="leftTop" trigger="click" content={filterContent} onOpenChange={(open) => { if (open) setDraftLayers(appliedLayers); setFilterOpen(open); }}><button type="button" className="ontology-layer-filter-button" aria-label="筛选可视化层级" title="筛选可视化层级"><OntologyFilterIcon /></button></Popover><div className="ontology-tree-scroll" ref={scrollRef}><div className="ontology-tree-preview" ref={containerRef} /></div></div>;
+  return <div className="ontology-tree-shell">
+    <div className="ontology-view-switch" role="group" aria-label="本体可视化视图"><button type="button" className={viewMode === "echarts" ? "active" : ""} onClick={() => setViewMode("echarts")}>环形图</button><button type="button" className={viewMode === "sigma" ? "active" : ""} onClick={() => setViewMode("sigma")}>网络图 Beta</button></div>
+    <Popover open={filterOpen} placement="leftTop" trigger="click" content={filterContent} onOpenChange={(open) => { if (open) setDraftLayers(appliedLayers); setFilterOpen(open); }}><button type="button" className="ontology-layer-filter-button" aria-label="筛选可视化层级" title="筛选可视化层级"><OntologyFilterIcon /></button></Popover>
+    {viewMode === "echarts" ? <OntologyEChartsPreview data={data} appliedLayers={appliedLayers} /> : <React.Suspense fallback={<div className="ontology-sigma-loading"><Spin tip="正在加载网络图…" /></div>}><OntologySigmaPreview data={data} appliedLayers={appliedLayers} /></React.Suspense>}
+  </div>;
 }
 
 function PreviewModalTitle({ title, fullscreen, onToggle }) {
