@@ -562,6 +562,8 @@ class FrontendContractTests(unittest.TestCase):
         # 工具栏一行排列：布局选择器、图层筛选、全屏、关闭保持同一行。
         self.assertIn('.ontology-toolbar{', styles)
         self.assertIn('.ontology-layout-selector{', styles)
+        self.assertIn('.ontology-layout-selector{display:flex;align-items:center;gap:6px;padding:2px 6px 2px 10px;border:0;', styles)
+        self.assertIn('box-shadow:none}.ontology-layout-label', styles)
         self.assertIn('.ontology-layout-error{', styles)
         self.assertIn('.ontology-tree-loading-overlay{', styles)
 

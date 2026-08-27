@@ -212,6 +212,12 @@
 
 验证结果：前端 Node 测试 74/74；`pytest tests/test_frontend_contract.py -q` 14 passed；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。提交 `79dff00` 已推送并部署 47313/47314；部署测试 22/22 通过，两服务健康检查均为 HTTP 200，线上 bundle `index-BqyXHrdA.js` 已核对包含“实体关系/动作”七层配置。
 
+### 布局选择器移除外边框
+
+- 移除可视化工具栏“布局”选择器整体容器的外边框与外层阴影；内部下拉选择、提示图标、尺寸、位置和交互保持不变。
+- 主要文件：`frontend/src/styles.css`、`tests/test_frontend_contract.py`、`frontend/dist`。
+- 验证结果：`pytest tests/test_frontend_contract.py -q` 14 passed；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。发布结果待部署后补充。
+
 ### 业务对象编码契约收紧：BO + 4 位流水码
 
 完成此前只改了一半的业务对象编码收紧：正式建模产物中的 `业务对象编码` 统一为 `BO` + 4 位流水码（`^BO\d{4}$`，如 `BO0001`），不再接受任意字母开头的旧格式（如 `CO001`、`BO1`）。
