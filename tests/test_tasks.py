@@ -176,6 +176,22 @@ class TaskStateMachineTests(unittest.TestCase):
                    "`reasoning_content` in the thinking mode must be passed back to the API")
         self.assertTrue(oc_codex_server.is_recoverable_provider_error(message))
 
+    def test_run_result_accepts_callback_file_objects(self):
+        task = SimpleNamespace(id="task-1", task_code="RM-1", mission_context={
+            "expectedFiles": ["business_objects.csv", "logical_entities.csv"],
+        })
+        result = oc_codex_server.set_task_run_result(
+            task, "ORCHESTRATION_FAILED",
+            generated_artifacts=[
+                {"filename": "business_objects.csv", "objectKey": "x/business_objects.csv"},
+                {"name": "logical_entities.csv"},
+                {"objectKey": "missing-name"},
+            ],
+        )
+        self.assertEqual(result["generatedArtifacts"], [
+            "business_objects.csv", "logical_entities.csv",
+        ])
+
     def test_provider_balance_and_auth_errors_are_not_recoverable(self):
         self.assertFalse(oc_codex_server.is_recoverable_provider_error(
             "litellm.BadRequestError: DeepseekException - Insufficient Balance"))
@@ -1991,6 +2007,29 @@ class TaskLifecycleGateTests(unittest.TestCase):
                 handler._handle_platform_status(task.id)
             self.assertEqual(response[0][0], 200)
             self.assertEqual(cb.call_count, 1)
+
+    def test_complete_callback_failure_returns_structured_502(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory, status="idle",
+                              active_execution_id="")
+            handler, response = self._handler(task, {"action": "complete"})
+            callback_file = {
+                "filename": "business_objects.csv",
+                "objectKey": "output/business_objects.csv",
+                "previewUrl": "https://example.test/business_objects.csv",
+            }
+            with patch.object(oc_codex_server, "task_status_callback",
+                              return_value={"ok": False, "error": "upstream rejected"}), \
+                    patch.object(oc_codex_server, "build_completed_callback_payload",
+                                 return_value=({"files": [callback_file]}, None)), \
+                    patch.object(oc_codex_server, "persist_tasks"):
+                handler._handle_platform_status(task.id)
+            status, payload = response[0]
+            self.assertEqual(status, 502)
+            self.assertEqual(payload["code"], "PLATFORM_SUCCESS_CALLBACK_FAILED")
+            self.assertIn("upstream rejected", payload["error"])
+            self.assertEqual(task.run_result["generatedArtifacts"],
+                             ["business_objects.csv"])
 
     def test_idle_status_with_active_execution_id_still_blocked(self):
         with tempfile.TemporaryDirectory() as directory:

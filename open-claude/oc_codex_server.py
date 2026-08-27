@@ -1703,13 +1703,22 @@ def task_status_callback(task, agent_status: str, *, authorization: str = "",
 def set_task_run_result(task, status: str, *, errors=None, warnings=None,
                         generated_artifacts=None) -> dict:
     """Persist the structured run outcome used by the final renderer."""
+    artifact_names = []
+    for item in generated_artifacts or []:
+        if isinstance(item, dict):
+            name = item.get("filename") or item.get("name")
+        else:
+            name = item
+        normalized_name = str(name or "").strip()
+        if normalized_name:
+            artifact_names.append(normalized_name)
     result = {
         "taskId": str(getattr(task, "id", "") or ""),
         "taskCode": str(getattr(task, "task_code", "") or ""),
         "status": str(status or "UNKNOWN").upper(),
         "requiredArtifacts": sorted(normalize_expected_files(
             (getattr(task, "mission_context", {}) or {}).get("expectedFiles"))),
-        "generatedArtifacts": sorted(set(generated_artifacts or [])),
+        "generatedArtifacts": sorted(set(artifact_names)),
         "validationSummary": {
             "warningCount": len(warnings or []),
             "errorCount": len(errors or []),
@@ -6685,10 +6694,15 @@ class Handler(BaseHTTPRequestHandler):
                     task.platform_last_error = "SUCCESS 状态回调失败: " + str(result.get("error") or "未知错误")[:800]
                     set_task_run_result(task, "ORCHESTRATION_FAILED",
                                         errors=["FINALIZATION_FAILED", task.platform_last_error],
-                                        generated_artifacts=list((payload or {}).get("files") or []))
+                                        generated_artifacts=(payload or {}).get("files") or [])
                     task.platform_updated = time.time()
                     persist_tasks()
-                    self._send_json({"error": task.platform_last_error}, status=502)
+                    self._send_json({
+                        "error": task.platform_last_error,
+                        "code": "PLATFORM_SUCCESS_CALLBACK_FAILED",
+                        "callback": result,
+                        "task": task.summary(),
+                    }, status=502)
                     return
                 task.platform_status = "COMPLETED"
                 task.platform_last_error = ""

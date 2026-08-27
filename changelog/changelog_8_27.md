@@ -180,6 +180,16 @@
 
 验证结果：`pytest tests/test_tasks.py tests/test_openai_compat.py -q` 128 passed；`py_compile open-claude/oc_codex_server.py` 与 `git diff --check` 通过。功能提交 `4298426` 与配套契约提交 `31db5ce` 已推送并部署；47313/47314 均无活动任务后重启，健康检查均为 HTTP 200，线上版本为 `31db5ce`。47313 首次部署因配套知识测试尚未随功能提交入库而在重启前停止，补齐同批文件后部署测试 22/22 通过，旧服务未因此中断。
 
+### “完成”回调网络错误修复
+
+- 根因：平台 `SUCCESS` 回调失败时，47313 的失败记录分支把回调 `files` 字典列表直接传给 `set_task_run_result`；函数对列表执行 `set()` 时触发 `TypeError: unhashable type: 'dict'`，HTTP 请求线程在返回 JSON 前异常退出，前端因此只显示“网络连接错误”，掩盖了真实平台响应。
+- 修复：`set_task_run_result` 统一接受文件名或回调文件对象，从 `filename/name` 提取并去重生成 `generatedArtifacts`；回调失败固定返回 HTTP 502、`code=PLATFORM_SUCCESS_CALLBACK_FAILED`、上游错误、callback 详情与最新 task 摘要，不再断开连接。成功路径继续使用正式 `SUCCESS` + 8 个文件的 `parseElement/filename/objectKey/previewUrl` 回调契约。
+- 回归测试覆盖回调文件对象规范化，以及上游拒绝时结构化 502 响应、错误信息和产物列表持久化。
+
+主要文件：`open-claude/oc_codex_server.py`、`tests/test_tasks.py`、`changelog/changelog_8_27.md`。
+
+验证结果：`pytest tests/test_tasks.py -q` 94 passed；`py_compile open-claude/oc_codex_server.py` 与 `git diff --check` 通过。发布与真实任务回调结果待完成后补充。
+
 ### 业务对象编码契约收紧：BO + 4 位流水码
 
 完成此前只改了一半的业务对象编码收紧：正式建模产物中的 `业务对象编码` 统一为 `BO` + 4 位流水码（`^BO\d{4}$`，如 `BO0001`），不再接受任意字母开头的旧格式（如 `CO001`、`BO1`）。
