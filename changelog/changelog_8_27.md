@@ -34,8 +34,8 @@
 验证结果：
 - 全量 `pytest tests`：576 passed / 13 skipped（10 项 Redis 集成无 `ONTOLOGY_TEST_REDIS_URL`、3 项平台沙箱）/ 371 subtests。
 - 新增 `tests/test_action_inference.py`（27 项：BO/LE 动作生成、明确证据优先、去重稳定编码、九字段输出、任务隔离）与 `tests/test_action_production_fallback.py`（18 项：缺失/空/表头自动补充、明确动作合并与服务字段保留、编码保留与冲突规避、ACTION 与 expectedFiles 双门禁、无 BO 不生成、结构错误不被推断掩盖、任务隔离、严格九字段）；更新 `tests/test_ontology_knowledge.py`、`tests/test_modeling_csv_contract.py`（含集成版输出契约覆盖 actions.csv）。
-- `python -m py_compile` 全部改动 Python 文件通过；`git diff --check` 通过；前端 `npm run build` 成功（仅既有大 chunk 警告，`frontend/dist` 已随解析要素新增动作重建为新 hash bundle）；前端 Node 测试 32/33 通过，1 项“仓库真实五层输出”需本地 `frontend/output/*.csv` 夹具（gitignore 数据目录，当前工作区不存在，与本次改动无关）。
-- 未部署、未 SSH、未重启、未 commit、未 push。
+- `python -m py_compile` 全部改动 Python 文件通过；`git diff --check` 通过；前端 `npm run build` 成功（仅既有大 chunk 警告，`frontend/dist` 已随解析要素新增动作重建为新 hash bundle）；前端 Node 测试 47/47 通过（`frontend/output/*.csv` 为 gitignore 本地测试夹具，来源于服务器恢复归档，不入库、不参与部署）。
+- 本轮改动经 commit `2372291` 提交并推送、部署 47313/47314（见文末“部署与线上验证”）。
 
 ### 本体可视化预览：统一布局选择交互
 
@@ -61,7 +61,7 @@
 - 前端 Node 测试 `node --test 'tests/*.test.mjs'`：47/47 通过（35 项既有 + 12 项环形预计算新增；`frontend/output/*.csv` 为 gitignore 本地测试夹具，来源于服务器恢复归档，不入库、不参与部署）。
 - `pytest tests/test_frontend_contract.py`：13 passed；`pytest tests/test_tasks.py tests/test_standalone_modeling_server.py`：137 passed + 16 subtests。
 - `npm run build` 成功（仅既有大 chunk 警告）；`git diff --check` 通过。
-- 未部署、未 SSH、未重启、未 commit、未 push。
+- 本段布局交互改动随 commit `2372291` 提交并推送、部署 47313/47314（见文末“部署与线上验证”）。
 
 ### 运行工作区统一命名：input/work/output 与仓库根遗留迁移
 
@@ -89,3 +89,11 @@
 - 历史 run 兼容验证：既有 run 文件列表返回 53 项且全部为 canonical 逻辑路径（`input/...`、`work/...`、`output/...`），无 `mission-*` 命名条目；`work/modeling_state.json` 经 canonical 路径可正常读取。
 - 47313 历史任务端到端验证：用签名 cookie 调用 `/api/files`（280 项，无 mission 命名路径）、`/api/download`（200）、`/p/` 预览（200）；历史客户端使用的 `mission-work/modeling_state.json` 下载路径经兼容层仍可解析（200）。
 - 两服务日志无 traceback/路径/符号链接错误；本体可视化仍读取任务 `output/` 产物。
+
+### 部署与线上验证（动作生产接入与环形布局后台预计算）
+
+- 已提交并推送 `20260727`（commit `2372291`）；服务器 `git pull --ff-only` 到同一 commit，部署前确认 47313/47314 均无 WORKING/QUEUED/ANALYZING/VALIDATING 任务（47313 仅 idle/error/blocked，47314 仅 BLOCKED/FAILED/INPUT_READY）。
+- 47313 经 `scripts/deploy_server.sh` 重启，pid `1668573`；47314 经 `scripts/run_standalone_modeling.sh` 重启，pid `1669964`。
+- 两服务 `/` 与 `/health` 均 200；`activeRuns=0`、`queuedRuns=0`；`providerInUse/databaseInUse=0`；`coordination` 如实报告 backend=file、quotaScope=process、queueScope=process、multiHostSafe=false。
+- 线上 HTML 已加载新 bundle：`frontend/dist/assets/index-Cogll0Y3.js`、`index-D7obonjB.css`、`ui-Bb9cGRad.js`（47313/47314 一致）；懒加载的 `OntologySigmaPreview-BjlhtHl4.js` 两服务均 200，且主 bundle 已包含“关系聚类可视化”“语义环形可视化”及两个布局说明文案。
+- 两服务日志无 traceback/error/exception；部署前备份目录 `backup-pre-2026-08-27-111442/`、run 索引与任务数据均未改动。
