@@ -192,6 +192,31 @@ class TaskStateMachineTests(unittest.TestCase):
             "business_objects.csv", "logical_entities.csv",
         ])
 
+    def test_callback_parse_element_echoes_platform_declared_case(self):
+        declared = [
+            "business_object", "logical_entity", "business_attribute",
+            "entity_relation", "rule", "term", "indicator", "action",
+        ]
+        expected = {
+            "business_objects.csv": "business_object",
+            "logical_entities.csv": "logical_entity",
+            "business_attributes.csv": "business_attribute",
+            "entity_relations.csv": "entity_relation",
+            "business_rules.csv": "rule",
+            "terms.csv": "term",
+            "indicators.csv": "indicator",
+            "actions.csv": "action",
+        }
+        self.assertEqual({
+            name: oc_codex_server.callback_parse_element_for_file(name, declared)
+            for name in expected
+        }, expected)
+        self.assertEqual(
+            oc_codex_server.callback_parse_element_for_file(
+                "actions.csv", ["ACTION"]),
+            "ACTION",
+        )
+
     def test_provider_balance_and_auth_errors_are_not_recoverable(self):
         self.assertFalse(oc_codex_server.is_recoverable_provider_error(
             "litellm.BadRequestError: DeepseekException - Insufficient Balance"))

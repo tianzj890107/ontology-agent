@@ -109,9 +109,9 @@ X-Ontology-Repository-Id: 1
   "taskType": "DATA_SOURCE_MODELING",
   "prompt": "优先识别采购订单与供应商",
   "parseElements": [
-    "BUSINESS_OBJECT",
-    "LOGICAL_ENTITY",
-    "BUSINESS_ATTRIBUTE"
+    "business_object",
+    "logical_entity",
+    "business_attribute"
   ],
   "expectedFiles": [
     "business_objects.csv",
@@ -156,19 +156,23 @@ X-Ontology-Repository-Id: 1
 
 | `parseElement` | 输出文件 |
 |---|---|
-| `BUSINESS_OBJECT` | `business_objects.csv` |
-| `LOGICAL_ENTITY` | `logical_entities.csv` |
-| `BUSINESS_ATTRIBUTE` | `business_attributes.csv` |
-| `ENTITY_RELATION` | `entity_relations.csv` |
-| `BUSINESS_OBJECT_RELATION` | `business_object_relations.csv`（兼容 `business_object_relationships.csv`、`object_relations.csv`） |
-| `STATUS` | `statuses.csv`（兼容 `status.csv`、`business_object_statuses.csv`） |
-| `EVENT` | `events.csv`（兼容 `event.csv`、`business_events.csv`） |
-| `RULE` | `business_rules.csv` |
-| `TERM` | `business_terms.csv`（兼容 `terms.csv`） |
-| `METRIC` | `metrics.csv`（兼容 `indicator.csv`） |
-| `ACTION` | `actions.csv` |
-| `ACTIVITY` | `activities.csv` |
-| `ACTIVITY_FLOW` | `activity_flows.csv`（兼容 `activity_flow.csv`） |
+| `business_object` | `business_objects.csv` |
+| `logical_entity` | `logical_entities.csv` |
+| `business_attribute` | `business_attributes.csv` |
+| `entity_relation` | `entity_relations.csv` |
+| `business_object_relation` | `business_object_relations.csv`（兼容 `business_object_relationships.csv`、`object_relations.csv`） |
+| `status` | `statuses.csv`（兼容 `status.csv`、`business_object_statuses.csv`） |
+| `event` | `events.csv`（兼容 `event.csv`、`business_events.csv`） |
+| `rule` | `business_rules.csv` |
+| `term` | `business_terms.csv`（兼容 `terms.csv`） |
+| `indicator` | `metrics.csv`（兼容 `indicator.csv`、`indicators.csv`） |
+| `action` | `actions.csv` |
+| `activity` | `activities.csv` |
+| `activity_flow` | `activity_flows.csv`（兼容 `activity_flow.csv`） |
+
+Agent 内部可将解析要素规范化为大写枚举用于门禁和依赖计算，但所有出站回调的
+`files[].parseElement` 必须使用当前任务 `execution-context.parseElements` 中匹配项的
+原始协议值；不得把内部大写枚举泄漏到平台接口。当前平台任务使用上表的小写值。
 
 文档任务还会将 DOCX、PPTX、PDF 原文件下载至当前任务的 `input/`，并生成同目录的文档 bundle：`manifest.json` 记录章节/页和表格，`content.md` 保存完整文本，`tables/*.csv` 保存可识别表格。Agent 必须先读取 manifest，再完整读取全部正文、章节/页和表格；输出文件严格受 `parseElements` 和 `expectedFiles` 约束：`parseElements` 是唯一的识别范围，`expectedFiles` 只指定具体文件名和上传白名单，不能反向增加识别要素。每一种已选择结果都可以独立生成和上传，不因其他类型 CSV 尚未生成而阻塞。
 
@@ -216,7 +220,7 @@ SUCCESS：
   "errorMessage": null,
   "files": [
     {
-      "parseElement": "BUSINESS_OBJECT",
+      "parseElement": "business_object",
       "filename": "business_objects.csv",
       "objectKey": "ontology/1/modeling-tasks/RM123456789/agent-output/business_objects.csv",
       "previewUrl": "https://files.example.com/file/preview/static/ontology/1/modeling-tasks/RM123456789/agent-output/business_objects.csv"

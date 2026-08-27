@@ -1203,6 +1203,27 @@ def parse_element_for_file(filename):
         stem = stem[:-1]
     return stem.upper().replace("-", "_")
 
+
+def callback_parse_element_for_file(filename, declared_elements):
+    """Return the exact platform token declared for a callback artifact.
+
+    Internal validation uses canonical upper-case enum names, while some
+    platform execution-contexts declare lower-case protocol values and compare
+    callback values case-sensitively.  Match canonically, then echo the original
+    declaration at the HTTP boundary instead of leaking the internal enum.
+    """
+    canonical = parse_element_for_file(filename)
+    values = declared_elements if isinstance(declared_elements, list) else []
+    for item in values:
+        raw = item
+        if isinstance(item, dict):
+            raw = (item.get("code") or item.get("value") or item.get("name")
+                   or item.get("label") or "")
+        token = str(raw or "").strip()
+        if token and canonical in normalize_parse_elements([token]):
+            return token
+    return canonical
+
 def normalize_parse_elements(value):
     """将 execution-context 的解析要素统一为回调枚举名。"""
     if value is None:
@@ -2037,7 +2058,8 @@ def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
                 changed.append(name)
                 continue
             files.append({
-                "parseElement": parse_element_for_file(name),
+                "parseElement": callback_parse_element_for_file(
+                    name, context.get("parseElements")),
                 "filename": name,
                 "objectKey": item["objectKey"],
                 "previewUrl": preview_url,
