@@ -315,9 +315,9 @@ class QualityWarningTests(unittest.TestCase):
         # A completely empty business-object definition is a deterministic
         # format error and must block, unlike weak-but-present definitions
         # which stay QUALITY_WARNING.
-        state = {"businessObjectDecisions": [bo_candidate("CO1")]}
+        state = {"businessObjectDecisions": [bo_candidate("BO0001")]}
         blob = ("业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
-                "CO1,确认对象,,,\n").encode("utf-8")
+                "BO0001,确认对象,,,\n").encode("utf-8")
         with tempfile.TemporaryDirectory() as root:
             output = Path(root) / "output"
             output.mkdir(parents=True, exist_ok=True)
@@ -333,9 +333,9 @@ class QualityWarningTests(unittest.TestCase):
     def test_weak_definition_stays_quality_warning(self):
         # A definition that is present but adds no information is a quality
         # WARNING and never consumes gate retries or blocks the run.
-        state = {"businessObjectDecisions": [bo_candidate("CO1")]}
+        state = {"businessObjectDecisions": [bo_candidate("BO0001")]}
         blob = ("业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
-                "CO1,确认对象,,确认对象,\n").encode("utf-8")
+                "BO0001,确认对象,,确认对象,\n").encode("utf-8")
         with tempfile.TemporaryDirectory() as root:
             output = Path(root) / "output"
             output.mkdir(parents=True, exist_ok=True)

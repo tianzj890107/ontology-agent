@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Alert,
@@ -23,7 +23,14 @@ import {
 } from "antd";
 import "./styles.css";
 import { formatDisplayValue, isNumericDisplayValue } from "./numberFormat.js";
-import { appendStreamEvent, eventKey, mergeEvents, nextCursor } from "./eventSync.js";
+import {
+  appendStreamEvent,
+  approvalsNeedingAutoApprove,
+  eventKey,
+  mergeEvents,
+  nextCursor,
+  unresolvedApprovalRequests,
+} from "./eventSync.js";
 import { ONTOLOGY_LAYER_DEFINITIONS } from "./ontologyRadialLayout.js";
 import {
   createRadialLayoutCache,
@@ -901,7 +908,7 @@ function StandaloneApp() {
         </main>
       </div>
       <input ref={standaloneFileInputRef} type="file" multiple hidden onChange={onStandaloneFilesSelected} />
-      {preview && <Modal open centered={!previewFullscreen} wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""} className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "82vw"} onCancel={() => { setPreview(null); setPreviewFullscreen(false); }}>{preview.ontologyGraph ? <OntologyTreePreview data={preview.ontologyGraph} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+      {preview && <Modal open centered={!previewFullscreen} wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""} className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "82vw"} onCancel={() => { setPreview(null); setPreviewFullscreen(false); }}>{preview.ontologyGraph ? <OntologyPreviewErrorBoundary resetKey={ontologyPreviewResetKey(preview.ontologyGraph)} message="本体可视化加载失败，请关闭后重试"><OntologyTreePreview data={preview.ontologyGraph} /></OntologyPreviewErrorBoundary> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
     </div>
   </ConfigProvider>;
 }
@@ -1348,7 +1355,7 @@ function ThoughtEvent({ event, onApprove, files, onFile, loading = false, approv
       {expanded && <div className="thought-detail"><EventFileText text={detail} files={files} onFile={onFile} /></div>}
       {event.type === "approval_request" && !completed && (
         <div className="approval-actions">
-          {approved ? <Button type="primary" size="small" disabled>✓ 已允许执行</Button> : <>
+          {approved ? <Button type="primary" size="small" disabled>✓ 已允许执行{approvalResult?.automatic ? "（自动确认）" : ""}</Button> : <>
             <Button type="primary" size="small" onClick={() => onApprove(event.id, true)}>允许执行</Button>
             <Button size="small" onClick={() => onApprove(event.id, false)}>拒绝</Button>
           </>}
@@ -1580,7 +1587,7 @@ class OntologyPreviewErrorBoundary extends React.Component {
   }
   render() {
     if (this.state.failed) {
-      return <div className="ontology-sigma-loading"><Empty description="关系布局加载失败，请稍后重试" /></div>;
+      return <div className="ontology-sigma-loading"><Empty description={this.props.message || "关系布局加载失败，请稍后重试"} /></div>;
     }
     return this.props.children;
   }
@@ -1593,6 +1600,13 @@ function OntologyLayoutSelector({ value, onChange }) {
     label: <Tooltip title={option.hint} placement="left" mouseEnterDelay={0}><span>{option.label}</span></Tooltip>,
   }));
   return <div className="ontology-layout-selector"><span className="ontology-layout-label">布局</span><Select aria-label="布局" size="small" value={value} popupMatchSelectWidth={false} style={{ width: 148 }} options={options} onChange={onChange} /><Tooltip title={selected.hint} placement="bottom"><span className="ontology-layout-hint-icon" role="img" aria-label={`${selected.label}说明`}>?</span></Tooltip></div>;
+}
+
+function ontologyPreviewResetKey(graph) {
+  if (!graph) return "none";
+  const availability = graph.availability || {};
+  const layers = ONTOLOGY_LAYER_DEFINITIONS.map((layer) => `${layer.key}=${availability[layer.key] ? 1 : 0}`).join(",");
+  return `graph:${(graph.nodes || []).length}:${(graph.links || []).length}:${layers}`;
 }
 
 function OntologyTreePreview({ data }) {
@@ -1903,6 +1917,10 @@ function App() {
   const [tasks, setTasks] = useState([]);
   const [active, setActive] = useState(null);
   const [events, setEvents] = useState([]);
+  // Mirror of the current event list for async closures (polling/interval)
+  // that must read the latest merged events without waiting for a re-render.
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
   const [view, setView] = useState(MISSION ? "home" : "home");
   const [text, setText] = useState("");
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -2123,10 +2141,26 @@ function App() {
         }));
       }
       const delta = normalizeEvents(result);
-      if (delta.length) {
-        setEvents((current) => activeTaskIdRef.current === taskId
-          ? mergeEvents(current, delta, `task:${taskId}`)
-          : current);
+      const mergedEvents = activeTaskIdRef.current === taskId
+        ? mergeEvents(eventsRef.current, delta, `task:${taskId}`)
+        : eventsRef.current;
+      if (delta.length && activeTaskIdRef.current === taskId) setEvents(mergedEvents);
+      // 202 后台执行没有 SSE 流，审批请求只通过轮询到达；自动确认开启时
+      // 对“本窗口新到达”或“服务端仍挂起”的请求调用 /approve，绝不批准
+      // 历史已完成会话里的孤立旧请求。in-flight 集合保证同一 id 只有一个
+      // 在途确认；服务端是最终权威，最终只产生一个正式 approval_result。
+      if (activeTaskIdRef.current === taskId && autoApproveRef.current) {
+        const currentTask = active;
+        if (currentTask) {
+          const candidates = approvalsNeedingAutoApprove({
+            events: mergedEvents,
+            freshEvents: delta,
+            autoApprove: true,
+            pendingApproval: result.pendingApproval ?? null,
+            inFlightIds: [...approvalInFlightRef.current],
+          });
+          for (const id of candidates) void approve(id, true, currentTask);
+        }
       }
       const currentWindow = logWindowRef.current.get(taskId);
       const next = nextCursor(result, delta);
@@ -2172,11 +2206,23 @@ function App() {
     setEvents(mergeEvents([], recentEvents, `task:${current.id}`));
     setView("task"); setText("");
     if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, current.id);
-    // 页面刷新或重新打开历史会话时，审批请求可能已经在服务端挂起，
-    // 不会再次经过 SSE；自动确认开启时要主动恢复这类请求。
+    // 服务端任务级自动确认为真时同步本地开关，刷新后 UI 与执行策略一致。
+    if (current.autoApprove) {
+      autoApproveRef.current = true;
+      setAutoApprove(true);
+    }
+    // 页面刷新或重新打开历史会话时，审批请求可能已经在服务端挂起，不会
+    // 再次经过 SSE/轮询的新窗口；自动确认开启时只批准服务端当前仍挂起的
+    // 请求（pendingApproval），历史已完成会话里的旧请求绝不自动确认。
     if (autoApproveRef.current) {
-      const pending = normalizeEvents(current).find((event) => event.type === "approval_request");
-      if (pending) void approve(pending.id, true, current);
+      const candidates = approvalsNeedingAutoApprove({
+        events: recentEvents,
+        freshEvents: [],
+        autoApprove: true,
+        pendingApproval: current.pendingApproval ?? null,
+        inFlightIds: [...approvalInFlightRef.current],
+      });
+      for (const id of candidates) void approve(id, true, current);
     }
     // The newest thought-chain is rendered first. Older history and the full
     // workspace listing are deliberately filled after that first viewport is
@@ -2289,7 +2335,11 @@ function App() {
         if (!isExpiredApprovalError(result.error)) messageApi.error(result.error);
         return false;
       }
-      appendEvent({ type: "approval_result", id, approved });
+      // 不在此处合成本地 approval_result：正式结果由服务端通过 SSE/轮询
+      // 返回（带稳定 seq），本地合成会造成重复结果事件。
+      setActive((previous) => previous && previous.id === task.id
+        ? { ...previous, pendingApproval: null }
+        : previous);
       return true;
     } finally {
       approvalInFlightRef.current.delete(key);
@@ -2321,7 +2371,7 @@ function App() {
     const finishBusy = () => { if (busyRequestRef.current === requestId) setBusy(false); };
     let response;
     try {
-      response = await fetch(`/api/tasks/${taskId}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId }) });
+      response = await fetch(`/api/tasks/${taskId}/send`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId, autoApprove: autoApproveRef.current }) });
     } catch (error) { if (busyRequestRef.current === requestId) appendEvent({ type: "error", error: error.message }); finishBusy(); return; }
     if (!response.ok || !response.body) {
       let payload = null;
@@ -2578,9 +2628,27 @@ function App() {
     setAutoApprove(next);
     localStorage.setItem("oc_auto_approve", next ? "1" : "0");
     messageApi.success(next ? "已开启自动确认" : "已关闭自动确认");
-    if (next) {
-      const pending = events.find((event) => event.type === "approval_request");
-      if (pending) void approve(pending.id, true, active);
+    const task = active;
+    if (task) {
+      // 服务端开关按任务持久化并立即作用于当前 execution；开启时若服务端
+      // 正挂起审批会直接放行（automatic=true），关闭时后续审批恢复人工等待。
+      void api(`/api/tasks/${task.id}/auto-approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+    }
+    if (next && task) {
+      // 本地兜底：只批准服务端仍挂起或本会话新到达的请求，绝不确认历史
+      // 过期请求；in-flight 集合防止同一 id 重复提交。
+      const candidates = approvalsNeedingAutoApprove({
+        events: eventsRef.current,
+        freshEvents: [],
+        autoApprove: true,
+        pendingApproval: task.pendingApproval ?? null,
+        inFlightIds: [...approvalInFlightRef.current],
+      });
+      for (const id of candidates) void approve(id, true, task);
     }
   };
 
@@ -2614,7 +2682,7 @@ function App() {
       </main>
       <FilePanel open={filesOpen} files={files} loading={filesLoading} selected={selectedFiles} focusPath={focusFile} resetKey={active?.id} onSelect={(path) => setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path])} onSelectGroup={(paths) => setSelectedFiles((current) => paths.every((path) => current.includes(path)) ? current.filter((path) => !paths.includes(path)) : [...new Set([...current, ...paths])])} onOpen={openFile} onDownload={download} onUploadToMinio={uploadToMinio} uploadingToMinio={minioUploading} uploadBlocked={busy || active?.status === "working" || active?.status === "queued" || platformActionLoading} onDrawOntology={drawOntology} drawingOntology={ontologyDrawing} ontologyAvailable={Boolean(ontologyFiles)} onClose={() => setFilesOpen(false)} onRefresh={() => loadFiles()} mission={isMissionTask} platformStatus={active?.platformStatus} />
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
-      {preview && <Modal open centered={!previewFullscreen} wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""} className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "88vw"} onCancel={() => { closePreview(); setPreviewFullscreen(false); }}>{preview.ontologyGraph ? <OntologyTreePreview data={preview.ontologyGraph} /> : preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
+      {preview && <Modal open centered={!previewFullscreen} wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""} className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "88vw"} onCancel={() => { closePreview(); setPreviewFullscreen(false); }}>{preview.ontologyGraph ? <OntologyPreviewErrorBoundary resetKey={ontologyPreviewResetKey(preview.ontologyGraph)} message="本体可视化加载失败，请关闭后重试"><OntologyTreePreview data={preview.ontologyGraph} /></OntologyPreviewErrorBoundary> : preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
       <Modal open={Boolean(uploadIssues)} title="上传结果明细" footer={null} width={720} onCancel={() => setUploadIssues(null)} destroyOnClose>
         <div className="upload-issue-list">
@@ -2632,3 +2700,5 @@ function App() {
 }
 
 createRoot(document.getElementById("root")).render(<AntApp>{STANDALONE ? <StandaloneApp /> : <App />}</AntApp>);
+
+export { OntologyPreviewErrorBoundary, OntologyTreePreview };

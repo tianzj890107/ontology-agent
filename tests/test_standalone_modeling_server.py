@@ -41,7 +41,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.tmp.cleanup()
 
     @staticmethod
-    def _confirmed_state(code="CO001"):
+    def _confirmed_state(code="BO0001"):
         return {"businessObjectDecisions": [{
             "candidateCode": code,
             "candidateName": "可确认对象",
@@ -57,7 +57,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         with Path(run.root, "output", "business_objects.csv").open("w", encoding="utf-8", newline="") as handle:
             csv.writer(handle, lineterminator="\n").writerows([
                 ["业务对象编码", "业务对象名称", "业务对象英文名", "业务对象定义", "数据类别"],
-                ["CO001", "可确认对象", "ConfirmedObject", "有直接证据", "业务"],
+                ["BO0001", "可确认对象", "ConfirmedObject", "有直接证据", "业务"],
             ])
 
     def _manager(self):

@@ -124,3 +124,73 @@ export function nextCursor(window, received) {
   const count = Array.isArray(received) ? received.length : 0;
   return start + count;
 }
+
+// Unified pending-approval detection for SSE, polling, refresh recovery and
+// history reopen.  A request is "resolved" only by a matching approval_result
+// with the same id; everything else is still pending.  History completed long
+// ago must not be re-approved by the browser: the server's current
+// `pendingApproval` snapshot is the only authority for "still waiting".
+export function unresolvedApprovalRequests(events) {
+  const resolvedIds = new Set();
+  for (const event of events || []) {
+    if (event && typeof event === "object"
+        && event.type === "approval_result" && event.id) {
+      resolvedIds.add(String(event.id));
+    }
+  }
+  const seen = new Set();
+  const pending = [];
+  for (const event of events || []) {
+    if (!event || typeof event !== "object"
+        || event.type !== "approval_request" || !event.id) {
+      continue;
+    }
+    const id = String(event.id);
+    if (resolvedIds.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    pending.push(event);
+  }
+  pending.sort((a, b) => {
+    const seqA = serverSeq(a);
+    const seqB = serverSeq(b);
+    if (seqA != null && seqB != null && seqA !== seqB) return seqA - seqB;
+    const clockA = eventClock(a);
+    const clockB = eventClock(b);
+    if (clockA != null && clockB != null && clockA !== clockB) return clockA - clockB;
+    return 0;
+  });
+  return pending;
+}
+
+// Decide which unresolved approvals the browser may auto-approve right now.
+// A request is eligible only when it is new in the current event window
+// (live SSE/polling) or is confirmed by the server's current pendingApproval
+// snapshot (refresh/reopen).  Ids already in flight are skipped so the same
+// approval never has more than one outstanding confirm request; the server is
+// the final authority and records at most one formal result per id.
+export function approvalsNeedingAutoApprove({
+  events,
+  freshEvents,
+  autoApprove,
+  pendingApproval,
+  inFlightIds = [],
+}) {
+  if (!autoApprove) return [];
+  const unresolved = unresolvedApprovalRequests(events);
+  if (!unresolved.length) return [];
+  const freshIds = new Set(
+    unresolvedApprovalRequests(freshEvents).map((item) => String(item.id)),
+  );
+  const serverId = pendingApproval && typeof pendingApproval === "object"
+    ? String(pendingApproval.id || "")
+    : "";
+  const inFlight = new Set(inFlightIds);
+  const candidates = [];
+  for (const item of unresolved) {
+    if (inFlight.has(item.id)) continue;
+    if (freshIds.has(item.id) || (serverId && item.id === serverId)) {
+      candidates.push(item.id);
+    }
+  }
+  return candidates;
+}

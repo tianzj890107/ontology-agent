@@ -205,7 +205,9 @@ class NameAndFormatContractTests(unittest.TestCase):
 
     def test_invalid_boolean_enum_integer_code_fail(self):
         cases = [
+            ("business_objects.csv", "业务对象编码", "BO00001"),
             ("logical_entities.csv", "是否主逻辑实体", "是"),
+            ("logical_entities.csv", "业务对象编码", "BO001"),
             ("entity_relations.csv", "关系分类", "错误分类"),
             ("entity_relations.csv", "关系基数", "1:9"),
             ("business_object_relations.csv", "关系类型", "不是类型"),
@@ -215,6 +217,7 @@ class NameAndFormatContractTests(unittest.TestCase):
             ("business_rules.csv", "规则编码", "R000001"),
             ("actions.csv", "动作类型", "执行"),
             ("actions.csv", "动作编码", "ACT1"),
+            ("actions.csv", "业务对象编码", "CO0001"),
             ("actions.csv", "动作英文名", "create order"),
             ("merged_elements.csv", "相似度", "1.5"),
             ("merged_elements.csv", "元素类型", "NOPE"),

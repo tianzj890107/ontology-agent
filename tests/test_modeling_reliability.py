@@ -561,17 +561,17 @@ class BusinessObjectDecisionTests(unittest.TestCase):
 
     def test_all_candidates_are_exported_and_formal_output_only_confirms(self):
         state = {"businessObjectDecisions": [
-            business_candidate("CO0002", "候选对象", ["PASS", "PASS", "PASS", "UNKNOWN", "PASS"],
+            business_candidate("BO0002", "候选对象", ["PASS", "PASS", "PASS", "UNKNOWN", "PASS"],
                                confidence="90", unknown_reasons={"r4": "没有独立生命周期证据"}),
-            business_candidate("CO0001", "确认对象", ["PASS"] * 5, confidence="60"),
-            business_candidate("CO0003", "驳回对象", ["PASS", "PASS", "FAIL", "UNKNOWN", "PASS"],
+            business_candidate("BO0001", "确认对象", ["PASS"] * 5, confidence="60"),
+            business_candidate("BO0003", "驳回对象", ["PASS", "PASS", "FAIL", "UNKNOWN", "PASS"],
                                unknown_reasons={"r4": "无额外资料"}),
         ]}
         with tempfile.TemporaryDirectory() as directory:
             path = write_business_object_decisions_csv(directory, state)
             with open(path, encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            self.assertEqual([row["候选业务对象编码"] for row in rows], ["CO0001", "CO0002", "CO0003"])
+            self.assertEqual([row["候选业务对象编码"] for row in rows], ["BO0001", "BO0002", "BO0003"])
             self.assertEqual({row["最终决策"] for row in rows}, {CONFIRMED, CANDIDATE, "REJECTED"})
             self.assertEqual(list(rows[0]), list(BUSINESS_OBJECT_DECISION_HEADERS))
             for removed in ("业务对象英文名称", "候选主逻辑实体编码", "候选主逻辑实体名称",
@@ -579,10 +579,10 @@ class BusinessObjectDecisionTests(unittest.TestCase):
                 self.assertNotIn(removed, rows[0])
             self.assertRegex(rows[0]["置信度"], r"^\d+(?:\.\d+)?%$")
             formal = ("业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
-                      "CO0001,确认对象,,,\n").encode("utf-8")
+                      "BO0001,确认对象,,,\n").encode("utf-8")
             self.assertEqual(validate_formal_business_object_csv(formal, state), [])
             invalid = ("业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
-                       "CO0002,候选对象,,,\n").encode("utf-8")
+                       "BO0002,候选对象,,,\n").encode("utf-8")
             self.assertIn("BUSINESS_OBJECT_DECISION_MISMATCH",
                           {issue.code for issue in validate_formal_business_object_csv(invalid, state)})
 

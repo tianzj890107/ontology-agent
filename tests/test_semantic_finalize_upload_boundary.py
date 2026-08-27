@@ -24,7 +24,7 @@ from open_claude.modeling_reliability import (  # noqa: E402
 )
 
 
-def confirmed_bo(code="CO001"):
+def confirmed_bo(code="BO0001"):
     return {
         "candidateCode": code,
         "candidateName": "可确认对象",
@@ -102,7 +102,7 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
             with (output / "business_objects.csv").open("w", encoding="utf-8", newline="") as handle:
                 csv.writer(handle, lineterminator="\n").writerows([
                     ["业务对象编码", "业务对象名称", "业务对象英文名", "业务对象定义", "数据类别"],
-                    ["CO001", "可确认对象", "ConfirmedObject", "有决策证据", "业务"],
+                    ["BO0001", "可确认对象", "ConfirmedObject", "有决策证据", "业务"],
                 ])
 
             result = finalize_semantic_model(

@@ -358,19 +358,16 @@ INTEGRATION_OUTPUT_SCHEMA = """# 智能消歧与整合输出文件字段契约
 
 
 BASE_REFERENCE_SOURCES = [
-    "Ontology平台模型编码规范v0.0.1.xlsx",
     "本体元模型v0.0.1.xlsx",
     "本体元模型模板v.0.0.1.xlsx",
     "数据模型建模规范v0.0.1.xlsx",
 ]
 MISSION_REFERENCE_SOURCES = [
-    "Ontology平台模型编码规范v0.0.1.xlsx",
     "本体元模型v0.0.1.xlsx",
     "本体元模型模板v.0.0.1.xlsx",
     "本体元模型模板v0.0.1（含样例数据）.xlsx",
 ]
 DATA_MODELING_STANDARD_FILENAME = "数据模型建模规范v0.0.1.md"
-ENCODING_STANDARD_FILENAME = "Ontology平台模型编码规范v0.0.1.md"
 V6_STANDARD_FILENAME = "通用业务对象与逻辑实体识别规范v0.0.1.md"
 V6_STANDARD_PATH = OUTPUT_DIR / V6_STANDARD_FILENAME
 SOURCE_DOCS = {
@@ -525,14 +522,14 @@ V001_ELEMENT_RULES = """## 元模型 v0.0.1 新增元素规则
 - 元模型、模板和样例统一使用“规则编码”；编码使用 `R` + 7 位流水码。
 """
 
-CODE_STANDARD_RULES = """## 本体平台模型编码规范（强制）
+CODE_STANDARD_RULES = """## 本体元素编码契约（强制）
 
-所有结果文件中的元素自身编码必须遵循《Ontology平台模型编码规范v0.0.1.xlsx》。编码前缀和流水号位数如下：
+所有结果文件中的元素自身编码必须遵循以下运行时契约。不要读取或引用旧的《Ontology平台模型编码规范》文件：
 
 | 模型元素 | 编码格式 | 示例 |
 | --- | --- | --- |
 | 术语 | `T` + 6 位流水码，位数不足左侧补 `0` | `T000008` |
-| 业务对象 | `BO` + 5 位流水码，位数不足左侧补 `0` | `BO0005` |
+| 业务对象 | `BO` + 4 位流水码，位数不足左侧补 `0` | `BO0005` |
 | 逻辑实体 | `LE` + 6 位流水码，位数不足左侧补 `0` | `LE000020` |
 | 业务属性 | `AT` + 7 位流水码，位数不足左侧补 `0` | `AT0000839` |
 | 实体关系 | `REL` + 6 位流水码，位数不足左侧补 `0` | `REL000006` |
@@ -600,10 +597,9 @@ def build() -> None:
 - `integration/all_sourcesv0.0.1.md` 是智能消歧与整合的运行时知识；其规则、模板和输出契约分文件也统一使用 `v0.0.1`。
 - `modeling/basev0.0.1.md` 用于所有智能建模任务；各输入源专项 Markdown 也统一使用 `v0.0.1`，运行时按需拼接。
 - `modeling/本体元模型v0.0.1.md`、`modeling/本体元模型模板v0.0.1.md` 和 `modeling/本体元模型模板v0.0.1（含样例数据）.md` 是当前建模参考。
-- 每个任务固定输入四份 `v0.0.1` 参考：编码规范、元模型、模板和含样例数据模板；旧版本只保留历史，不再复制到新任务。
-- 含样例数据模板只用于理解字段填写示例；样例行不是当前任务真实数据，且样例编码与编码规范冲突时以编码规范为准。
+- 每个任务固定输入三份 `v0.0.1` 参考：元模型、模板和含样例数据模板；旧版本只保留历史，不再复制到新任务。
+- 含样例数据模板只用于理解字段填写示例；样例行不是当前任务真实数据。
 - `modeling/通用业务对象与逻辑实体识别规范v0.0.1.md` 是所有建模任务唯一的核心判定规范。
-- `modeling/Ontology平台模型编码规范v0.0.1.md` 是建模和消歧整合共同使用的编码规范。
 - `modeling/数据模型建模规范v0.0.1.md` 已编入公共知识，不能覆盖核心判定规范。
 - 根目录的 `业务术语v0.0.1.md`、`业务规则v0.0.1.md`、`指标v0.0.1.md`、`动作v0.0.1.md` 按 `parseElements` 动态加载。
 - 服务端会为每个建模任务生成 `modelingPlan`，并在任务目录的 `work/modeling_state.json` 保存可复用的结构化中间态；正式输出只写入 `output`，各选中类型可独立导出。
@@ -635,8 +631,6 @@ def build() -> None:
     write(OUTPUT_DIR / "modeling" / "basev0.0.1.md", base)
     write(OUTPUT_DIR / "modeling" / "本体元模型v0.0.1.md",
           "# 本体元模型 v0.0.1：静态 Markdown\n\n" + block("本体元模型v0.0.1.xlsx"))
-    write(OUTPUT_DIR / "modeling" / ENCODING_STANDARD_FILENAME,
-          "# Ontology 平台模型编码规范 v0.0.1：静态 Markdown\n\n" + block("Ontology平台模型编码规范v0.0.1.xlsx"))
     write(OUTPUT_DIR / "modeling" / "本体元模型模板v0.0.1.md",
           "# 本体元模型模板 v0.0.1：静态 Markdown\n\n" + block("本体元模型模板v.0.0.1.xlsx"))
     write(OUTPUT_DIR / "modeling" / "本体元模型模板v0.0.1（含样例数据）.md",
@@ -668,8 +662,7 @@ def build() -> None:
         block(x) for x in ("智能消歧与整合v0.0.1.docx", "智能消歧与整合规则v0.0.1.docx"))
     integration_base += ("\n\n" + V001_ELEMENT_RULES.rstrip() + "\n\n"
                          + ACTION_KNOWLEDGE_RULES.rstrip() + "\n\n"
-                         + CODE_STANDARD_RULES.rstrip() + "\n\n"
-                         + block("Ontology平台模型编码规范v0.0.1.xlsx"))
+                         + CODE_STANDARD_RULES.rstrip())
     integration_template = "# 智能消歧与整合模板 v0.0.1：静态 Markdown\n\n" + block("智能消歧与整合模板v0.0.1.xlsx")
     integration_template += "\n\n" + INTEGRATION_OUTPUT_SCHEMA
     write(OUTPUT_DIR / "integration" / "basev0.0.1.md", integration_base)

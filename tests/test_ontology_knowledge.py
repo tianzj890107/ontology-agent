@@ -77,7 +77,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("# 智能消歧与整合", integration)
         self.assertIn("智能消歧与整合规则v0.0.1.docx", integration)
         self.assertIn("智能消歧与整合模板v0.0.1.xlsx", integration)
-        self.assertIn("Ontology平台模型编码规范v0.0.1.xlsx", integration)
+        self.assertNotIn("Ontology平台模型编码规范v0.0.1.xlsx", integration)
         self.assertIn("REL000006", integration)
         self.assertIn("检核项", integration)
         self.assertIn("business_attributes.csv", integration)
@@ -88,8 +88,9 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertNotIn("自底向上业务对象识别规范_v3.md", modeling)
         self.assertIn("本体元模型v0.0.1.xlsx", modeling)
         self.assertIn("本体元模型模板v.0.0.1.xlsx", modeling)
-        self.assertIn("Ontology平台模型编码规范v0.0.1.xlsx", modeling)
+        self.assertNotIn("Ontology平台模型编码规范v0.0.1.xlsx", modeling)
         self.assertIn("BO0005", modeling)
+        self.assertIn("业务对象 | `BO` + 4 位流水码", modeling)
         self.assertIn("业务属性 | `AT` + 7 位流水码", modeling)
         self.assertIn("本体元模型模板（含样例数据）.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板（含样例数据）.md").read_text(encoding="utf-8"))
         self.assertIn("是否逻辑主键", modeling)
@@ -441,7 +442,6 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 self.assertEqual(
                     references,
                     [
-                        "input/Ontology平台模型编码规范v0.0.1.xlsx",
                         "input/本体元模型v0.0.1.xlsx",
                         "input/本体元模型模板v.0.0.1.xlsx",
                         "input/本体元模型模板v0.0.1（含样例数据）.xlsx",
@@ -450,7 +450,6 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 self.assertTrue((Path(reference_tmp) / references[0]).is_file())
                 self.assertTrue((Path(reference_tmp) / references[1]).is_file())
                 self.assertTrue((Path(reference_tmp) / references[2]).is_file())
-                self.assertTrue((Path(reference_tmp) / references[3]).is_file())
                 self.assertFalse(reference_file.exists())
                 source_template = ROOT / "rules" / "本体元模型模板v.0.0.1.xlsx"
                 copied_template = Path(reference_tmp) / "input" / source_template.name
@@ -522,9 +521,9 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertEqual(server.parse_element_for_file("business_object_relations.csv"), "BUSINESS_OBJECT_RELATION")
             self.assertEqual(server.parse_element_for_file("statuses.csv"), "STATUS")
             self.assertEqual(server.parse_element_for_file("events.csv"), "EVENT")
-            valid_object_relation = "关系编码,源业务对象编码,源业务对象名称,关系类型,关系英文名称,关系中文名名称,目标业务对象编码,目标业务对象名称,关系基数,关系描述\nREL000001,BO00001,合同,依赖关系,generates,生成,BO00002,订单,1:1,合同生成订单\n"
+            valid_object_relation = "关系编码,源业务对象编码,源业务对象名称,关系类型,关系英文名称,关系中文名名称,目标业务对象编码,目标业务对象名称,关系基数,关系描述\nREL000001,BO0001,合同,依赖关系,generates,生成,BO0002,订单,1:1,合同生成订单\n"
             self.assertEqual(server.validate_modeling_csv("business_object_relations.csv", valid_object_relation.encode()), [])
-            valid_status = "业务对象编码,业务对象名称,状态编码,状态英文名,状态中文名,状态含义,触发条件,是否终态,是否主终态\nBO00001,合同,ACTIVE,Active,生效,合同已生效,审批通过,N,N\n"
+            valid_status = "业务对象编码,业务对象名称,状态编码,状态英文名,状态中文名,状态含义,触发条件,是否终态,是否主终态\nBO0001,合同,ACTIVE,Active,生效,合同已生效,审批通过,N,N\n"
             self.assertEqual(server.validate_modeling_csv("statuses.csv", valid_status.encode()), [])
             invalid_status = valid_status.replace(",N,N\n", ",N,Y\n")
             self.assertTrue(server.validate_modeling_csv("statuses.csv", invalid_status.encode()))
@@ -614,7 +613,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 output.mkdir()
                 (output / "logical_entities.csv").write_text(
                     "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n"
-                    "BO1,采购,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n", encoding="utf-8")
+                    "BO0001,采购,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n", encoding="utf-8")
                 document_upload_context = server.normalize_modeling_context({
                     **document_context,
                     "parseElements": ["LOGICAL_ENTITY"],
@@ -1098,7 +1097,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 logical = output / "logical_entities.csv"
                 logical.write_text(
                     "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n"
-                    "BO1,采购,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n",
+                    "BO0001,采购,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n",
                     encoding="utf-8",
                 )
                 business_attribute = output / "business_attributes.csv"
@@ -1239,13 +1238,13 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertEqual(
                 server.validate_integration_csv(
                     "business_objects.csv",
-                    (bo_header + 'BO1,采购订单,Purchase Order,"包含,头和行",事务数据\n').encode("utf-8"),
+                    (bo_header + 'BO0001,采购订单,Purchase Order,"包含,头和行",事务数据\n').encode("utf-8"),
                 ),
                 [],
             )
             malformed = server.validate_integration_csv(
                 "business_objects.csv",
-                (bo_header + "BO1,采购订单,Purchase Order,包含,头和行,事务数据\n").encode("utf-8"),
+                (bo_header + "BO0001,采购订单,Purchase Order,包含,头和行,事务数据\n").encode("utf-8"),
             )
             self.assertTrue(malformed)
             self.assertTrue(server.validate_integration_csv(
@@ -1265,15 +1264,15 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertEqual(server.validate_modeling_csv("business_attributes.csv", page_valid.encode("utf-8")), [])
             self.assertEqual(server.validate_integration_csv("business_attributes.csv", page_valid.encode("utf-8")), [])
             logical_header = "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n"
-            logical_valid = logical_header + "BO1,采购订单,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n"
+            logical_valid = logical_header + "BO0001,采购订单,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n"
             self.assertEqual(server.validate_modeling_csv("logical_entities.csv", logical_valid.encode("utf-8")), [])
             self.assertTrue(server.validate_modeling_csv(
                 "logical_entities.csv",
                 logical_valid.replace(",Y,事务数据", ",是,事务数据").encode("utf-8"),
             ))
             logical_two_primary = logical_header + (
-                "BO1,采购订单,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n"
-                "BO1,采购订单,LE2,采购明细,purchaseOrderLine,采购明细,Y,事务数据\n"
+                "BO0001,采购订单,LE1,采购订单,purchaseOrder,采购订单,Y,事务数据\n"
+                "BO0001,采购订单,LE2,采购明细,purchaseOrderLine,采购明细,Y,事务数据\n"
             )
             self.assertTrue(server.validate_modeling_csv("logical_entities.csv", logical_two_primary.encode("utf-8")))
             page_invalid = page_valid.replace("订单名称,orderName,订单显示名称,文本,100,,N,N,N,Y,Y,N,N", "订单名称,orderName,订单显示名称,文本,100,,N,N,N,Y,N,N,N")
@@ -1285,7 +1284,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             bad_relation = relation_header + "R1,E1,订单,E2,客户,错误分类,属于,belongs,1:N,描述,BA1,orderCode,订单编码,BA2,customerCode,客户编码\n"
             self.assertTrue(server.validate_integration_csv("entity_relations.csv", bad_relation.encode("utf-8")))
             self.assertTrue(server.validate_modeling_csv(
-                "business_objects.csv", "id,name,description\nBO1,订单,描述\n".encode("utf-8")
+                "business_objects.csv", "id,name,description\nBO0001,订单,描述\n".encode("utf-8")
             ))
             empty = types.SimpleNamespace(conv=types.SimpleNamespace(messages=[]), log=[
                 {"type": "model_switch", "from": "a", "to": "b"},

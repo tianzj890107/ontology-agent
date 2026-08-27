@@ -42,7 +42,7 @@ class V0001RuleRegistryTests(unittest.TestCase):
         # shipped inside a PASSED formal CSV.  Only a present-but-weak
         # definition stays a non-blocking quality WARNING.
         header = ["业务对象编码", "业务对象名称", "业务对象英文名", "业务对象定义", "数据类别"]
-        rows = [["CO001", "正式对象", "", "", ""]]
+        rows = [["BO0001", "正式对象", "", "", ""]]
         codes = {item.code for item in validate_formal_rows("business_objects.csv", header, rows)}
         self.assertIn("V0001_FORMAL_BUSINESS_OBJECT_DEFINITION_MISSING", codes)
         self.assertEqual(
@@ -50,13 +50,13 @@ class V0001RuleRegistryTests(unittest.TestCase):
             ["ERROR"],
         )
         weak = validate_formal_rows("business_objects.csv", header,
-                                    [["CO001", "正式对象", "", "正式对象", ""]])
+                                    [["BO0001", "正式对象", "", "正式对象", ""]])
         self.assertIn("V0001_DESCRIPTION_MISSING", {item.code for item in weak})
         self.assertEqual([item.severity for item in weak], ["WARNING"])
 
     def test_formal_business_object_missing_name_is_structural(self):
         header = ["业务对象编码", "业务对象名称", "业务对象英文名", "业务对象定义", "数据类别"]
-        rows = [["CO001", "", "", "业务定义", ""]]
+        rows = [["BO0001", "", "", "业务定义", ""]]
         codes = {item.code for item in validate_formal_rows("business_objects.csv", header, rows)}
         self.assertIn("V0001_FORMAL_BUSINESS_OBJECT_INCOMPLETE", codes)
 
@@ -314,7 +314,7 @@ class V0001RuleRegistryTests(unittest.TestCase):
             output.mkdir()
             (output / "logical_entities.csv").write_text(
                 "业务对象编码,逻辑实体编码,逻辑实体名称,逻辑实体定义,是否主逻辑实体\n"
-                "CO1,LE1,逻辑实体1,定义,Y\n", encoding="utf-8")
+                "BO0001,LE1,逻辑实体1,定义,Y\n", encoding="utf-8")
             result = validate_modeling_stages(work, output,
                                               state, ["logical_entities.csv"])
             self.assertEqual(result["stages"][1]["status"], "PASSED")
@@ -431,8 +431,8 @@ class V0001RuleRegistryTests(unittest.TestCase):
         header = ["业务对象编码", "业务对象名称", "业务对象定义"]
         findings = validate_formal_rows(
             "business_objects.csv", header,
-            [["CO1", "客户", "定义A"],
-             ["CO2", "客户", "定义B"]],
+            [["BO0001", "客户", "定义A"],
+             ["BO0002", "客户", "定义B"]],
         )
         codes = {item.code for item in findings}
         self.assertIn("V0001_DUPLICATE_BUSINESS_OBJECT_NAME", codes)
@@ -441,8 +441,8 @@ class V0001RuleRegistryTests(unittest.TestCase):
         entity_header = ["业务对象编码", "逻辑实体编码", "逻辑实体名称", "逻辑实体定义"]
         findings = validate_formal_rows(
             "logical_entities.csv", entity_header,
-            [["CO1", "LE1", "订单", "定义A"],
-             ["CO1", "LE2", "订单", "定义B"]],
+            [["BO0001", "LE1", "订单", "定义A"],
+             ["BO0001", "LE2", "订单", "定义B"]],
         )
         codes = {item.code for item in findings}
         self.assertIn("V0001_DUPLICATE_LOGICAL_ENTITY_NAME", codes)

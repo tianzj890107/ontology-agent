@@ -39,7 +39,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('autoApproveRef.current', source)
         self.assertIn('approve(event.id, true, task)', source)
         self.assertIn('approvalInFlightRef', source)
-        self.assertIn('approve(pending.id, true, current)', source)
+        self.assertIn('for (const id of candidates) void approve(id, true, current);', source)
         self.assertIn('event.type === "thinking" ? <ThinkingIcon />', source)
         self.assertIn('return source.reduce((events, event) =>', source)
         self.assertIn('events[events.length - 1] = { ...last, text:', source)
@@ -228,7 +228,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('}, [events, busy, view]);', source)
         self.assertIn('}, [events, view, filesOpen]);', source)
         self.assertIn('<div ref={feedRef} className="feed" onScroll={handleFeedScroll}>', source)
-        self.assertIn('body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId })', source)
+        self.assertIn('body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId, autoApprove: autoApproveRef.current })', source)
         self.assertNotIn('startTask, missionContext:', source)
         self.assertIn('function missionIdentity(task = null)', source)
         self.assertIn('const taskMission = missionIdentity(task)', source)
@@ -467,7 +467,10 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""}', source)
         self.assertIn('symbolSize: [Math.max(92, Math.min(220, length * 14 + 32)), 38]', graph_model)
         self.assertIn('position: "inside"', precompute_module)
-        self.assertIn('preview.ontologyGraph ? <OntologyTreePreview data={preview.ontologyGraph} />', source)
+        # OntologyTreePreview 必须整体被外层可视化 ErrorBoundary 包裹，
+        # 使 47313/47314 预览 Modal 内任何可视化异常都不会清空整个工作台。
+        self.assertIn('<OntologyPreviewErrorBoundary resetKey={ontologyPreviewResetKey(preview.ontologyGraph)} message="本体可视化加载失败，请关闭后重试"><OntologyTreePreview data={preview.ontologyGraph} /></OntologyPreviewErrorBoundary>', source)
+        self.assertEqual(source.count('ontologyPreviewResetKey(preview.ontologyGraph)'), 2)
         self.assertIn('.ontology-tree-preview{', styles)
         self.assertIn('.ontology-tree-scroll{', styles)
         self.assertIn('.ontology-layer-filter-button{', styles)
@@ -612,6 +615,34 @@ class FrontendContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("eventSync ok", result.stdout)
 
+    def test_auto_approve_pending_detection_runs_in_node(self):
+        """Behavioral check of the shared pending-approval helpers in Node."""
+        script = (
+            "import { unresolvedApprovalRequests, approvalsNeedingAutoApprove } from './src/eventSync.js';"
+            "const req = (id, seq) => ({type:'approval_request', id, seq});"
+            "const res = (id, seq) => ({type:'approval_result', id, seq, approved:true});"
+            "if (unresolvedApprovalRequests([req('r1',1)]).map(e=>e.id).join(',') !== 'r1') throw new Error('unresolved');"
+            "if (unresolvedApprovalRequests([req('r1',1), res('r1',2)]).length !== 0) throw new Error('resolved kept');"
+            "if (unresolvedApprovalRequests([req('r2',2), req('r1',1)]).map(e=>e.id).join(',') !== 'r1,r2') throw new Error('seq order');"
+            "const merged = [req('stale',1), req('live',5)];"
+            "const fresh = approvalsNeedingAutoApprove({events: merged, freshEvents: [req('live',5)], autoApprove: true, pendingApproval: null, inFlightIds: []});"
+            "if (fresh.join(',') !== 'live') throw new Error('fresh window');"
+            "const serverPinned = approvalsNeedingAutoApprove({events: merged, freshEvents: [], autoApprove: true, pendingApproval: {id:'live', tool:'Bash', summary:'执行命令'}, inFlightIds: []});"
+            "if (serverPinned.join(',') !== 'live') throw new Error('server pinned');"
+            "const stale = approvalsNeedingAutoApprove({events: merged, freshEvents: [], autoApprove: true, pendingApproval: null, inFlightIds: []});"
+            "if (stale.length !== 0) throw new Error('stale approved');"
+            "const off = approvalsNeedingAutoApprove({events: merged, freshEvents: [req('live',5)], autoApprove: false, pendingApproval: null, inFlightIds: []});"
+            "if (off.length !== 0) throw new Error('off approved');"
+            "const inflight = approvalsNeedingAutoApprove({events: merged, freshEvents: [req('live',5)], autoApprove: true, pendingApproval: null, inFlightIds: ['live']});"
+            "if (inflight.length !== 0) throw new Error('in-flight duplicated');"
+            "console.log('autoApprove helpers ok');"
+        )
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=str(ROOT / "frontend"), capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("autoApprove helpers ok", result.stdout)
+
     def test_event_sync_contract_unifies_identity_cursor_and_error_handling(self):
         source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
         sync = (ROOT / "frontend" / "src" / "eventSync.js").read_text(encoding="utf-8")
@@ -619,7 +650,10 @@ class FrontendContractTests(unittest.TestCase):
         window_module = (ROOT / "open-claude" / "open_claude" / "event_window.py").read_text(encoding="utf-8")
         # One shared idempotent merge feeds both the workbench and the
         # standalone workspace; execute snapshots never double-apply as deltas.
-        self.assertIn('import { appendStreamEvent, eventKey, mergeEvents, nextCursor } from "./eventSync.js";', source)
+        self.assertIn('appendStreamEvent,', source)
+        self.assertIn('approvalsNeedingAutoApprove,', source)
+        self.assertIn('unresolvedApprovalRequests,', source)
+        self.assertIn('from "./eventSync.js";', source)
         for exported in ("export function mergeEvents", "export function eventIdentity",
                          "export function nextCursor", "export function appendStreamEvent"):
             self.assertIn(exported, sync)
@@ -650,7 +684,31 @@ class FrontendContractTests(unittest.TestCase):
         # 47313 optimistic user messages reconcile through clientMessageId and
         # the shared stream merge; busy is request-scoped.
         self.assertIn('const clientMessageId = `cm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;', source)
-        self.assertIn("body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId })", source)
+        self.assertIn("body: JSON.stringify({ message: content, displayMessage, startTask, intent, clientMessageId, autoApprove: autoApproveRef.current })", source)
+        # 202 后台执行下审批请求只通过轮询到达：轮询必须用合并后事件 +
+        # 服务端 pendingApproval 快照做统一未决审批识别，绝不确认历史过期请求。
+        self.assertIn("pendingApproval: result.pendingApproval ?? null,", source)
+        self.assertIn("pendingApproval: current.pendingApproval ?? null,", source)
+        self.assertIn("approvalsNeedingAutoApprove({", source)
+        self.assertIn("freshEvents: delta,", source)
+        self.assertIn("freshEvents: [],", source)
+        self.assertIn("/api/tasks/${task.id}/auto-approve", source)
+        self.assertIn('body: JSON.stringify({ enabled: next })', source)
+        self.assertIn("approvalInFlightRef.current.has(key)", source)
+        # 服务端执行级自动确认：execution 级标志 + 任务级开关 + 幂等放行 +
+        # 审计 automatic 标记 + summary 暴露安全 pendingApproval。
+        server = (ROOT / "open-claude" / "oc_codex_server.py").read_text(encoding="utf-8")
+        self.assertIn("self._execution_auto_approve = False", server)
+        self.assertIn('if self._execution_auto_approve or self.auto_approve:', server)
+        self.assertIn('"automatic": True', server)
+        self.assertIn('"automatic": bool(self._approval_automatic)', server)
+        self.assertIn("def auto_approve_current(self)", server)
+        self.assertIn("def pending_approval_safe(self)", server)
+        self.assertIn('"pendingApproval": self.pending_approval_safe()', server)
+        self.assertIn('"autoApprove": bool(self.auto_approve)', server)
+        self.assertIn(r"/auto-approve$", server)
+        self.assertIn("auto_approve=execution_auto_approve", server)
+        self.assertIn("auto_approve: bool = False", server)
         self.assertIn("appendStreamEvent(previous, stamped, `task:${taskId}`)", source)
         self.assertIn("mergeEvents(older, current, `task:${task.id}`)", source)
         self.assertIn("const busyRequestRef = useRef(0);", source)
@@ -684,7 +742,7 @@ class FrontendContractTests(unittest.TestCase):
         # Every window path (snapshot/tail/since/before/SSE) converges on the
         # shared merge; old requests from a previous session cannot write into
         # the currently selected task.
-        self.assertIn("mergeEvents(current, delta, `task:${taskId}`)", source)
+        self.assertIn("mergeEvents(eventsRef.current, delta, `task:${taskId}`)", source)
         self.assertIn("mergeEvents(older, current, `task:${task.id}`)", source)
         self.assertIn("activeTaskIdRef.current !== taskId", source)
         self.assertIn("taskPollInFlightRef.current.has(taskId)", source)
