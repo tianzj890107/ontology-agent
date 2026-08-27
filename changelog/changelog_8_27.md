@@ -210,7 +210,7 @@
 
 主要文件：`frontend/src/ontologyGraphModel.js`、`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/tests/ontologyGraphModel.test.mjs`、`frontend/tests/ontologyRadialLayout.test.mjs`、`frontend/tests/ontologyPreviewRuntime.test.mjs`、`tests/test_frontend_contract.py`、`frontend/dist`。
 
-验证结果：前端 Node 测试 74/74；`pytest tests/test_frontend_contract.py -q` 14 passed；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。发布结果待部署后补充。
+验证结果：前端 Node 测试 74/74；`pytest tests/test_frontend_contract.py -q` 14 passed；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。提交 `79dff00` 已推送并部署 47313/47314；部署测试 22/22 通过，两服务健康检查均为 HTTP 200，线上 bundle `index-BqyXHrdA.js` 已核对包含“实体关系/动作”七层配置。
 
 ### 业务对象编码契约收紧：BO + 4 位流水码
 
