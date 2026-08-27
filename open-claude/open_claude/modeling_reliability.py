@@ -4357,6 +4357,8 @@ _FORMAL_ARTIFACT_REQUIRED_HEADERS = {
     "events.csv": {"事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"},
     "event.csv": {"事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"},
     "business_events.csv": {"事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"},
+    "actions.csv": {"动作编码", "动作名称", "动作英文名", "动作描述", "动作类型",
+                    "业务对象编码", "协议", "服务节点", "服务名称"},
     "business_rules.csv": {"规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"},
     "rules.csv": {"规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"},
     "terms.csv": {"术语编码", "术语名称", "术语定义"},
@@ -4403,6 +4405,7 @@ _STAGE_OUTPUTS = {
     "GOVERNANCE_AND_FINAL": {
         "business_rules.csv", "rules.csv", "metrics.csv", "indicator.csv",
         "indicators.csv", "atomic_indicators.csv", "composite_indicators.csv",
+        "actions.csv",
     },
 }
 
@@ -4959,6 +4962,231 @@ def _formal_cross_file_issues(output_dir: Path, state: Mapping[str, Any],
     return issues
 
 
+def _action_parse_elements(value: Any) -> set[str] | None:
+    """归一化 execution-context 的 parseElements，判断是否选择 ACTION。
+
+    返回 ``None`` 表示上下文没有提供 parseElements（兼容只传 expectedFiles
+    的旧网关/独立建模服务）；此时由 expectedFiles 门禁单独约束。返回集合时
+    只有包含 ACTION 才允许生成动作。
+    """
+    if value is None:
+        return None
+    values = value if isinstance(value, list) else [value]
+    tokens: set[str] = set()
+    for item in values:
+        if isinstance(item, Mapping):
+            item = (item.get("code") or item.get("value") or item.get("name")
+                    or item.get("label") or "")
+        text = _text(item)
+        if not text:
+            continue
+        upper = text.upper()
+        if upper == "ACTION" or upper == "动作" or "ACTION" in upper:
+            tokens.add("ACTION")
+        else:
+            tokens.add(upper.replace("-", "_"))
+    return tokens
+
+
+def _confirmed_bo_rows(state: Mapping[str, Any] | None) -> list[dict[str, str]]:
+    """从 modeling_state 读取当前任务已 CONFIRMED 业务对象。"""
+    if not isinstance(state, Mapping):
+        return []
+    records = business_object_decision_records(state)
+    rows: list[dict[str, str]] = []
+    for record in records:
+        if record.decision != CONFIRMED or not record.candidate_code or not record.candidate_name:
+            continue
+        rows.append({"业务对象编码": record.candidate_code,
+                     "业务对象名称": record.candidate_name,
+                     "业务对象英文名": record.english_name})
+    if rows:
+        return rows
+    # 兜底：没有规则字段的 fixture/简化状态也按显式状态读取。
+    for record in _business_object_candidate_values(state):
+        raw = (record.get("finalDecision") or record.get("decision")
+               or record.get("status") or record.get("conclusion") or record.get("结论"))
+        if _status(raw) != CONFIRMED:
+            continue
+        code = _text(_first_value(record, ("candidateCode", "candidateId", "businessObjectId",
+                                           "business_object_id", "code", "id", "业务对象编码")))
+        name = _text(_first_value(record, ("candidateName", "businessObjectName", "name",
+                                           "business_object_name", "业务对象名称")))
+        if code and name:
+            rows.append({"业务对象编码": code, "业务对象名称": name,
+                         "业务对象英文名": _text(_first_value(record, (
+                             "englishName", "businessObjectEnglishName",
+                             "business_object_english_name", "业务对象英文名")))})
+    return rows
+
+
+def _state_le_rows(state: Mapping[str, Any] | None) -> list[dict[str, str]]:
+    """从 modeling_state 读取归属明确且状态合格的逻辑实体。"""
+    if not isinstance(state, Mapping):
+        return []
+    rows: list[dict[str, str]] = []
+    for key in ("logicalEntityDecisions", "logical_entity_decisions",
+                "logicalEntities", "entities"):
+        value = state.get(key)
+        if isinstance(value, Mapping):
+            value = list(value.values())
+        if not isinstance(value, list):
+            continue
+        for record in value:
+            if not isinstance(record, Mapping):
+                continue
+            name = _text(_first_value(record, ("name", "logicalEntityName",
+                                               "logical_entity_name", "逻辑实体名称",
+                                               "entityName")))
+            if not name:
+                continue
+            status = record.get("formalStatus") or record.get("decision") or record.get("status")
+            if status and _status(status) not in {CONFIRMED, ""}:
+                continue
+            bo = _text(_first_value(record, ("businessObjectCode", "business_object_code",
+                                             "businessObjectId", "business_object_id",
+                                             "业务对象编码")))
+            code = _text(_first_value(record, ("code", "id", "logicalEntityCode",
+                                               "logical_entity_code", "逻辑实体编码",
+                                               "entityId", "entity_id")))
+            english = _text(_first_value(record, ("englishName", "logicalEntityEnglishName",
+                                                  "logical_entity_english_name", "逻辑实体英文名")))
+            main = _text(_first_value(record, ("mainFlag", "isMain", "is_main",
+                                               "是否主逻辑实体"))).upper()
+            rows.append({"业务对象编码": bo, "逻辑实体编码": code, "逻辑实体名称": name,
+                         "逻辑实体英文名": english,
+                         "是否主逻辑实体": "Y" if main == "Y" else ""})
+        if rows:
+            break
+    return rows
+
+
+def _output_csv_rows(path: Path, columns: tuple[str, ...]) -> list[dict[str, str]]:
+    """按列名读取正式输出 CSV（仅当前任务 output 目录）。"""
+    if not path.is_file():
+        return []
+    try:
+        parsed = list(csv.reader(io.StringIO(path.read_bytes().decode("utf-8-sig"), newline="")))
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return []
+    if not parsed:
+        return []
+    header = [_text(value) for value in parsed[0]]
+    index = {name: position for position, name in enumerate(header)}
+    rows: list[dict[str, str]] = []
+    for raw in parsed[1:]:
+        if not any(_text(value) for value in raw):
+            continue
+        row = {column: (_text(raw[index[column]]) if index.get(column) is not None
+                        and index[column] < len(raw) else "")
+               for column in columns}
+        if any(row.values()):
+            rows.append(row)
+    return rows
+
+
+def _actions_source_rows(state: Mapping[str, Any] | None,
+                         output_path: Path) -> tuple[list[dict[str, str]],
+                                                     list[dict[str, str]],
+                                                     set[str]]:
+    """收集当前任务动作推断所需的已确认 BO 与归属明确 LE。"""
+    bo_rows = _confirmed_bo_rows(state)
+    le_rows = _state_le_rows(state)
+    if not bo_rows:
+        bo_rows = _output_csv_rows(output_path / "business_objects.csv",
+                                   ("业务对象编码", "业务对象名称", "业务对象英文名"))
+    if not le_rows:
+        le_rows = _output_csv_rows(output_path / "logical_entities.csv",
+                                   ("业务对象编码", "逻辑实体编码", "逻辑实体名称",
+                                    "逻辑实体英文名", "是否主逻辑实体"))
+    confirmed_codes = {row["业务对象编码"] for row in bo_rows if row.get("业务对象编码")}
+    le_rows = [row for row in le_rows if row.get("业务对象编码") in confirmed_codes]
+    return bo_rows, le_rows, confirmed_codes
+
+
+def _actions_csv_content(actions: Iterable[Mapping[str, Any]]) -> str:
+    """渲染严格九字段的 actions.csv 内容（UTF-8 无 BOM）。"""
+    from .action_inference import ACTION_FIELDS, to_nine_field_rows
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(ACTION_FIELDS)
+    writer.writerows(to_nine_field_rows(actions))
+    return buffer.getvalue()
+
+
+def ensure_actions_artifact(work_dir: str | os.PathLike[str],
+                            output_dir: str | os.PathLike[str],
+                            state: Mapping[str, Any] | None = None,
+                            required_outputs: Iterable[str] | None = None,
+                            context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """确定性动作兜底，接入正式建模 finalize/export 链路。
+
+    仅当 execution-context 选择 ACTION、expectedFiles 允许 actions.csv 且当前
+    任务已有已确认业务对象时工作：
+
+    - 场景A：Agent 没有创建 actions.csv -> 根据当前任务 BO/LE 生成演示动作；
+    - 场景B：只有表头或空文件 -> 视为空动作产物并补充演示动作；
+    - 场景C：存在明确动作 -> 明确动作优先，合并不重复的推断动作，保留真实
+      服务字段，去重、稳定排序并补齐/规避动作编码；
+    - 场景D：表头缺失、悬空 BO 引用等结构错误 -> 不覆盖，交给正式产物门禁
+      报告，不得靠推断掩盖；
+    - 场景E：ACTION 未选择或 expectedFiles 不允许 -> 不读取、不生成、不修改。
+
+    只读取当前任务 work/modeling_state.json 与 output/ 目录，原子写入。
+    """
+    from .action_inference import (
+        explicit_action_structural_errors,
+        infer_actions,
+        parse_action_sheet,
+    )
+    target_output = Path(output_dir)
+    requested = {os.path.basename(str(item)).lower() for item in (required_outputs or ())}
+    if "actions.csv" not in requested:
+        return {"generated": False, "reason": "not-requested"}
+    context = context if isinstance(context, Mapping) else {}
+    parse_elements = _action_parse_elements(context.get("parseElements"))
+    if parse_elements is not None and "ACTION" not in parse_elements:
+        return {"generated": False, "reason": "action-not-selected"}
+    actions_path = target_output / "actions.csv"
+    header: list[str] = []
+    parsed_rows: list[list[str]] = []
+    if actions_path.is_file():
+        try:
+            parsed = list(csv.reader(io.StringIO(
+                actions_path.read_bytes().decode("utf-8-sig"), newline="")))
+        except (OSError, UnicodeDecodeError, csv.Error):
+            parsed = []
+        if parsed:
+            header = [_text(value) for value in parsed[0]]
+            parsed_rows = parsed[1:]
+    explicit: list[dict[str, str]] = []
+    required_header = {"动作编码", "动作名称", "动作英文名", "动作描述", "动作类型", "业务对象编码"}
+    if header:
+        if not required_header.issubset(set(header)):
+            return {"generated": False, "reason": "invalid-header"}
+        explicit = parse_action_sheet([header, *parsed_rows])
+    bo_rows, le_rows, confirmed_codes = _actions_source_rows(state, target_output)
+    if not confirmed_codes:
+        return {"generated": False, "reason": "no-confirmed-business-objects"}
+    structural_errors = explicit_action_structural_errors(explicit, confirmed_codes)
+    if structural_errors:
+        return {"generated": False, "reason": "explicit-action-errors",
+                "errors": structural_errors}
+    merged = infer_actions(bo_rows, le_rows, explicit_actions=explicit)
+    if not merged:
+        return {"generated": False, "reason": "no-actions"}
+    content = _actions_csv_content(merged)
+    if actions_path.is_file():
+        try:
+            if actions_path.read_bytes().decode("utf-8-sig") == content:
+                return {"generated": False, "reason": "unchanged",
+                        "count": len(merged)}
+        except (OSError, UnicodeDecodeError):
+            pass
+    _atomic_text_write(actions_path, content)
+    return {"generated": True, "reason": "filled", "count": len(merged)}
+
+
 def finalize_semantic_model(work_dir: str | os.PathLike[str],
                             state: Mapping[str, Any] | None = None,
                             *, output_dir: str | os.PathLike[str] | None = None,
@@ -4981,6 +5209,13 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
     normalize_modeling_state(state)
     output_path = (Path(output_dir) if output_dir is not None
                    else Path(_workspace_output_dir(str(target_dir.parent))))
+
+    # Deterministic action fallback: when ACTION is requested and actions.csv
+    # is missing/empty/header-only, materialize demo actions from the current
+    # task's confirmed BO/LE before any stage validator reports the artifact
+    # as missing.  Explicit Agent actions are never overwritten, and
+    # structural errors in them are left for the formal-output gate.
+    ensure_actions_artifact(target_dir, output_path, state, required_outputs, context)
 
     # Validate the current stage only.  Passed stages are content-addressed;
     # generating a downstream file must not send logical entities or

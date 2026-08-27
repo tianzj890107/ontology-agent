@@ -12,8 +12,8 @@ Public workspace names are generic and canonical::
 
 New runs only create the canonical directories.  Historical runs created
 before the rename may still contain ``mission-*`` symlink aliases; those are
-resolved read-only through ``LEGACY_ALIASES`` (the centralized compatibility
-mapping) and never appear in user-facing API responses or Agent prompts.
+resolved read-only through the centralized ``workspace_paths`` compatibility
+mapping and never appear in user-facing API responses or Agent prompts.
 """
 
 from __future__ import annotations
@@ -53,6 +53,7 @@ from open_claude.execution_lease import (
 )
 from open_claude.lifecycle import LazyService, LifecycleTracker
 from open_claude.run_repository import SQLiteRunRepository
+from open_claude.workspace_paths import normalize_relpath as _normalize_workspace_relpath
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -103,11 +104,6 @@ _WEB_HIDDEN_FILES = {".db_connection.json", ".env", ".env.local", "credentials.j
 _DECISION_AUDIT_FILENAMES = {
     "business_object_decisions.csv", "relation_decisions.csv", "rule_decisions.csv",
     "indicator_decisions.csv", "logical_entity_decisions.csv", "all_attributes.csv",
-}
-LEGACY_ALIASES = {
-    "mission-input": "input",
-    "mission-work": "work",
-    "mission-output": "output",
 }
 INTERNAL_FILENAMES = {
     "modeling_state.json", "validation_report.json", "business_object_decisions.csv",
@@ -621,11 +617,10 @@ def _safe_relpath(value: str) -> str:
     value = str(value or "").replace("\\", "/").strip()
     if not value or value.startswith("/") or "\x00" in value:
         raise ValueError("path must be a non-empty relative path")
+    value = _normalize_workspace_relpath(value)
     parts = [part for part in value.split("/") if part not in ("", ".")]
     if not parts or any(part == ".." for part in parts):
         raise ValueError("path traversal is not allowed")
-    if parts[0] in LEGACY_ALIASES:
-        parts[0] = LEGACY_ALIASES[parts[0]]
     if parts[0] not in PUBLIC_DIRS:
         raise ValueError("path must start with input, work or output")
     return "/".join(parts)
@@ -1288,12 +1283,11 @@ class RunStore:
         raw = str(value or "").replace("\\", "/").strip()
         if raw.startswith("/") or raw.startswith("../") or "/../" in raw or raw == "..":
             raise ClientInputError("input path traversal is not allowed", status=422)
+        raw = _normalize_workspace_relpath(raw)
         parts = [part for part in raw.split("/") if part not in ("", ".")]
         if not parts or any(part == ".." for part in parts):
             raise ClientInputError("input path traversal is not allowed", status=422)
-        if parts[0] == "mission-input":
-            parts[0] = "input"
-        elif parts[0] != "input":
+        if parts[0] != "input":
             # A bare filename is convenient, but it is always placed under
             # input; work/output aliases are never accepted here.
             if len(parts) == 1:

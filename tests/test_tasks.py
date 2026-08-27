@@ -483,8 +483,8 @@ class TaskStateMachineTests(unittest.TestCase):
 
     def test_same_gate_without_new_evidence_blocks_and_preserves_result(self):
         with tempfile.TemporaryDirectory() as directory:
-            (Path(directory) / "mission-work").mkdir()
-            (Path(directory) / "mission-work" / "existing.csv").write_text(
+            (Path(directory) / "work").mkdir()
+            (Path(directory) / "work" / "existing.csv").write_text(
                 "preserve", encoding="utf-8")
             task = self._modeling_task(directory, "gate-repeat-test",
                                        ["business_objects.csv"])
@@ -509,7 +509,7 @@ class TaskStateMachineTests(unittest.TestCase):
             self.assertEqual(task.modeling_block_reason,
                              "MODEL_GATE_REPEATED_WITHOUT_NEW_EVIDENCE")
             self.assertEqual(stream.call_count, 1)
-            self.assertTrue((Path(directory) / "mission-work").exists())
+            self.assertTrue((Path(directory) / "work").exists())
             guard_events = [event for event in task.log
                             if event.get("type") == "execution_guard"]
             self.assertTrue(guard_events)

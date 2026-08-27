@@ -24,7 +24,17 @@ import {
 import "./styles.css";
 import { formatDisplayValue, isNumericDisplayValue } from "./numberFormat.js";
 import { appendStreamEvent, eventKey, mergeEvents, nextCursor } from "./eventSync.js";
-import { computeFitScale, layoutOntologyRadial, ONTOLOGY_LAYER_DEFINITIONS, scaledTypography } from "./ontologyRadialLayout.js";
+import { ONTOLOGY_LAYER_DEFINITIONS } from "./ontologyRadialLayout.js";
+import {
+  createRadialLayoutCache,
+  layoutIsForViewport,
+  normalizeViewport,
+  ontologyDataFingerprint,
+  prepareRadialLayout,
+  radialCacheKey,
+  radialGraphOption,
+  readViewport,
+} from "./ontologyRadialPrecompute.js";
 import { buildOntologyGraph } from "./ontologyGraphModel.js";
 import { ONTOLOGY_LAYOUT_OPTIONS, ontologyLayoutOption } from "./ontologyLayoutOptions.js";
 
@@ -1467,80 +1477,49 @@ function defaultOntologyLayers(availability) {
   return ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => availability[layer]);
 }
 
-function OntologyEChartsPreview({ data, appliedLayers, onError }) {
+function OntologyEChartsPreview({ data, appliedLayers, prepared, onError, onRendered, onViewportChange }) {
   const scrollRef = useRef(null);
   const containerRef = useRef(null);
   const [ready, setReady] = useState(false);
+  const preparedRef = useRef(prepared);
+  preparedRef.current = prepared;
   useEffect(() => {
     let disposed = false;
     let chart = null;
     let observer = null;
     let wheelTarget = null;
     let wheelHandler = null;
+    let renderPrepared = null;
     setReady(false);
     void import("echarts").then((echarts) => {
       if (disposed || !containerRef.current || !scrollRef.current) return;
       chart = echarts.init(containerRef.current);
-      const renderGraph = () => {
-        const viewportWidth = Math.max(320, scrollRef.current.clientWidth || 0);
-        const viewportHeight = Math.max(520, scrollRef.current.clientHeight || 0);
-        const layout = layoutOntologyRadial(data, {
-          selectedLayers: appliedLayers,
-          viewportWidth,
-          viewportHeight,
-          horizontalGap: 10,
-          verticalGap: 6,
-          radialGap: 8,
-          padding: 12,
-          hoverScale: 1.12,
-        });
+      const viewport = readViewport(scrollRef.current);
+      const renderGraph = (layoutPrepared) => {
+        const viewportWidth = viewport.width;
+        const viewportHeight = viewport.height;
         containerRef.current.style.width = `${viewportWidth}px`;
         containerRef.current.style.height = `${viewportHeight}px`;
         chart.resize({ width: viewportWidth, height: viewportHeight });
-        if (!layout) {
+        if (!layoutPrepared || !layoutIsForViewport(layoutPrepared, viewport)) {
           chart.clear();
+          setReady(false);
           return;
         }
-        const fitScale = computeFitScale(layout.naturalWidth, layout.naturalHeight, viewportWidth, viewportHeight);
-        const displayScale = fitScale;
-        const renderNodes = layout.nodes.map((node) => ({
-          ...node,
-          symbolSize: Array.isArray(node.symbolSize) ? node.symbolSize.map((value) => value * fitScale) : node.symbolSize,
-        }));
-        chart.setOption({
-          tooltip: { trigger: "item", formatter: ({ data: node }) => node?.layoutAnchor ? "" : node?.name || "" },
-          series: [{
-            id: "ontology-graph",
-            type: "graph",
-            layout: "none",
-            data: [...renderNodes, ...layout.boundaryAnchors],
-            links: layout.links,
-            top: 0,
-            left: 0,
-            bottom: 0,
-            right: 0,
-            roam: true,
-            zoom: 1,
-            scaleLimit: { min: 0.15, max: 12 },
-            nodeScaleRatio: 1,
-            label: { show: true, position: "inside", verticalAlign: "middle", align: "center", color: "#fff", fontSize: scaledTypography(13, displayScale, 1), overflow: "truncate", formatter: ({ data: node }) => node?.layoutAnchor ? "" : node?.name || "" },
-            lineStyle: { color: "#94a3b8", width: Math.max(0.5, 1.2 * displayScale), opacity: 0.8, curveness: 0.08 },
-            emphasis: { focus: "none", scale: 1.12 },
-            blur: { itemStyle: { opacity: 1 }, lineStyle: { opacity: 0.8 }, label: { opacity: 1 } },
-            selectedMode: false,
-            animationDuration: 0,
-            animationDurationUpdate: 0,
-          }],
-        }, { notMerge: true });
+        chart.setOption(radialGraphOption(layoutPrepared), { notMerge: true });
+        const displayScale = layoutPrepared.fitScale;
         let roamZoom = 1;
         chart.off("graphRoam");
         chart.on("graphRoam", (event) => {
           if (!event.zoom) return;
           roamZoom *= event.zoom;
-          chart.setOption({ series: [{ id: "ontology-graph", label: { fontSize: scaledTypography(13, displayScale, roamZoom) } }] });
+          chart.setOption({ series: [{ id: "ontology-graph", label: { fontSize: Math.max(6, 13 * displayScale * Math.min(Math.max(0.1, roamZoom), 1.8)) } }] });
         });
+        setReady(true);
+        onRendered?.("radial");
       };
-      renderGraph();
+      renderPrepared = renderGraph;
+      renderGraph(preparedRef.current);
       wheelTarget = containerRef.current;
       wheelHandler = (event) => {
         if (event.ctrlKey) return;
@@ -1549,20 +1528,31 @@ function OntologyEChartsPreview({ data, appliedLayers, onError }) {
         chart.dispatchAction({ type: "graphRoam", seriesIndex: 0, dx: -event.deltaX, dy: -event.deltaY });
       };
       wheelTarget.addEventListener("wheel", wheelHandler, { passive: false, capture: true });
-      observer = new ResizeObserver(() => renderGraph());
+      observer = new ResizeObserver(() => {
+        const next = readViewport(scrollRef.current);
+        renderGraph(preparedRef.current);
+        if (next.width !== viewport.width || next.height !== viewport.height) {
+          viewport.width = next.width;
+          viewport.height = next.height;
+          onViewportChange?.(next);
+        }
+      });
       observer.observe(scrollRef.current);
-      setReady(true);
     }).catch((error) => {
       console.error("语义环形布局加载失败", error);
       onError?.(error);
     });
     return () => {
       disposed = true;
+      renderPrepared = null;
       observer?.disconnect();
       if (wheelTarget && wheelHandler) wheelTarget.removeEventListener("wheel", wheelHandler, { capture: true });
       chart?.dispose();
     };
   }, [data, appliedLayers]);
+  useEffect(() => {
+    if (prepared && renderPrepared) renderPrepared(prepared);
+  }, [prepared]);
   return <div className="ontology-tree-scroll" ref={scrollRef}><div className="ontology-tree-preview" ref={containerRef} />{!ready && <div className="ontology-tree-loading-overlay"><Spin tip="正在加载语义环形布局…" /></div>}</div>;
 }
 
@@ -1606,10 +1596,59 @@ function OntologyTreePreview({ data }) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [layoutMode, setLayoutMode] = useState("network");
   const [layoutError, setLayoutError] = useState(null);
+  const [radialPrepared, setRadialPrepared] = useState(null);
+  const [viewport, setViewport] = useState(() => normalizeViewport(0, 0));
   const lastGoodLayoutRef = useRef("network");
+  const shellRef = useRef(null);
+  const cacheRef = useRef(null);
+  if (!cacheRef.current) cacheRef.current = createRadialLayoutCache({ maxEntries: 8 });
+  const fingerprint = useMemo(() => ontologyDataFingerprint(data), [data]);
+  const layerKey = appliedLayers.join("|");
+  const prepareKey = radialCacheKey({
+    fingerprint,
+    layerKey,
+    width: viewport.width,
+    height: viewport.height,
+  });
   useEffect(() => {
     let cancelled = false;
-    const preload = () => { if (!cancelled) void import("echarts"); };
+    const updateViewport = () => setViewport(readViewport(shellRef.current));
+    updateViewport();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(updateViewport) : null;
+    if (observer && shellRef.current) observer.observe(shellRef.current);
+    return () => {
+      cancelled = true;
+      observer?.disconnect();
+    };
+  }, []);
+  const ensureRadialReady = useCallback(async () => {
+    if (!prepareKey || !viewport.width || !viewport.height) return null;
+    const cached = cacheRef.current.get(prepareKey);
+    if (cached) return cached;
+    let promise = cacheRef.current.getInFlight(prepareKey);
+    if (!promise) {
+      promise = Promise.resolve()
+        .then(() => prepareRadialLayout(data, appliedLayers, viewport))
+        .then((prepared) => {
+          if (!prepared) throw new Error("RADIAL_LAYOUT_EMPTY");
+          cacheRef.current.set(prepareKey, prepared);
+          return prepared;
+        })
+        .finally(() => cacheRef.current.clearInFlight(prepareKey));
+      cacheRef.current.putInFlight(prepareKey, promise);
+    }
+    return promise;
+  }, [prepareKey, data, appliedLayers, viewport.width, viewport.height]);
+  useEffect(() => {
+    if (!prepareKey || !viewport.width || !viewport.height) return;
+    let cancelled = false;
+    const preload = () => {
+      if (cancelled) return;
+      void import("echarts");
+      ensureRadialReady().catch((error) => {
+        if (!cancelled) console.error("语义环形布局后台预计算失败", error);
+      });
+    };
     const idleId = typeof window.requestIdleCallback === "function"
       ? window.requestIdleCallback(preload, { timeout: 1500 })
       : window.setTimeout(preload, 600);
@@ -1618,27 +1657,51 @@ function OntologyTreePreview({ data }) {
       if (typeof window.cancelIdleCallback === "function") window.cancelIdleCallback(idleId);
       else window.clearTimeout(idleId);
     };
-  }, []);
+  }, [ensureRadialReady, prepareKey]);
   const switchLayout = (next) => {
     if (next === layoutMode || !ontologyLayoutOption(next)) return;
-    lastGoodLayoutRef.current = layoutMode;
     setLayoutError(null);
     setLayoutMode(next);
   };
   const handleLayoutError = () => {
     setLayoutError("布局加载失败，已恢复上一个可用布局。");
     setLayoutMode(lastGoodLayoutRef.current);
+    setRadialPrepared(null);
+  };
+  const handleLayoutRendered = (mode) => {
+    lastGoodLayoutRef.current = mode;
+  };
+  useEffect(() => {
+    if (layoutMode !== "radial") return;
+    let cancelled = false;
+    ensureRadialReady().then((prepared) => {
+      if (cancelled || !prepared) return;
+      setRadialPrepared(prepared);
+    }).catch(() => {
+      if (cancelled) return;
+      setLayoutError("语义环形布局加载失败，已恢复上一个可用布局。");
+      if (lastGoodLayoutRef.current !== "radial") setLayoutMode(lastGoodLayoutRef.current);
+      else setRadialPrepared(null);
+    });
+    return () => { cancelled = true; };
+  }, [layoutMode, ensureRadialReady]);
+  const handleApplyLayers = (nextLayers) => {
+    setAppliedLayers(nextLayers);
+    setFilterOpen(false);
+    setRadialPrepared(null);
+  };
+  const handleRadialViewportChange = (next) => {
+    setViewport(next);
   };
   const filterContent = <div className="ontology-layer-menu">
     <div className="ontology-layer-options">{ONTOLOGY_LAYER_DEFINITIONS.map((layer) => <Checkbox key={layer.key} disabled={!availability[layer.key]} checked={draftLayers.includes(layer.key)} onChange={(event) => setDraftLayers((current) => event.target.checked ? [...current, layer.key] : current.filter((item) => item !== layer.key))}>{layer.label}</Checkbox>)}</div>
-    <div className="ontology-layer-actions"><Button size="small" onClick={() => { setDraftLayers(appliedLayers); setFilterOpen(false); }}>取消</Button><Button size="small" type="primary" disabled={!draftLayers.length} onClick={() => { setAppliedLayers(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => draftLayers.includes(layer))); setFilterOpen(false); }}>确认</Button></div>
+    <div className="ontology-layer-actions"><Button size="small" onClick={() => { setDraftLayers(appliedLayers); setFilterOpen(false); }}>取消</Button><Button size="small" type="primary" disabled={!draftLayers.length} onClick={() => { handleApplyLayers(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => draftLayers.includes(layer))); }}>确认</Button></div>
   </div>;
-  const layerKey = appliedLayers.join("|");
   const radialLayout = layoutMode === "radial";
-  return <div className="ontology-tree-shell">
+  return <div className="ontology-tree-shell" ref={shellRef}>
     <div className="ontology-toolbar"><OntologyLayoutSelector value={layoutMode} onChange={switchLayout} /><Popover open={filterOpen} placement="leftTop" trigger="click" content={filterContent} onOpenChange={(open) => { if (open) setDraftLayers(appliedLayers); setFilterOpen(open); }}><button type="button" className="ontology-layer-filter-button" aria-label="筛选可视化层级" title="筛选可视化层级"><OntologyFilterIcon /></button></Popover></div>
     {layoutError && <div className="ontology-layout-error" role="alert">{layoutError}</div>}
-    {radialLayout ? <OntologyEChartsPreview key={`radial:${layerKey}`} data={data} appliedLayers={appliedLayers} onError={handleLayoutError} /> : <React.Suspense fallback={<div className="ontology-sigma-loading"><Spin tip="正在加载关系布局…" /></div>}><OntologyPreviewErrorBoundary key={`network:${layerKey}`} resetKey={`network:${layerKey}`} onError={handleLayoutError}><OntologySigmaPreview data={data} appliedLayers={appliedLayers} /></OntologyPreviewErrorBoundary></React.Suspense>}
+    {radialLayout ? <OntologyEChartsPreview key={`radial:${layerKey}`} data={data} appliedLayers={appliedLayers} prepared={radialPrepared} onError={handleLayoutError} onRendered={handleLayoutRendered} onViewportChange={handleRadialViewportChange} /> : <React.Suspense fallback={<div className="ontology-sigma-loading"><Spin tip="正在加载关系布局…" /></div>}><OntologyPreviewErrorBoundary key={`network:${layerKey}`} resetKey={`network:${layerKey}`} onError={handleLayoutError}><OntologySigmaPreview data={data} appliedLayers={appliedLayers} onError={handleLayoutError} onRendered={handleLayoutRendered} /></OntologyPreviewErrorBoundary></React.Suspense>}
   </div>;
 }
 

@@ -421,6 +421,41 @@ def validate_bo_references(actions: Iterable[Mapping[str, str]],
     return issues
 
 
+def explicit_action_structural_errors(actions: Iterable[Mapping[str, Any]],
+                                      business_object_codes: Iterable[str]) -> list[dict[str, str]]:
+    """返回明确识别动作中的结构错误摘要；非空时不得用推断兜底掩盖。
+
+    结构错误包括：必填字段（动作名称/动作英文名/动作描述）缺失、动作类型无法
+    归一化为新增/修改/删除、动作编码非空但不符合 ``ACT+6位数字``、以及业务
+    对象编码悬空（不在当前任务已确认集合中）。动作编码允许为空，由稳定编码
+    阶段统一补齐；其余结构错误必须继续进入正式产物门禁，由契约报告，而不是
+    被自动生成的动作悄悄覆盖。
+    """
+    allowed = {_text(code) for code in business_object_codes if _text(code)}
+    errors: list[dict[str, str]] = []
+    for index, action in enumerate(actions, 2):
+        if not isinstance(action, Mapping):
+            continue
+        action_type = normalize_action_type(action.get("动作类型"))
+        code = _text(action.get("动作编码"))
+        bo_code = _text(action.get("业务对象编码"))
+        if not any((_text(action.get("动作名称")), _text(action.get("动作英文名")),
+                    _text(action.get("动作描述")))):
+            errors.append({"row": str(index), "field": "required",
+                           "message": f"动作第 {index} 行缺少动作名称/动作英文名/动作描述必填字段"})
+        if not action_type:
+            errors.append({"row": str(index), "field": "动作类型",
+                           "message": f"动作第 {index} 行动作类型无法归一化为新增/修改/删除"})
+        if code and not ACTION_CODE_PATTERN.fullmatch(code):
+            errors.append({"row": str(index), "field": "动作编码",
+                           "message": f"动作第 {index} 行动作编码 {code} 不符合 ACT+6 位数字"})
+        if bo_code and bo_code not in allowed:
+            errors.append({"row": str(index), "field": "业务对象编码",
+                           "message": f"动作第 {index} 行引用的业务对象编码 {bo_code} "
+                                       "不在当前任务已确认业务对象中"})
+    return errors
+
+
 def to_nine_field_rows(actions: Iterable[Mapping[str, str]]) -> list[list[str]]:
     """输出严格九字段顺序的行，供 CSV 写入使用。"""
     return [[_text(action.get(field)) for field in ACTION_FIELDS] for action in actions]

@@ -68,7 +68,7 @@ def relation(relation_id, relation_type=REFERENCE, status=CONFIRMED,
         "status": status,
         "evidenceTypes": evidence_types or [],
         "evidenceLevel": "STRONG",
-        "provenance": ["mission-input/schema.sql"],
+        "provenance": ["input/schema.sql"],
     }
     if cardinality is not None:
         record["cardinality"] = cardinality
@@ -106,11 +106,11 @@ class ActionClassificationTests(unittest.TestCase):
         # The M:N relation keeps its relation entity marker in the audit.
         state["relationDecisions"][1]["needsRelationEntity"] = True
         with tempfile.TemporaryDirectory() as root:
-            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            result = finalize_semantic_model(Path(root) / "work", state)
             self.assertEqual(result["status"], "PASSED")
             # Every downgraded relation stays in the audit as CANDIDATE (or a
             # reclassified REFERENCE for FK-backed transformations).
-            persisted = json.loads((Path(root) / "mission-work" / "modeling_state.json")
+            persisted = json.loads((Path(root) / "work" / "modeling_state.json")
                                    .read_text(encoding="utf-8"))
             by_id = {item["relationId"]: item for item in persisted["relationDecisions"]}
             self.assertEqual(by_id["R_NO_EVIDENCE"]["status"], CANDIDATE)
@@ -277,7 +277,7 @@ class CoverageNormalizationTests(unittest.TestCase):
     def test_audit_coverage_rebuilt_from_canonical_state(self):
         state = {"businessObjectDecisions": [bo_candidate("CO1")]}
         with tempfile.TemporaryDirectory() as root:
-            work = Path(root) / "mission-work"
+            work = Path(root) / "work"
             result = finalize_semantic_model(work, state)
             self.assertEqual(result["status"], "PASSED")
             self.assertNotIn("DECISION_AUDIT_COVERAGE",
@@ -319,11 +319,11 @@ class QualityWarningTests(unittest.TestCase):
         blob = ("业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
                 "CO1,确认对象,,,\n").encode("utf-8")
         with tempfile.TemporaryDirectory() as root:
-            output = Path(root) / "mission-output"
+            output = Path(root) / "output"
             output.mkdir(parents=True, exist_ok=True)
             (output / "business_objects.csv").write_bytes(blob)
             result = finalize_semantic_model(
-                Path(root) / "mission-work", state, output_dir=output,
+                Path(root) / "work", state, output_dir=output,
                 required_outputs=["business_objects.csv"],
                 context={"expectedFiles": ["business_objects.csv"], "taskType": "modeling"})
             self.assertEqual(result["status"], "FAILED")
@@ -337,11 +337,11 @@ class QualityWarningTests(unittest.TestCase):
         blob = ("业务对象编码,业务对象名称,业务对象英文名,业务对象定义,数据类别\n"
                 "CO1,确认对象,,确认对象,\n").encode("utf-8")
         with tempfile.TemporaryDirectory() as root:
-            output = Path(root) / "mission-output"
+            output = Path(root) / "output"
             output.mkdir(parents=True, exist_ok=True)
             (output / "business_objects.csv").write_bytes(blob)
             result = finalize_semantic_model(
-                Path(root) / "mission-work", state, output_dir=output,
+                Path(root) / "work", state, output_dir=output,
                 required_outputs=["business_objects.csv"],
                 context={"expectedFiles": ["business_objects.csv"], "taskType": "modeling"})
             self.assertEqual(result["status"], "PASSED")
@@ -358,8 +358,8 @@ class QualityWarningTests(unittest.TestCase):
         blob = ("逻辑实体编码,业务属性编码,业务属性名称,是否页面显示\n"
                 "LE001,A1,金额&数量,Y\n").encode("utf-8")
         with tempfile.TemporaryDirectory() as root:
-            work = Path(root) / "mission-work"
-            output = Path(root) / "mission-output"
+            work = Path(root) / "work"
+            output = Path(root) / "output"
             output.mkdir(parents=True, exist_ok=True)
             (output / "business_attributes.csv").write_bytes(blob)
             result = finalize_semantic_model(
@@ -375,11 +375,11 @@ class QualityWarningTests(unittest.TestCase):
 class StructuralBlockerTests(unittest.TestCase):
     def test_malformed_csv_still_fails(self):
         with tempfile.TemporaryDirectory() as root:
-            output = Path(root) / "mission-output"
+            output = Path(root) / "output"
             output.mkdir(parents=True, exist_ok=True)
             (output / "business_objects.csv").write_bytes(b"\xff\xfe broken")
             result = finalize_semantic_model(
-                Path(root) / "mission-work", {},
+                Path(root) / "work", {},
                 output_dir=output, required_outputs=["business_objects.csv"],
                 context={"expectedFiles": ["business_objects.csv"], "taskType": "modeling"})
             self.assertEqual(result["status"], "FAILED")

@@ -166,7 +166,7 @@ class PipelineDecisionAuditTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as root:
             from open_claude.modeling_reliability import finalize_semantic_model
-            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            result = finalize_semantic_model(Path(root) / "work", state)
             self.assertEqual(result["status"], "PASSED")
             codes = {issue.code for issue in result["issues"]}
             self.assertIn("INVALID_AGGREGATION_EDGE", codes)
@@ -177,7 +177,7 @@ class PipelineDecisionAuditTests(unittest.TestCase):
             "ruleId": "R_VIEW_FILTER",
             "ruleType": "ALERT_DETECTION_RULE",
             "evidenceTypes": ["VIEW_FILTER_LOGIC"],
-            "provenance": ["mission-input/report.sql"],
+            "provenance": ["input/report.sql"],
             "sampleCount": 104,
             "hitCount": 46,
         }]}

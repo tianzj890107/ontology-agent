@@ -20,6 +20,7 @@
 - 识别策略“明确证据优先、合理推断兜底”：优先 API/接口/Controller/Route、服务/Command/工作流、前端按钮/表单、业务操作文档；证据不足时按已确认业务对象生成 3 个 BO 级动作，并选择 0～6 个代表性逻辑实体生成 LE 级动作（明细、行、地址、联系人、附件、配置等），总量控制在 10～50 条；无业务对象不生成动作。
 - 推断动作在动作描述中注明“演示候选动作，具体服务实现需结合实际系统确认”；协议/服务节点/服务名称无服务证据时留空，不得虚构；LE 级动作通过动作名称和描述表达，不新增逻辑实体编码等字段。
 - 动作按（业务对象编码、动作类型、动作名称）去重，明确识别动作优先于同语义推断动作；新模板、空 Sheet、旧模板无动作 Sheet、表头顺序变化、BOM/空行均兼容；不同任务/工作区/run 严格隔离。
+- 确定性兜底已接入正式建模 finalize/export 链路：`modeling_reliability.py::ensure_actions_artifact` 在 ACTION 被选择且 expectedFiles 允许 `actions.csv` 时执行。Agent 未生成、空文件或只有表头时，根据当前任务 `work/modeling_state.json` 或 `output/` 已确认 BO/LE 自动生成演示动作；Agent 明确动作优先合并、真实协议/服务节点/服务名称字段保留；表头缺失、悬空 BO 引用、非法动作类型、非空且非 `ACT+6位` 编码等结构错误不覆盖，继续进入正式产物门禁报告；ACTION 未选择、expectedFiles 不允许、没有已确认业务对象时不生成。`actions.csv` 已加入 `GOVERNANCE_AND_FINAL` 阶段输出与表头契约，内容变化会正确失效最终缓存，写入使用临时文件 + `os.replace` 原子策略。
 
 主要文件：
 - 新增 `open-claude/open_claude/action_inference.py`（动作 Sheet 解析、类型归一化、BO/LE 推断、去重、稳定排序与稳定编码纯函数）与 `agent_knowledge/动作v0.0.1.md`（专项技能）。
@@ -31,8 +32,8 @@
 - 前端 47314 独立建模页“解析要素”新增“动作”（`frontend/src/main.jsx` STANDALONE_ARTIFACTS），并重建 `frontend/dist`（新 hash bundle 替换旧 bundle）；API 文档与 SOP 同步 actions.csv 输出文件映射与参考文件名称。
 
 验证结果：
-- 全量 `pytest tests`：540 passed / 13 skipped（10 项 Redis 集成无 `ONTOLOGY_TEST_REDIS_URL`、3 项平台沙箱）/ 368 subtests。
-- 新增 `tests/test_action_inference.py`（27 项：BO/LE 动作生成、明确证据优先、去重稳定编码、九字段输出、任务隔离）与 actions.csv 契约/引用用例；更新 `tests/test_ontology_knowledge.py`、`tests/test_modeling_csv_contract.py`（含集成版输出契约覆盖 actions.csv）。
+- 全量 `pytest tests`：576 passed / 13 skipped（10 项 Redis 集成无 `ONTOLOGY_TEST_REDIS_URL`、3 项平台沙箱）/ 371 subtests。
+- 新增 `tests/test_action_inference.py`（27 项：BO/LE 动作生成、明确证据优先、去重稳定编码、九字段输出、任务隔离）与 `tests/test_action_production_fallback.py`（18 项：缺失/空/表头自动补充、明确动作合并与服务字段保留、编码保留与冲突规避、ACTION 与 expectedFiles 双门禁、无 BO 不生成、结构错误不被推断掩盖、任务隔离、严格九字段）；更新 `tests/test_ontology_knowledge.py`、`tests/test_modeling_csv_contract.py`（含集成版输出契约覆盖 actions.csv）。
 - `python -m py_compile` 全部改动 Python 文件通过；`git diff --check` 通过；前端 `npm run build` 成功（仅既有大 chunk 警告，`frontend/dist` 已随解析要素新增动作重建为新 hash bundle）；前端 Node 测试 32/33 通过，1 项“仓库真实五层输出”需本地 `frontend/output/*.csv` 夹具（gitignore 数据目录，当前工作区不存在，与本次改动无关）。
 - 未部署、未 SSH、未重启、未 commit、未 push。
 
@@ -41,20 +42,23 @@
 将本体可视化预览卡片的布局切换收敛为右上角统一“布局”下拉框，删除旧的左侧“环形图/网络图”页签与右侧“重新布局 / ForceAtlas2”常驻入口，保留两种布局能力并统一命名与提示文案。
 
 - 布局下拉框仅两项：`关系聚类可视化`（对应 ForceAtlas2/网络图）与 `语义环形可视化`（对应径向语义分层图）；选项悬浮提示分别为“ForceAtlas2 是一种先进的力导向图布局”和“按照业务对象、逻辑实体、业务属性等语义层级，由内向外分层排列节点”，下拉框旁信息图标始终展示当前布局说明。
-- 打开预览默认优先展示关系聚类可视化（Sigma/ForceAtlas2）；语义环形布局（ECharts）不在首次打开时初始化，仍通过 `requestIdleCallback` 后台预载 echarts 资源，切换时若未就绪显示统一加载态，完成后自动 fit，不再需要独立“重新布局”按钮。
+- 打开预览默认优先展示关系聚类可视化（Sigma/ForceAtlas2）；语义环形布局（ECharts）不在首次打开时初始化。网络关系图展示期间，浏览器空闲时后台完成 `layoutOntologyRadial` 布局数据计算（natural bounds、fitScale、最终渲染节点）并写入有界缓存（LRU 上限 8 条），不创建隐藏 ECharts 实例；切换“语义环形可视化”时优先复用缓存，未就绪时显示统一加载态并复用 in-flight Promise（相同缓存键不重复计算），完成后自动 fit，不再需要独立“重新布局”按钮。
+- 环形布局缓存键为 `radial:<数据指纹>:<layerKey>:<宽>x<高>:<布局版本>`：数据指纹由可见节点/连线集合决定，`appliedLayers` 确认后、viewport 实质变化（含全屏/退出全屏）后、任务/run 数据变化后失效并后台重算；`draftLayers` 变化与仅打开下拉框不触发；关闭预览即释放缓存。
+- 布局失败恢复以“最后一次真正成功渲染”为准：关系图与环形图在 `setOption`/Sigma 渲染成功后通过 `onRendered` 更新 `lastGoodLayout`；Sigma 异步初始化错误经 try/catch 回调进入统一失败处理（不只依赖 ErrorBoundary），失败后保留上一成功布局、恢复下拉框并允许再次尝试，不会在 network/radial 之间循环切换。
 - 切换布局真正重建对应布局结果：`draftLayers` 变更不触发重算，点击图层筛选“确认”后按 `appliedLayers` 作为布局缓存 key（`radial:`/`network:` 前缀）重建并自动 fit；全屏/退出全屏保持布局选择状态。
-- 布局加载失败时保留上一次成功布局、恢复下拉框为上一次有效选项并显示错误提示（ErrorBoundary 兜底），避免空白画布。
+- 布局加载失败时保留上一次成功布局、恢复下拉框为上一次有效选项并显示错误提示，避免空白画布。
 - 工具栏改为一行排列：布局选择器 + 图层筛选图标，与全屏/退出全屏、关闭按钮保持同一行；新增 `.ontology-toolbar`、`.ontology-layout-selector`、`.ontology-layout-error`、`.ontology-tree-loading-overlay` 样式，移除 `.ontology-view-switch`、`.ontology-sigma-actions` 样式。
 
 主要文件：
 - `frontend/src/main.jsx`：`OntologyTreePreview` 改由 `layoutMode`（network/radial，默认 network）驱动，新增 `OntologyLayoutSelector`、`OntologyPreviewErrorBoundary`；`OntologyEChartsPreview` 增加加载态与失败回退。
-- 新增 `frontend/src/ontologyLayoutOptions.js`（两个布局选项的 value/名称/提示纯常量与查询函数）与 `frontend/tests/ontologyLayoutOptions.test.mjs`。
+- 新增 `frontend/src/ontologyLayoutOptions.js`（两个布局选项的 value/名称/提示纯常量与查询函数）、`frontend/src/ontologyRadialPrecompute.js`（数据指纹、缓存键、`prepareRadialLayout` 后台准备、`radialGraphOption`、有界缓存控制器与 in-flight Promise 复用纯函数）与 `frontend/tests/ontologyLayoutOptions.test.mjs`、`frontend/tests/ontologyRadialPrecompute.test.mjs`（12 项：指纹稳定性、缓存键失效、viewport 归一化、准备结果稳定性、graph layout none、视口不匹配拒绝、缓存 LRU 与 Promise 复用）。
+- `frontend/src/main.jsx`：`OntologyTreePreview` 持有 `createRadialLayoutCache` 与空闲后台预计算；`OntologyEChartsPreview` 接收 `prepared` 缓存载荷，不再无条件重复 `layoutOntologyRadial`；`OntologySigmaPreview` 增加 `onError/onRendered` 统一失败与成功渲染上报。
 - `frontend/src/OntologySigmaPreview.jsx`：删除 ForceAtlas2 常驻文字、重新布局按钮及 `layoutVersion/layoutRunning` 状态。
 - `frontend/src/styles.css`：统一工具栏布局与布局选择器样式；`tests/test_frontend_contract.py` 更新旧入口断言并新增 `test_ontology_preview_unified_layout_selector`。
 - 重建 `frontend/dist`（新 hash bundle 替换旧 bundle）。
 
 验证结果：
-- 前端 Node 测试 `node --test 'tests/*.test.mjs'`：35 项中 34 通过，1 项仍为既有“仓库真实五层输出”夹具缺失（`frontend/output/*.csv` 为 gitignore 数据目录，与本次改动无关）。
+- 前端 Node 测试 `node --test 'tests/*.test.mjs'`：47/47 通过（35 项既有 + 12 项环形预计算新增；`frontend/output/*.csv` 为 gitignore 本地测试夹具，来源于服务器恢复归档，不入库、不参与部署）。
 - `pytest tests/test_frontend_contract.py`：13 passed；`pytest tests/test_tasks.py tests/test_standalone_modeling_server.py`：137 passed + 16 subtests。
 - `npm run build` 成功（仅既有大 chunk 警告）；`git diff --check` 通过。
 - 未部署、未 SSH、未重启、未 commit、未 push。
@@ -67,11 +71,12 @@
 - 迁移与校验：已 rsync 至服务器独立恢复归档 `open-claude/sandbox/recovered-workspaces/repo-root-legacy-2026-08-27/`（含 `migration-manifest.json`、`checksums.sha256`、`verify.out`、`MIGRATION_COMPLETE`）；服务器 `sha256sum -c` 33/33 全部成功、0 失败，本地与服务器逐文件哈希、文件数（33）与总字节（7,504,414）一致。
 - 本地清理：将仓库根六个精确目标（`input`、`work`、`output` 及三个 `mission-*` 符号链接）移至 `~/Trash/ontology-agent-legacy-workspaces-2026-08-27/`（可恢复），未使用 glob 或未验证变量；`ls -ld` 复核六路径均不存在，`git status` 无遗留运行目录。
 - 命名统一：新增集中式路径兼容模块 `open-claude/open_claude/workspace_paths.py`（`input_dir/work_dir/output_dir` canonical 优先、legacy 只读回退；`ensure_workspace_dirs` 只创建 canonical；`normalize_relpath/resolve_workspace_path/validate_task_workspace`）。旧路径仅允许存在于该集中式兼容层、历史 run 数据与兼容测试。
+- 旧命名进一步收敛：`tests/test_tasks.py`、`tests/test_pipeline_decision_audits.py`、`tests/test_gate_action_normalization.py` 的普通用例与证据来源字符串迁移到 canonical（`work/`、`output/`、`input/`）；旧名称仅保留在 `workspace_paths.py` 集中式兼容层、`oc_codex_server.py::migrate_legacy_mission_inputs` 历史迁移入口、专门的历史兼容测试（`test_workspace_paths.py`、`test_task_workspace_files.py`、`test_ontology_knowledge.py` 迁移用例）与历史 run 数据中；前端源码无 `mission-input/mission-work/mission-output`，也无 `misson` 拼写。
 - 47313 改造：`oc_codex_server.py` 新任务只创建 `input/work/output`；上传、下载、预览、文件列表、MinIO 上传、数据库 helper、文档 bundle、参考文件、Agent 提示词（建模/文档/数据库/输出指令）、`agentOutputDirectory=output`、`agentIntermediateDirectory=work` 全部改用 canonical；`task_workspace_path/create_task` 增加 `_validate_task_workspace` 边界校验（拒绝空路径、仓库根、源码目录、HOME、sandbox 数据根自身、相对/symlink 逃逸）；`list_project_files` 返回统一逻辑路径并对历史任务做 `mission-*→canonical` 展示映射。
-- 47314 改造：`standalone_modeling_server.py` 新 run 不再创建 `mission-*` 符号链接，只创建 `input/work/output`；`LEGACY_ALIASES` 保留为集中式只读兼容解析；默认建模提示词与数据库 schema 指令改用 `input/`、`work/`；文件 API 只返回 canonical 逻辑路径。
+- 47314 改造：`standalone_modeling_server.py` 新 run 不再创建 `mission-*` 符号链接，只创建 `input/work/output`；删除本地重复 `LEGACY_ALIASES`，统一复用 `workspace_paths.normalize_relpath` 集中式只读兼容解析（输入上传与公共相对路径均先归一化再校验）；默认建模提示词与数据库 schema 指令改用 `input/`、`work/`；文件 API 只返回 canonical 逻辑路径。
 - 建模引擎与前端：`modeling_reliability.py`、`document_parser.py` 改用 workspace_paths；前端文件树分组显示“输入/工作/输出”，`main.jsx` 的 `mission-output/` 产物匹配改为 `output/`；API 文档、SOP、`agent_knowledge/**` 活动规范与 `scripts/build_agent_knowledge.py` 提示词全部去除 `mission-*`（历史 changelog 不改）。
 - 新增 `tests/test_workspace_paths.py`（15 项：仓库根/源码目录/HOME/空路径/相对与符号链接逃逸拒绝、合法任务目录可用、canonical 优先与 legacy 只读回退、新写入只进 canonical、47313/47314 新任务只创建 input/work/output）；重写 `tests/test_task_workspace_files.py`（canonical 列表、legacy 逻辑路径映射、双布局共存 canonical 优先）；更新 `test_sandbox_security.py`、`test_semantic_finalize_upload_boundary.py`、`test_modeling_csv_contract.py`、`test_modeling_reliability.py`、`test_database_modeling_evidence.py`、`test_document_parser.py`、`test_credential_crypto.py`、`test_ontology_knowledge.py`、`test_standalone_modeling_server.py`、`test_frontend_contract.py`、`test_v0001_rule_registry.py` 至 canonical 契约。
-- 验证结果：全量 `pytest tests` 558 passed / 13 skipped / 371 subtests；`py_compile` 全部改动 Python 文件通过；`npm run build` 成功（仅既有大 chunk 警告，新 hash bundle 已生成）；`git diff --check` 通过。
+- 验证结果：全量 `pytest tests` 576 passed / 13 skipped / 371 subtests；`py_compile` 全部改动 Python 文件通过；`npm run build` 成功（仅既有大 chunk 警告，新 hash bundle 已生成）；`git diff --check` 通过。
 - 前端 Node 测试 35/35 通过：将迁移校验后的真实五层输出 CSV 恢复为 `frontend/output/` 本地测试夹具（该目录已加入 `.gitignore`，不入库、不参与部署），消除此前既有的“仓库真实五层输出”夹具缺失失败项。
 
 ### 部署与线上验证（工作区统一命名）
