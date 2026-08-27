@@ -81,4 +81,5 @@
 - 线上 HTML 已加载新 bundle：`frontend/dist/assets/index-BcoJeGei.js` 与 `index-D7obonjB.css`（47313/47314 一致）。
 - 新 47314 run 验证：通过 API 创建测试 run，磁盘只生成 `input/work/output`，无 `mission-*` 符号链接；验证后已完整清理（SQLite 索引行、`.runs.json` 条目与 run 工作目录），未影响既有 5 个 run。
 - 历史 run 兼容验证：既有 run 文件列表返回 53 项且全部为 canonical 逻辑路径（`input/...`、`work/...`、`output/...`），无 `mission-*` 命名条目；`work/modeling_state.json` 经 canonical 路径可正常读取。
+- 47313 历史任务端到端验证：用签名 cookie 调用 `/api/files`（280 项，无 mission 命名路径）、`/api/download`（200）、`/p/` 预览（200）；历史客户端使用的 `mission-work/modeling_state.json` 下载路径经兼容层仍可解析（200）。
 - 两服务日志无 traceback/路径/符号链接错误；本体可视化仍读取任务 `output/` 产物。
