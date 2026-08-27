@@ -23,6 +23,7 @@
 - 47313 后台 execution 通过两秒轮询回传事件时，连续 reasoning 会跨多个事件窗口；此前仅在单个响应批次内合并，导致一个思考过程显示为大量“思考中”节点。`EventFeed` 现于完整去重、排序后的展示层再次执行相邻增量归并，跨 SSE、轮询、刷新、历史分页边界连续的 `thinking`/`text` 均显示为单一节点，遇到工具、审计、审批等真实事件边界才拆分。
 - 合并只发生在展示层：服务端原始逐 token journal、单调 `seq`、绝对游标和审计历史完全保留，不修改或删除当前任务及历史任务事件；当前任务已有的连续思考在刷新新前端后自动按真实区段合并，后续增量继续并入同一节点。
 - 验证：全量 `pytest tests` 663 passed / 13 skipped / 445 subtests；相关前端/任务/模型回归 94 passed；前端 Node 测试 47/47；`py_compile` 通过；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。
+- 发布：当前全部本地修改以 commit `bc0a380` 提交并推送 `20260727`；发布前确认 47313/47314 均无 active/queued execution。服务器快进到同一 commit，47313 经部署脚本重启为 pid `3040408`，47314 精确停止无活跃 run 的旧 pid `2639894` 后重启为 pid `3045138`；两服务 `/health` 均 ready、active/queued 均为 0，线上主 bundle 为 `index-T1HCUlYg.js`，默认模型配置为 `direct-deepseek-v4-flash`。
 
 ### 动作元模型：识别与输出规范
 
