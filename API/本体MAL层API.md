@@ -843,9 +843,10 @@ GET /intelligent/modeling/tasks/RM123456789/execution-context
 **上传门禁与完成门禁分离**
 
 - 上传门禁只做文件自身可判断的结构校验（UTF-8 CSV、可解析、表头可规范化且与正式契约一致、行列数、必填字段、Y/N/枚举/整数/编码格式、文件内唯一与条件一致性、上传白名单、路径隔离），不读取 `work/modeling_state.json` 或决策审计。
-- `entity_relations.csv` 历史兼容别名 `源关联属性编码`→`源业务属性编码`、`目标关联属性编码`→`目标业务属性编码` 会在上传前规范化为正式标准表头；MinIO 对象与 SHA-256 均对应规范化内容。上传记录同时保存 `sourceSha256`（本地原始文件）与 `normalized`/`normalizationVersion`，完成门禁以相同规范化版本重新规范化当前本地文件后比较哈希，历史兼容表头可正常完成，上传后修改数据或未知表头会被发现。未知字段、错误顺序、少列/多列仍拒绝并报告具体列号、期望/实际字段、缺失/未知字段。
+- `entity_relations.csv` 历史兼容表头别名 `源关联属性编码`→`源业务属性编码`、`目标关联属性编码`→`目标业务属性编码`，以及 `关系分类` 英文枚举别名（`COMPOSITION`→`组合`、`AGGREGATION`→`聚合`、`EXTENSION`/`INHERITANCE`→`继承`、`REFERENCE`/`ASSOCIATION`→`关联`、`DEPENDENCY`/`TRANSFORMATION`→`依赖`，大小写/首尾空白兼容）会在上传前规范化为正式中文标准内容；MinIO 对象与 SHA-256 均对应规范化内容，本地原文件不覆盖。上传记录同时保存 `sourceSha256`（本地原始文件）与 `normalized`/`normalizationVersion`，完成门禁以相同规范化版本重新规范化当前本地文件后比较哈希，历史兼容表头/英文关系分类可正常完成，上传后修改数据或未知表头/未登记枚举会被发现。未知字段、错误顺序、少列/多列仍拒绝并报告具体列号、期望/实际字段、缺失/未知字段。
+- 中文名称字段（业务对象名称、逻辑实体名称、业务属性名称、关系中文名称等）只要求包含至少一个中文字符，允许混用英文缩写与数字（如 `源头单据ID`、`财报PDF文档`、`API调用记录`、`2D图纸`）；纯英文/纯数字/纯符号仍拒绝。
 - `logical_entities.csv` 业务对象编码为空时，只要名称也为空且主标志为 `N` 即可独立上传，不要求归属审计状态；文件内矛盾（空编码+非空名称、空编码+主标志 `Y`、编码存在但名称空、主标志非法、编码重复）仍在上传阶段拒绝。
-- 完成门禁保留跨文件引用、R1–R5 证据、决策审计覆盖率、输出与决策一致性、空业务对象逻辑实体的可审计归属状态等语义检查；上传成功但完成门禁未通过时 `completionReady=false`，不能发送 `SUCCESS`。`completionReady` 与 `task.completionReady` 来自同一权威计算，同一响应中永远一致。
+- 完成门禁保留确定性阻断：全部 `expectedFiles` 已上传、上传记录完整、本地文件与已上传对象哈希一致（规范化记录按同版本重放规范化）、任务状态与 execution-context 有效。跨文件引用、R1–R5 证据、决策审计覆盖率、空业务对象逻辑实体的归属状态等**语义校验问题不再阻断完成**，仅作为非阻断 `completionWarnings`/`completionHint` 保留在 `validation_report.json` 与任务摘要；用户确认后仍可发送 `SUCCESS`（本地记录 `completedWithWarnings`）。`completionReady` 与 `task.completionReady` 来自同一权威计算（`ready`/`blockers`/`warnings`），同一响应中永远一致。
 - 上传响应逐文件返回 `stage` 与 `code`：`STRUCTURAL_VALIDATION`/`UPLOAD_ARTIFACT_HEADER_INVALID`、`UPLOAD_ARTIFACT_ROW_INVALID`、`UPLOAD_ARTIFACT_NOT_ALLOWED`，`CONTEXT`/`UPLOAD_CONTEXT_UNAVAILABLE`，`STORAGE`/`UPLOAD_STORAGE_FAILED`；成功项 `stage=STORAGE` 并带 `sha256`（实际上传规范化 blob）与 `sourceSha256`/`normalized`/`normalizationVersion`。部分失败时其他合法文件继续上传；全部为结构校验失败返回 422；全部通过结构校验但对象存储失败返回 502 且顶层 `code=UPLOAD_STORAGE_FAILED`。
 
 #### 返回参数（`data` 字段）

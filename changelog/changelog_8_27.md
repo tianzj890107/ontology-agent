@@ -12,6 +12,18 @@
 
 ## 2026-08-27
 
+### 默认模型切换为 DeepSeek V4 Flash
+
+- 团队网关默认模型由 `Qwen/Qwen3-80B-AWQ` 调整为 `direct-deepseek-v4-flash`：同步更新 `open_claude/config.py` 内置回退值、`.env.example` 与本地/服务器 `.env`，后续服务启动及没有个人模型偏好的新身份默认使用 DeepSeek V4 Flash。
+- 47313 任务 `RM2092866461941178368` 通过用户模型 API 热切换到 `direct-deepseek-v4-flash`；原 execution 命中执行次数保护进入 blocked 后，以 execute 意图原地续跑，新 execution `16cf8aa780d14a338b1de867461725e7` 已处于 working，事件日志已实际产生 DeepSeek reasoning（`thinking`）事件。全过程未重启服务、未丢弃会话或任务工作区。
+- 47313 任务详情与增量事件窗口新增 `model` 字段，取任务 conversation 的实际 live model 且不会为历史任务强制创建 conversation；前端打开任务和轮询事件时同步实际模型。兼容尚未重启的旧后端：事件窗口没有 `model` 时回退读取 `/api/meta`，解决服务端/API 热切换后模型选择器仍显示旧值。
+
+### 思考过程跨批次合并
+
+- 47313 后台 execution 通过两秒轮询回传事件时，连续 reasoning 会跨多个事件窗口；此前仅在单个响应批次内合并，导致一个思考过程显示为大量“思考中”节点。`EventFeed` 现于完整去重、排序后的展示层再次执行相邻增量归并，跨 SSE、轮询、刷新、历史分页边界连续的 `thinking`/`text` 均显示为单一节点，遇到工具、审计、审批等真实事件边界才拆分。
+- 合并只发生在展示层：服务端原始逐 token journal、单调 `seq`、绝对游标和审计历史完全保留，不修改或删除当前任务及历史任务事件；当前任务已有的连续思考在刷新新前端后自动按真实区段合并，后续增量继续并入同一节点。
+- 验证：全量 `pytest tests` 663 passed / 13 skipped / 445 subtests；相关前端/任务/模型回归 94 passed；前端 Node 测试 47/47；`py_compile` 通过；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。
+
 ### 动作元模型：识别与输出规范
 
 按 `rules/本体元模型模板v.0.0.1.xlsx` 动作 Sheet 将“动作”落地为正式独立元模型，正式产物 `actions.csv` 严格使用模板九个字段：动作编码、动作名称、动作英文名、动作描述、动作类型、业务对象编码、协议、服务节点、服务名称。
@@ -98,28 +110,31 @@
 - 线上 HTML 已加载新 bundle：`frontend/dist/assets/index-Cogll0Y3.js`、`index-D7obonjB.css`、`ui-Bb9cGRad.js`（47313/47314 一致）；懒加载的 `OntologySigmaPreview-BjlhtHl4.js` 两服务均 200，且主 bundle 已包含“关系聚类可视化”“语义环形可视化”及两个布局说明文案。
 - 两服务日志无 traceback/error/exception；部署前备份目录 `backup-pre-2026-08-27-111442/`、run 索引与任务数据均未改动。
 
-### 本体建模 CSV 上传门禁修复：表头规范化与上传/完成门禁分离
+### 本体建模 CSV 上传门禁修复：规范化、门禁分离与语义非阻断完成
 
-修复 47313“上传到 MinIO”对本体建模 CSV 的两类错误拦截：`entity_relations.csv` 历史兼容字段名称被误报“期望16列、实际16列”；`logical_entities.csv` 业务对象编码为空的逻辑实体因缺少内部审计归属状态被上传门禁拒绝。
+修复 47313“上传到 MinIO”对本体建模 CSV 的错误拦截：`entity_relations.csv` 历史兼容字段名称被误报“期望16列、实际16列”；`logical_entities.csv` 业务对象编码为空的逻辑实体因缺少内部审计归属状态被上传门禁拒绝；中文名称含 ID/PDF 等英文缩写被误拒；英文关系分类被误拒；语义校验问题错误地禁用了“完成”按钮。
 
-- 表头规范化（集中式）：在 `modeling_csv_contract.py` 新增 `HEADER_ALIASES` 契约配置与 `normalize_header_cell/normalize_csv_header/normalize_csv_blob/header_mismatch_messages` 纯函数。顺序为 UTF-8 BOM（`utf-8-sig`）→ 首尾空白/零宽字符清理 → 已登记兼容别名映射 → 与正式字段比较；未知字段、错误顺序、少列/多列仍拒绝。`entity_relations.csv` 登记历史等价别名 `源关联属性编码→源业务属性编码`、`目标关联属性编码→目标业务属性编码`。
+- 表头与受控值规范化（集中式契约）：`modeling_csv_contract.py` 新增 `HEADER_ALIASES`、`RELATION_CATEGORY_ALIASES` 与 `enum_aliases` 契约配置，以及 `normalize_header_cell/normalize_csv_header/normalize_enum_value/normalize_csv_blob/header_mismatch_messages` 纯函数。规范化顺序：UTF-8 BOM（`utf-8-sig`）→ 首尾空白/零宽字符清理 → 已登记表头别名映射 → 受控枚举别名映射 → 与正式契约比较。`entity_relations.csv` 登记历史等价表头别名 `源关联属性编码→源业务属性编码`、`目标关联属性编码→目标业务属性编码`；`关系分类` 登记英文枚举别名 `COMPOSITION→组合`、`AGGREGATION→聚合`、`EXTENSION/INHERITANCE→继承`、`REFERENCE/ASSOCIATION→关联`、`DEPENDENCY/TRANSFORMATION→依赖`（大小写与首尾空白兼容，未知英文值仍拒绝）。`CSV_NORMALIZATION_VERSION`（与既有 `HEADER_NORMALIZATION_VERSION` 同值兼容）记录规范化契约版本，完成门禁按同版本重放规范化后比较哈希，旧上传记录保持可读。
+- 中文名称规则：所有声明为 `chinese_name` 的字段（业务对象名称、逻辑实体名称、业务属性名称、关系中文名称、规则名称、指标名称、动作名称、术语名称等）统一要求包含至少一个中文字符，允许混用英文缩写/数字/常用标点（如 `源头单据ID`、`税行ID`、`财报PDF文档`、`财报PDF数据行`、`API调用记录`、`B2B订单`、`2D图纸`、`3D模型`）；纯英文、纯数字或纯符号被拒绝并提示“未包含中文字符；该字段为中文名称，纯英文内容应填写到对应英文名称字段”。不再提示“中文名称不能混入英文字母”。
 - 表头错误信息：不再只显示“期望 N 列、实际 N 列”，改为逐列指出 `第 N 列期望“X”，实际为“Y”`、缺失字段、未知字段；字段集合正确但顺序错误时明确报告“字段顺序不符合模板”。
-- 上传对象规范化：`/api/minio/upload` 对建模 CSV 先在内存中规范化为正式表头，MinIO 对象与响应 `sha256` 均对应规范化后的 blob；本地原始文件不被静默覆盖；历史任务原 CSV 不修改。
-- 上传/完成门禁分离：`validate_row_contract` 新增 `ValidationPhase.UPLOAD/FINALIZE/COMPLETION` 阶段；上传阶段（`validate_modeling_upload_artifact_detailed`）只执行文件自身的确定性结构规则，不再读取 `work/modeling_state.json` 或决策审计。`logical_entities.csv` 空业务对象编码 + 空名称 + 主标志 `N` 可独立上传；空编码+非空名称、空编码+主标志 `Y`、编码存在但名称为空、主标志非法、编码重复仍在上传阶段拒绝。完成门禁保留归属审计（`ASSIGNED`/`NOT_APPLICABLE`/`UNRESOLVED`）、跨文件引用、R1–R5、决策审计覆盖率等语义检查；上传成功但完成门禁未通过时 `completionReady=false`、`completionCode=UPLOAD_COMPLETION_GATE_PENDING`，禁止发送 `SUCCESS`。
-- 多行逐行校验修复：`validate_row_contract` 原先 required 循环遍历全部行，但 boolean/enum/整数/编码/中文名/英文标识/JSON/范围等规则在循环外使用泄漏的 `row/line_no`，只检查最后一个数据行。已重构为单一逐行循环执行全部单行规则，跨行规则（唯一性、主逻辑实体数量、页面显示、跨文件引用）独立聚合；空白行与行宽错误行不参与单行校验且不误判后续行。新增第一行/中间行非法值、多行错误行号、空 BO+主标志 `Y` 位于首行等回归测试。
-- 规范化上传双哈希完成校验：上传记录保存 `sha256`（实际上传规范化 blob）、`sourceSha256`（本地原始文件）、`normalized`、`normalizationVersion`；完成门禁对规范化记录以相同契约版本重新规范化当前本地文件后比较 `sha256`，历史兼容表头上传后可正常完成，上传后修改数据或改成未知表头会被发现；旧记录只有 `sha256` 时保持原始哈希语义。`HEADER_NORMALIZATION_VERSION` 记录规范化契约版本，版本不匹配时 fail-closed 要求重新上传。
-- completionReady 单一权威：新增 `completion_ready_for_task(task, gate_error=None)`，同时考虑上传完整性、任务状态（执行中/已完成/失败/阻断）与建模语义校验持久化标记；`Task.summary()` 默认调用该函数，`/api/minio/upload` 在跑完完整完成门禁后用同一结果同时写入外层 `completionReady` 与 `task.summary(completion_ready=...)`，二者永不矛盾。前端合并 `result.task` 时以服务端外层最终值为准，外层 `false` 不会被内层 `true` 覆盖；新上传开始前清理旧明细，全部成功时关闭 Modal，列表 key 使用 name+index。
-- MinIO 逐文件结果：每个 `results` 项含 `name/ok/stage/code/error`，成功项 `stage=STORAGE`；格式失败 `stage=STRUCTURAL_VALIDATION`（表头 `UPLOAD_ARTIFACT_HEADER_INVALID`、行 `UPLOAD_ARTIFACT_ROW_INVALID`、白名单外 `UPLOAD_ARTIFACT_NOT_ALLOWED`），文件缺失/读取失败 `UPLOAD_CONTEXT_UNAVAILABLE`，对象存储异常 `UPLOAD_STORAGE_FAILED`；部分文件失败时其他合法文件继续上传，全部失败才返回顶层 422，不再把格式校验失败描述成 MinIO 网络失败。
-- 存储全失败状态：全部文件通过结构校验但对象存储全部失败时返回顶层 502 且 `code=UPLOAD_STORAGE_FAILED`、`ok=false`，同时保留逐文件 `results`，不再以 200 静默成功。
-- 前端：`uploadToMinio` 无论是否有顶层 `error` 都展示 `results` 逐文件原因；新增“上传结果明细”Modal（`stage`/`code` 标签 + 完整错误 `pre`）用于长错误；明确区分上传前校验失败、对象存储失败、上传成功但完成门禁未通过，并新增 `.upload-issue-*` 样式。
-- 文档：`API/backend-agent-interaction-api.md` 与 `API/本体MAL层API.md` 明确各正式结果文件可独立上传、上传阶段只做结构校验、完成阶段执行跨文件/审计/语义门禁、历史关系字段别名兼容、上传成功不代表可完成、`completionReady` 语义与逐文件 `stage/code` 契约。
+- 上传对象规范化：`/api/minio/upload` 对建模 CSV 先在内存中把表头与受控字段值规范化为正式标准内容，MinIO 对象与响应 `sha256` 均对应规范化后的 blob（本地原文件保留英文关系分类与旧表头不被覆盖）；本地原文件不被静默覆盖；历史任务原 CSV 不修改。
+- 上传/完成门禁分离：`validate_row_contract` 使用 `ValidationPhase.UPLOAD/FINALIZE/COMPLETION` 阶段；上传阶段（`validate_modeling_upload_artifact_detailed`）只执行文件自身的确定性结构规则，不再读取 `work/modeling_state.json` 或决策审计。`logical_entities.csv` 空业务对象编码 + 空名称 + 主标志 `N` 可独立上传；空编码+非空名称、空编码+主标志 `Y`、编码存在但名称为空、主标志非法、编码重复仍在上传阶段拒绝。
+- 多行逐行校验修复：`validate_row_contract` 原先 required 循环遍历全部行，但 boolean/enum/整数/编码/中文名/英文标识/JSON/范围等规则在循环外使用泄漏的 `row/line_no`，只检查最后一个数据行。已重构为单一逐行循环执行全部单行规则，跨行规则（唯一性、主逻辑实体数量、页面显示、跨文件引用）独立聚合；空白行与行宽错误行不参与单行校验且不误判后续行。中英文混合名称与英文关系分类兼容在任意行位置生效，新增第一行/中间行非法值、多行错误行号、空 BO+主标志 `Y` 位于首行等回归测试。
+- 规范化上传双哈希完成校验：上传记录保存 `sha256`（实际上传规范化 blob）、`sourceSha256`（本地原始文件）、`normalized`、`normalizationVersion`；完成门禁对规范化记录以相同契约版本重新规范化当前本地文件后比较 `sha256`，历史兼容表头/英文关系分类上传后可正常完成，上传后修改数据、改成未知表头或未登记枚举会被发现；旧记录只有 `sha256` 时保持原始哈希语义，版本不匹配时 fail-closed 要求重新上传。
+- 空上下文防护：`Task.set_mission_context` 对规范化后仍为空的上下文直接返回，不再写入空指纹的 `modeling_state.json`，避免任务在拿到第一个真实 execution-context 时把当前状态归档并误删 `validation_report.json`；`validation_report.json` 作为非阻断 warnings 在任何上传/完成流程中保持可读。
+- 语义校验改为非阻断 warnings：`completionReady` 与完成回调不再因 `semantic_validation_status != PASSED`、R1–R5 证据不足、`NOT_APPLICABLE` 缺证据、`UNRESOLVED` 未确认、决策审计覆盖率不足等语义/治理问题拒绝完成。这些问题继续保存在 `validation_report.json`、决策审计与 `modeling_state.json`，通过 `completionWarnings`/`completionHint` 提示，用户确认后仍发送 `SUCCESS`，本地记录 `completedWithWarnings`（不伪造 PASSED、不删除报告）。
+- completionReady 单一权威：新增 `completion_readiness(task, gate_error=None)` 返回 `{"ready", "blockers", "warnings"}`，`completion_ready_for_task` 为其布尔形式。确定性阻断（任务执行中/排队、活动 execution、FAILED/CANCELLED、expectedFiles 为空或上下文无效、文件缺失或上传记录不完整、本地内容与已上传对象不一致、对象不在可信 outputPrefix、parseElements 与 expectedFiles 契约不一致）控制按钮与完成回调；语义问题只进入 warnings。`Task.summary()` 默认调用该函数并附带 `completionWarnings`，`/api/minio/upload` 在跑完完整完成门禁后用同一结果同时写入外层 `completionReady` 与 `task.summary(completion_ready=...)`，二者永不矛盾。前端合并 `result.task` 时以服务端外层最终值为准，外层 `false` 不会被内层 `true` 覆盖；点击完成时若存在 warnings 先显示非阻断确认（确认后直接完成，不要求修复或重新上传）。
+- 上传提示更新：全部 `expectedFiles` 上传成功且哈希一致时提示“结果已上传，可以点击‘完成’确认任务。”；存在语义校验提示时提示“结果已上传，可以点击‘完成’；当前仍有建模校验提示，可在校验报告中查看。”；不再出现“修复后确认无误再点击‘完成’”。
+- MinIO 逐文件结果：每个 `results` 项含 `name/ok/stage/code/error`，成功项 `stage=STORAGE`；格式失败 `stage=STRUCTURAL_VALIDATION`（表头 `UPLOAD_ARTIFACT_HEADER_INVALID`、行 `UPLOAD_ARTIFACT_ROW_INVALID`、白名单外 `UPLOAD_ARTIFACT_NOT_ALLOWED`），文件缺失/读取失败 `UPLOAD_CONTEXT_UNAVAILABLE`，对象存储异常 `UPLOAD_STORAGE_FAILED`；部分文件失败时其他合法文件继续上传，全部失败才返回顶层 422，不再把格式校验失败描述成 MinIO 网络失败。全部文件通过结构校验但对象存储全部失败时返回顶层 502 且 `code=UPLOAD_STORAGE_FAILED`、`ok=false`，同时保留逐文件 `results`。
+- 前端：`uploadToMinio` 无论是否有顶层 `error` 都展示 `results` 逐文件原因；新增“上传结果明细”Modal（`stage`/`code` 标签 + 完整错误 `pre`）用于长错误；新上传前清理旧明细，全部成功时关闭 Modal，列表 key 使用 name+index；明确区分上传前格式校验失败、任务状态冲突、execution-context 失败、对象存储失败与上传成功但存在语义提示。
+- 文档：`API/backend-agent-interaction-api.md` 与 `API/本体MAL层API.md` 明确各正式结果文件可独立上传、上传阶段只做结构校验、中文名称只需含中文字符、关系分类英文别名规范化为中文、完成门禁负责上传完整性与哈希一致性、语义校验作为非阻断 warnings、`completionReady` 新定义与逐文件 `stage/code` 契约。
 
 主要文件：
-- `open-claude/open_claude/modeling_csv_contract.py`：`HEADER_ALIASES`、表头规范化、`ValidationPhase`、上传阶段 LE 文件内规则。
-- `open-claude/oc_codex_server.py`：`validate_modeling_csv/validate_integration_csv/validate_modeling_upload_artifact(_detailed)`、上传错误码常量、`/api/minio/upload` 逐文件 `stage/code` 与规范化 blob 上传、`_cached_task_artifacts_complete` 改用 UPLOAD 阶段、`completion_ready_for_task` 统一完成可用性、完成门禁双哈希校验、存储全失败 502。
-- `frontend/src/main.jsx` 与 `frontend/src/styles.css`：逐文件错误展示与上传结果明细 Modal。
-- 新增/更新 `tests/test_upload_gate_separation.py`（63 项：表头规范化、多行逐行校验、LE 上传规则、双哈希完成校验、completionReady 一致性、用户两个实际场景、MinIO API 行为、前端契约）；`tests/test_ontology_knowledge.py` 假任务 `summary()` 兼容新签名。
+- `open-claude/open_claude/modeling_csv_contract.py`：`HEADER_ALIASES`、`RELATION_CATEGORY_ALIASES`、`enum_aliases`、`CSV_NORMALIZATION_VERSION`、`normalize_enum_value`、表头/受控值规范化、`ValidationPhase`、中文名称与枚举逐行规则、上传阶段 LE 文件内规则。
+- `open-claude/oc_codex_server.py`：`validate_modeling_csv/validate_integration_csv/validate_modeling_upload_artifact(_detailed)`、上传错误码常量、`/api/minio/upload` 逐文件 `stage/code` 与规范化 blob 上传、`completion_readiness` 统一完成可用性（ready/blockers/warnings）、`build_completed_callback_payload` 语义非阻断与双哈希完成校验、`Task.summary` 增加 `completionWarnings`、存储全失败 502、`modeling_upload_dependency_errors` 不再依赖语义标记。
+- `frontend/src/main.jsx` 与 `frontend/src/styles.css`：上传提示更新、逐文件错误展示与上传结果明细 Modal、完成前非阻断确认（`Modal.confirm`）。
+- 新增/更新 `tests/test_upload_gate_separation.py`（88 项：表头规范化、多行逐行校验、LE 上传规则、双哈希完成校验、中英文混合名称、英文关系分类规范化、完成策略与语义非阻断、completionReady 一致性、用户实际文件组合、空上下文不误删校验报告、MinIO API 行为、前端契约）；`tests/test_modeling_csv_contract.py` 中文名称规则更新；`tests/test_ontology_knowledge.py` 假任务 `summary()` 兼容新签名。
 
 验证结果：
-- 全量 `pytest tests`：639 passed / 13 skipped / 371 subtests；`py_compile` 改动 Python 文件通过；Node 测试 47/47；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。
-- 发布：改动以 commit `0776364` 提交并推送 `20260727`，服务器快进到同一提交；发布前 47313/47314 均无活动或排队任务。47313 经 `scripts/deploy_server.sh` 重启为 pid `2639630`，47314 重启为 pid `2639894`；两服务部署后健康检查均通过，任务、run、数据库与历史用户产物未修改。
+- 全量 `pytest tests`：663 passed / 13 skipped / 445 subtests；`py_compile` 改动 Python 文件通过；Node 测试 47/47；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。
+- 发布：本批改动仅完成本地修改与验证，未部署、未 SSH、未重启 47313/47314、未 commit/push；服务器任务、run、数据库与用户产物未修改。

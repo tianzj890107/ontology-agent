@@ -187,7 +187,7 @@ for _mid in _QWEN_MODEL_IDS:
     if not any(m["id"] == _mid for m in AVAILABLE_MODELS):
         AVAILABLE_MODELS.append({"id": _mid, "label": _mid, "provider": "qwen", "aliases": []})
 
-TEAM_DEFAULT_MODEL = "Qwen/Qwen3-80B-AWQ"
+TEAM_DEFAULT_MODEL = "direct-deepseek-v4-flash"
 TEAM_MODEL_IDS = list(dict.fromkeys(_env_csv("TEAM_MODELS") or [
     "mimo-v2.5",
     "qwen3.5-397b-a17b",

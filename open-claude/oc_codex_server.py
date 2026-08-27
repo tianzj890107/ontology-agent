@@ -91,11 +91,11 @@ from open_claude.modeling_reliability import (
     decision_audit_coverage,
     finalize_semantic_model,
     is_structural_blocker,
-    load_validation_report,
     semantic_validation_status,
 )
 from open_claude.modeling_csv_contract import (
     CONTRACTS,
+    CSV_NORMALIZATION_VERSION,
     HEADER_NORMALIZATION_VERSION,
     ValidationPhase,
     header_mismatch_messages,
@@ -1523,19 +1523,13 @@ def is_conversational_turn(text: object, *, explicit_start: bool = False) -> boo
 
 def modeling_upload_dependency_errors(task, context: Mapping[str, object] | None,
                                       paths: list[object]) -> list[str]:
-    """Read the persisted semantic-finalize marker; never recompute semantics."""
-    if not task or task_callback_kind(task) != "modeling":
-        return []
-    cwd = str(getattr(task, "cwd", "") or "").strip()
-    # Legacy callers that only ask for dependency planning have no mission
-    # workspace yet; the real upload handler always has task.cwd and performs
-    # the marker check there.
-    if not cwd:
-        return []
-    work_dir = _workspace_work_dir(cwd)
-    report = load_validation_report(work_dir)
-    if not isinstance(report, dict) or semantic_validation_status(work_dir) != "PASSED":
-        return ["SEMANTIC_VALIDATION_NOT_PASSED"]
+    """Return upload dependency errors for a modeling task.
+
+    Uploading is deliberately independent of the semantic-finalize marker:
+    a missing or not-PASSED ``validation_report.json`` never blocks upload of
+    structurally valid result files.  Semantic issues are non-blocking hints
+    for the completion step, not upload dependencies.
+    """
     return []
 
 
@@ -1839,53 +1833,74 @@ def reopen_completed_mission(task, authorization: str = "") -> tuple[bool, str |
     return True, None
 
 
-def completion_ready_for_task(task, gate_error: str | None = None) -> bool:
-    """Single authoritative computation of whether ``task`` may be completed.
+def completion_readiness(task, gate_error: str | None = None) -> dict:
+    """Single authoritative completion-readiness computation.
 
-    The upload response and ``Task.summary`` must never disagree, so both use
-    this function.  ``gate_error`` is the result of the full completion gate
+    Returns ``{"ready": bool, "blockers": [...], "warnings": [...]}``.
+    Blockers (missing/updated files, task-state conflicts, broken execution
+    context) disable the 完成 button and block the completion callback.
+    Warnings are semantic/evidence hints that never block completion: the user
+    may confirm completion while validation_report.json keeps the issues.
+    ``gate_error`` is the result of the full completion gate
     (``build_completed_callback_payload``) when one has just been evaluated;
-    any blocker forces ``False``.  Without a fresh gate result the function is
-    fail-closed and uses the persisted semantic-validation marker for
-    modeling tasks instead of re-running the expensive gate — the final
-    "完成" click always re-runs the full gate.
+    any blocker forces ``ready=False``.  Without a fresh gate result the
+    function is fail-closed on deterministic state; the final "完成" click
+    always re-runs the full gate.
     """
+    blockers: list[str] = []
+    warnings: list[str] = []
     if gate_error:
-        return False
+        return {"ready": False, "blockers": [gate_error], "warnings": []}
     if not task.task_code or not isinstance(task.mission_context, dict):
-        return False
+        return {"ready": False,
+                "blockers": ["当前任务没有可信的 execution-context，无法确认完成"],
+                "warnings": []}
     expected = normalize_expected_files(task.mission_context.get("expectedFiles"))
     kind = task_callback_kind(task)
     if kind == "integration":
         expected.add("ok.csv")
     if not expected:
-        return False
+        blockers.append("当前任务未声明可确认的输出文件")
     uploaded = (task.platform_uploaded_files
                 if isinstance(task.platform_uploaded_files, dict) else {})
     require_preview = kind == "modeling"
-    if not all(
-        name in uploaded
-        and uploaded[name].get("objectKey")
-        and uploaded[name].get("sha256")
-        and (not require_preview
-             or uploaded[name].get("previewUrl")
-             or uploaded[name].get("fileUrl"))
-        for name in expected
-    ):
-        return False
+    missing = sorted(
+        name for name in expected
+        if not (name in uploaded
+                and uploaded[name].get("objectKey")
+                and uploaded[name].get("sha256")
+                and (not require_preview
+                     or uploaded[name].get("previewUrl")
+                     or uploaded[name].get("fileUrl"))))
+    if missing:
+        blockers.append("缺少必需产物或上传记录不完整：" + ", ".join(missing))
     status = str(getattr(task, "status", "") or "").lower()
     if status in {"queued", "working"} or getattr(task, "active_execution_id", ""):
-        return False
+        blockers.append("任务仍在执行中，不能完成")
     platform_status = normalize_platform_status(getattr(task, "platform_status", ""))
     if platform_status in {"COMPLETED", "FAILED", "CANCELLED"}:
-        return False
+        blockers.append("任务当前处于完成/失败/取消状态，不能重复完成")
     run_result = getattr(task, "run_result", None)
     if isinstance(run_result, dict) and str(run_result.get("state") or "").upper() in {"BLOCKED", "FAILED"}:
-        return False
-    if kind == "modeling" and semantic_validation_status(
-            _workspace_work_dir(getattr(task, "cwd", ""))) != "PASSED":
-        return False
-    return True
+        blockers.append("任务最近一次运行结果为阻断/失败，不能完成")
+    if kind == "modeling":
+        semantic_status = semantic_validation_status(
+            _workspace_work_dir(getattr(task, "cwd", "")))
+        if semantic_status != "PASSED":
+            warnings.append(
+                f"建模语义校验状态为 {semantic_status or '未执行'}；"
+                "相关校验提示保留在 validation_report.json，不影响确认完成")
+    return {"ready": not blockers, "blockers": blockers, "warnings": warnings}
+
+
+def completion_ready_for_task(task, gate_error: str | None = None) -> bool:
+    """Boolean form of :func:`completion_readiness`.
+
+    The upload response and ``Task.summary`` must never disagree, so both use
+    this single authority.  Semantic/evidence hints are warnings and never
+    disable completion; only deterministic blockers do.
+    """
+    return completion_readiness(task, gate_error)["ready"]
 
 
 def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
@@ -1911,9 +1926,16 @@ def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
                                    if issue["code"] == "ARTIFACT_MISSING")
             return None, "请先上传全部结果文件后再确认完成：" + missing_message.removeprefix("缺少必需产物：")
         return None, "任务完成门禁失败：" + "；".join(issue["message"] for issue in orchestration_issues[:10])
-    if kind == "modeling" and semantic_validation_status(semantic_work_dir) != "PASSED":
-        set_task_run_result(task, "BLOCKED", errors=["SEMANTIC_VALIDATION_NOT_PASSED"])
-        return None, "该建模任务尚未通过建模语义校验，不能确认完成"
+    # Semantic/evidence issues are non-blocking warnings: the user may
+    # confirm completion while validation_report.json keeps the issues.
+    # Only deterministic blockers above (or below) can reject completion.
+    semantic_warnings: list[str] = []
+    if kind == "modeling":
+        semantic_status = semantic_validation_status(semantic_work_dir)
+        if semantic_status != "PASSED":
+            semantic_warnings.append(
+                f"建模语义校验状态为 {semantic_status or '未执行'}；"
+                "相关校验提示保留在 validation_report.json，不影响确认完成")
     expected = normalize_expected_files(context.get("expectedFiles"))
     parse_elements = normalize_parse_elements(context.get("parseElements"))
     if kind == "integration":
@@ -1956,7 +1978,7 @@ def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
             # the exact same contract version and compare against the uploaded
             # hash; a data edit, an unknown header or a contract-version
             # change must fail closed and require a fresh upload.
-            if str(item.get("normalizationVersion") or "") != HEADER_NORMALIZATION_VERSION:
+            if str(item.get("normalizationVersion") or "") != CSV_NORMALIZATION_VERSION:
                 changed.append(name)
                 continue
             normalized_blob, _notes, _changed = normalize_csv_blob(name, local_blob)
@@ -1990,6 +2012,8 @@ def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
         "errorCode": None,
         "errorMessage": None,
         "files": files if kind == "modeling" else None,
+        "warnings": semantic_warnings,
+        "completedWithWarnings": bool(semantic_warnings),
     }, None
 
 
@@ -3978,6 +4002,14 @@ class Task:
             # self.conv.model.  ensure_conversation() is re-entrant safe.
             self.ensure_conversation()
         context = normalize_modeling_context(context)
+        if not context:
+            # An empty deferred-context placeholder (e.g. a task created
+            # without mission_context) must never overwrite a real mission
+            # context or touch the intermediate state: writing a
+            # fingerprint-less modeling_state here would archive the current
+            # state and delete validation_report.json as soon as the first
+            # real execution-context arrives with a different fingerprint.
+            return
         context_kind = normalize_task_type(context.get("taskType") or self.task_type or "")
         if context_kind == "modeling" or (not context_kind and infer_source_mode(context)):
             self.modeling_plan = build_modeling_plan(context, self.repository_id, self.task_code)
@@ -4183,9 +4215,20 @@ class Task:
         ev.set()
         return True
 
+    def effective_model(self) -> str:
+        """Return the task's live model without materializing a conversation."""
+        if self.conv is not None and getattr(self.conv, "model", None):
+            return str(self.conv.model)
+        return str(self.model_override or user_model(self.user_id))
+
     def summary(self, completion_ready: bool | None = None) -> dict:
+        # completionReadiness is the single authority for both the button and
+        # the non-blocking warnings; callers may override completionReady with
+        # a freshly evaluated gate result, but warnings always come from the
+        # same computation so UI and API cannot drift.
+        readiness = completion_readiness(self)
         if completion_ready is None:
-            completion_ready = completion_ready_for_task(self)
+            completion_ready = readiness["ready"]
         return {"id": self.id, "project": self.project, "title": self.title,
                 "status": self.status, "created": self.created, "updated": self.updated,
                 "repositoryId": self.repository_id, "taskCode": self.task_code,
@@ -4196,7 +4239,8 @@ class Task:
                 "platformOutputPrefix": self.platform_output_prefix,
                 "uploadedResultCount": len(self.platform_uploaded_files),
                 "completionReady": completion_ready,
-                "runResult": self.run_result,
+                "completionWarnings": readiness["warnings"],
+                "runResult": self.run_result, "model": self.effective_model(),
                 "modelingPlan": self.modeling_plan if self.modeling_plan else None,
                 "hasConversation": self.has_conversation()}
 
@@ -5943,9 +5987,11 @@ class Handler(BaseHTTPRequestHandler):
                 # window response.
                 start, end = _parse_event_window(event_query, total)
                 events = _read_task_event_window(task, start, end)
-                self._send_json(_event_window_response(
+                response = _event_window_response(
                     events, start, end, total, scope_id=task.id,
-                    scope_key="taskId"))
+                    scope_key="taskId")
+                response["model"] = task.effective_model()
+                self._send_json(response)
                 return
             m = re.match(r"^/api/tasks/([0-9a-f]+)$", path)
             if m:
@@ -6336,10 +6382,13 @@ class Handler(BaseHTTPRequestHandler):
                 # R1-R5, evidence, audit assignment and formal-output/decision
                 # consistency stay in the finalize/completion gate.  The
                 # dedicated upload validator normalizes the header (registered
-                # legacy aliases -> canonical names), so the blob stored in
-                # MinIO uses the formal standard header and its SHA-256
-                # corresponds to that exact normalized content.
-                upload_blob, upload_code, csv_errors =                     validate_modeling_upload_artifact_detailed(name, blob)
+                # legacy aliases -> canonical names) and controlled field
+                # values (registered English relation categories -> canonical
+                # Chinese), so the blob stored in MinIO uses the formal
+                # standard content and its SHA-256 corresponds to that exact
+                # normalized blob.
+                upload_blob, upload_code, csv_errors = \
+                    validate_modeling_upload_artifact_detailed(name, blob)
                 if csv_errors:
                     results.append({
                         "name": name, "ok": False,
@@ -6350,7 +6399,7 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 normalized = upload_blob != blob
                 if normalized:
-                    normalization_version = HEADER_NORMALIZATION_VERSION
+                    normalization_version = CSV_NORMALIZATION_VERSION
             prepared.append((name, upload_blob, source_sha256,
                              normalized, normalization_version))
 
@@ -6410,16 +6459,15 @@ class Handler(BaseHTTPRequestHandler):
                 task.refresh_modeling_artifacts()
                 persist_tasks()
                 payload, error = build_completed_callback_payload(task)
-                # An uploaded artifact is still visible to the user even when
-                # semantic validation has not passed.  Keep the completion
-                # hint in both branches; completionReady remains false and
-                # the platform callback is still fail-closed.
-                resp["completionHint"] = (
-                    "结果已上传，但当前任务仍有校验问题；修复后确认无误再点击“完成”。"
-                    if error else
-                    "结果已上传，任务仍保持运行中；确认无误后请点击“完成”回写平台。"
-                )
+                # Semantic/evidence issues are non-blocking hints: the user may
+                # confirm completion as soon as every required result file is
+                # uploaded and its content hash still matches.  Only
+                # deterministic blockers (missing files, changed content,
+                # task-state conflicts, broken context) disable completion.
+                readiness = completion_readiness(task, gate_error=error)
                 if error:
+                    resp["completionHint"] = (
+                        "结果已上传，但当前任务尚未满足完成条件：" + error)
                     resp["callback"] = {"ok": False, "skipped": True, "error": error}
                     resp["completionCode"] = UPLOAD_COMPLETION_GATE_PENDING
                 else:
@@ -6427,9 +6475,13 @@ class Handler(BaseHTTPRequestHandler):
                         "ok": False, "skipped": True,
                         "error": "等待用户点击“完成”确认任务",
                     }
-                completion_ready = completion_ready_for_task(task, gate_error=error)
-                resp["completionReady"] = completion_ready
-                resp["task"] = task.summary(completion_ready=completion_ready)
+                    resp["completionHint"] = (
+                        "结果已上传，可以点击“完成”；当前仍有建模校验提示，可在校验报告中查看。"
+                        if readiness["warnings"] else
+                        "结果已上传，可以点击“完成”确认任务。")
+                resp["completionWarnings"] = readiness["warnings"]
+                resp["completionReady"] = readiness["ready"]
+                resp["task"] = task.summary(completion_ready=readiness["ready"])
             elif prepared:
                 # Every file passed structural validation but the storage
                 # layer rejected them all: keep per-file results and return an
@@ -6494,8 +6546,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 task.platform_status = "COMPLETED"
                 task.platform_last_error = ""
+                # Semantic/evidence issues were non-blocking; keep them in the
+                # local run summary as warnings (never sent to the platform).
                 set_task_run_result(task, "COMPLETED",
+                                    warnings=list(payload.get("warnings") or []),
                                     generated_artifacts=[item.get("filename") for item in payload.get("files") or []])
+                task.completed_with_warnings = bool(payload.get("warnings"))
                 task.platform_updated = time.time()
                 persist_tasks()
                 self._send_json({"ok": True, "task": task.summary(), "callback": result})

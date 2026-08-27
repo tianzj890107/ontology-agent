@@ -1417,24 +1417,30 @@ function AssistantText({ text }) {
 }
 
 function EventFeed({ events, onApprove, files, onFile, busy = false, scope = "events" }) {
-  const lastEvent = events[events.length - 1];
+  // Keep the synchronization journal lossless (every seq remains available
+  // for cursor/dedupe), but collapse adjacent display deltas after all SSE,
+  // polling and history pages have been merged. Normalizing individual
+  // response batches is insufficient because one reasoning block commonly
+  // crosses many two-second polling windows.
+  const displayEvents = normalizeEvents({ events });
+  const lastEvent = displayEvents[displayEvents.length - 1];
   const waitingForNextEvent = busy && !["done", "error", "approval_request"].includes(lastEvent?.type);
-  const approvalResults = events.reduce((result, event) => {
+  const approvalResults = displayEvents.reduce((result, event) => {
     if (event.type === "approval_result" && event.id) result[event.id] = event;
     return result;
   }, {});
   return (
     <div className="feed-list">
-      {events.map((event, index) => {
+      {displayEvents.map((event, index) => {
         // React keys use the same event identity as the merge (task/run + seq
         // or clientMessageId); array indexes are only the legacy fallback.
         const key = eventKey(event, scope, index);
         if (event.type === "user") return <div className="user-message" key={key}>{event.text}</div>;
         if (["text", "assistant"].includes(event.type)) return <div className="assistant-message" key={key}><AssistantText text={event.text} /></div>;
         if (event.type === "done") return <div className="done-note" key={key}>{event.status === "error" ? "本轮执行结束 · 未完成（可继续执行）" : `本轮执行结束 · ${event.status || "完成"}`}</div>;
-        const loading = busy && index === events.length - 1 && event.type === "thinking";
-        const executionFinished = event.type === "approval_request" && events.slice(index + 1).some((candidate) => candidate.type === "done");
-        return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} completed={executionFinished} durationMs={eventDuration(events, index)} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={key} />;
+        const loading = busy && index === displayEvents.length - 1 && event.type === "thinking";
+        const executionFinished = event.type === "approval_request" && displayEvents.slice(index + 1).some((candidate) => candidate.type === "done");
+        return <ThoughtEvent event={event} approvalResult={event.type === "approval_request" ? approvalResults[event.id] : null} completed={executionFinished} durationMs={eventDuration(displayEvents, index)} onApprove={onApprove} files={files} onFile={onFile} loading={loading} key={key} />;
       })}
       {waitingForNextEvent && lastEvent?.type !== "thinking" && (
         <ThoughtEvent event={{ type: "thinking", text: "" }} files={files} onFile={onFile} loading />
@@ -2100,6 +2106,22 @@ function App() {
         : "";
       const result = await api(`/api/tasks/${taskId}/events?since=${cursor}${identity}`);
       if (activeTaskIdRef.current !== taskId || result.error) return;
+      let liveModel = result.model;
+      // Older 47313 processes do not include the task model in event-window
+      // responses. Fall back to the existing meta endpoint so a hot-published
+      // frontend still reflects an API-side model switch without waiting for
+      // the backend process to restart.
+      if (!liveModel) {
+        const liveMeta = await api("/api/meta");
+        if (!liveMeta.error) liveModel = liveMeta.model;
+      }
+      if (liveModel) {
+        setMeta((previous) => ({
+          ...previous,
+          model: liveModel,
+          provider: (previous.models || []).find((item) => item.id === liveModel)?.provider || previous.provider,
+        }));
+      }
       const delta = normalizeEvents(result);
       if (delta.length) {
         setEvents((current) => activeTaskIdRef.current === taskId
@@ -2125,6 +2147,13 @@ function App() {
     const result = await api(`/api/tasks/${task.id}${detailQuery}`);
     if (result.error) { messageApi.error(`打开历史会话失败：${result.error}`); return; }
     const current = { ...result };
+    if (current.model) {
+      setMeta((previous) => ({
+        ...previous,
+        model: current.model,
+        provider: (previous.models || []).find((item) => item.id === current.model)?.provider || previous.provider,
+      }));
+    }
     if (taskMission && !MISSION) {
       const missionResult = await loadMission({ ...taskMission, taskType: current.taskType || task.taskType || "" });
       if (missionResult?.platformStatus) current.platformStatus = missionResult.platformStatus;
@@ -2496,7 +2525,9 @@ function App() {
         setTasks((previous) => previous.map((task) => task.id === mergedTask.id ? { ...task, ...mergedTask } : task));
       }
       if (result.completionReady === false) {
-        messageApi.warning(result.completionHint || "结果已上传，但最终语义校验尚未通过；修复后请再点击“完成”。");
+        // 仅系统性/文件完整性阻断才禁用完成；语义校验提示属于非阻断 warnings，
+        // 由服务端 completionHint 与 completionWarnings 展示，不再要求“修复后”。
+        messageApi.warning(result.completionHint || "结果已上传，但当前任务尚未满足完成条件，请检查上传明细。");
       } else if (result.completionHint) messageApi.info(result.completionHint);
       else if (result.callback?.skipped) messageApi.info(`尚未完成：${result.callback.error}`);
       else if (result.callback) messageApi.warning(`结果已上传，但完成回写失败：${result.callback.error || "未知错误"}`);
@@ -2506,9 +2537,7 @@ function App() {
     }
   };
 
-  const changePlatformStatus = async () => {
-    if (!currentMission || !active || platformActionLoading) return;
-    const completed = active.platformStatus === "COMPLETED";
+  const performPlatformAction = async (completed) => {
     setPlatformActionLoading(true);
     try {
       const result = await api(`/api/tasks/${active.id}/platform-status`, {
@@ -2524,6 +2553,23 @@ function App() {
     } finally {
       setPlatformActionLoading(false);
     }
+  };
+
+  const changePlatformStatus = async () => {
+    if (!currentMission || !active || platformActionLoading) return;
+    const completed = active.platformStatus === "COMPLETED";
+    if (!completed && (active.completionWarnings || []).length) {
+      // 非阻断确认：语义校验提示不要求修复，用户确认后直接完成。
+      Modal.confirm({
+        title: "确认完成",
+        content: "当前建模结果仍有校验提示（详见校验报告），是否继续完成？完成不会清除校验报告中的问题。",
+        okText: "继续完成",
+        cancelText: "取消",
+        onOk: () => performPlatformAction(false),
+      });
+      return;
+    }
+    await performPlatformAction(completed);
   };
 
   const toggleAutoApprove = () => {

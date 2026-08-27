@@ -173,12 +173,30 @@ class NameAndFormatContractTests(unittest.TestCase):
         codes = {item.code for item in validate_formal_rows("business_objects.csv", header, [row])}
         self.assertIn("V0001_FORMAL_BUSINESS_OBJECT_INCOMPLETE", codes)
 
-    def test_attribute_name_with_latin_letters_fails(self):
+    def test_attribute_name_pure_english_fails(self):
+        # A Chinese-name column accepts English abbreviations/digits as long
+        # as it contains at least one CJK character; pure English must go to
+        # the English-name column instead.
         header, valid_row = VALID_ROWS["business_attributes.csv"]
         row = list(valid_row)
-        row[header.index("业务属性名称")] = "订单Amount"
-        self.assertTrue(upload_errors("business_attributes.csv", header, [row]))
+        row[header.index("业务属性名称")] = "orderAmount"
+        errors = upload_errors("business_attributes.csv", header, [row])
+        self.assertTrue(errors)
+        self.assertTrue(any("未包含中文字符" in message for message in errors))
         self.assertTrue(validate_formal_rows("business_attributes.csv", header, [row]))
+
+    def test_attribute_name_with_chinese_and_abbreviation_passes(self):
+        header, valid_row = VALID_ROWS["business_attributes.csv"]
+        for name in ("源头单据子行ID", "源头单据ID", "源头单据行ID", "采购需求头ID",
+                     "采购需求行ID", "采购需求关系ID", "来源单据子行ID", "来源单据ID",
+                     "来源单据行ID", "税行ID", "交易事务行ID", "交易事务ID",
+                     "来源明细结果ID", "抵销税行关联的税行ID", "核销事务ID",
+                     "核销事务行ID", "支付单头ID", "支付单行ID", "员工ID", "采购员ID"):
+            row = list(valid_row)
+            row[header.index("业务属性名称")] = name
+            with self.subTest(name=name):
+                self.assertEqual(upload_errors("business_attributes.csv", header, [row]), [])
+                self.assertEqual(validate_formal_rows("business_attributes.csv", header, [row]), [])
 
     def test_english_name_in_english_column_passes(self):
         header, valid_row = VALID_ROWS["business_attributes.csv"]

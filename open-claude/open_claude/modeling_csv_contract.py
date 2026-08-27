@@ -26,6 +26,20 @@ from typing import Any, Iterable, Mapping, Sequence
 
 # ---------------------------------------------------------------- dictionaries
 RELATION_CATEGORIES = ("关联", "依赖", "继承", "组合", "聚合")
+# Registered English aliases for 关系分类.  Actual modeling output may carry
+# English relation types; they map deterministically (case-insensitive, after
+# trimming) to the canonical Chinese formal value.  Unknown English values are
+# never accepted.
+RELATION_CATEGORY_ALIASES = {
+    "COMPOSITION": "组合",
+    "AGGREGATION": "聚合",
+    "EXTENSION": "继承",
+    "INHERITANCE": "继承",
+    "REFERENCE": "关联",
+    "ASSOCIATION": "关联",
+    "DEPENDENCY": "依赖",
+    "TRANSFORMATION": "依赖",
+}
 CARDINALITIES = ("1:1", "1:N", "N:1", "M:N")
 DATA_TYPES = ("字符串", "整数", "小数", "日期", "布尔", "文本")
 INDICATOR_TYPES = ("原子指标", "复合指标")
@@ -89,11 +103,15 @@ HEADER_ALIASES: dict[str, dict[str, str]] = {
     },
 }
 
-# Version of the header-normalization contract.  Uploaded records carry the
-# version used to produce the normalized object; the completion gate only
-# re-normalizes with the exact same version and fails closed on a mismatch
-# (e.g. a future alias/rule change requires a fresh upload).
-HEADER_NORMALIZATION_VERSION = "2026-08-27.1"
+# Version of the CSV-normalization contract (header aliases + controlled
+# field-value aliases such as English relation categories).  Uploaded records
+# carry the version used to produce the normalized object; the completion gate
+# only re-normalizes with the exact same version and fails closed on a mismatch
+# (e.g. a future alias/rule change requires a fresh upload).  ``CSV_*`` is the
+# general name; ``HEADER_NORMALIZATION_VERSION`` stays as a compatibility
+# alias with the same value so persisted upload records remain readable.
+CSV_NORMALIZATION_VERSION = "2026-08-27.1"
+HEADER_NORMALIZATION_VERSION = CSV_NORMALIZATION_VERSION
 
 # Zero-width and other invisible header characters that must never reach the
 # contract comparison.  BOM is handled separately by utf-8-sig decoding.
@@ -134,18 +152,77 @@ def normalize_csv_header(filename: str, header: Sequence[str]) -> tuple[list[str
     return normalized, notes, changed
 
 
-def normalize_csv_blob(filename: str, blob: bytes) -> tuple[bytes, list[str], bool]:
-    """Deterministically normalize one formal CSV blob's header.
+def normalize_enum_value(contract: CSVContract | None, field: str, value: Any) -> str:
+    """Return the canonical formal value for one enum cell.
 
-    Returns ``(normalized_blob, findings, changed)``.  BOM is dropped,
-    invisible characters are removed and registered legacy aliases are mapped
-    to canonical field names.  Data field values and row order are preserved,
-    but the CSV serialization format may change (``csv.writer`` re-quotes and
-    normalizes line endings), so hashes must always refer to the exact blob
-    that is uploaded rather than the original file.
+    Trims leading/trailing whitespace first; canonical Chinese values pass
+    through unchanged; registered English aliases are matched case-insensitively
+    and mapped to the formal Chinese value.  Unknown values are returned
+    unchanged so the enum check can still reject them.
+    """
+    cleaned = str(value or "").strip()
+    if contract is None:
+        return cleaned
+    aliases = (contract.enum_aliases or {}).get(field, {})
+    if cleaned in aliases:
+        return aliases[cleaned]
+    upper = cleaned.upper()
+    if upper in aliases:
+        return aliases[upper]
+    return cleaned
+
+
+def _normalize_enum_values(contract: CSVContract, rows: list[list[str]]) -> tuple[list[str], bool]:
+    """In-place normalize controlled enum aliases (e.g. relation categories).
+
+    Only fields with registered aliases are touched; every other cell is left
+    exactly as parsed.  Returns ``(notes, changed)``.
+    """
+    aliases = contract.enum_aliases or {}
+    if not aliases:
+        return [], False
+    header = rows[0]
+    column_index = {name: index for index, name in enumerate(header)}
+    notes: list[str] = []
+    changed = False
+    for field, mapping in aliases.items():
+        column = column_index.get(field)
+        if column is None:
+            continue
+        for line_no, row in enumerate(rows[1:], 2):
+            if column >= len(row):
+                continue
+            raw = row[column]
+            cleaned = normalize_enum_value(contract, field, raw)
+            if cleaned == raw:
+                continue
+            trimmed = str(raw).strip()
+            if trimmed.upper() in mapping:
+                notes.append(f"第 {line_no} 行 {field}“{trimmed}”按受控别名规范化为“{cleaned}”")
+            else:
+                notes.append(f"第 {line_no} 行 {field}“{trimmed}”已清理首尾空白并规范化为“{cleaned}”")
+            row[column] = cleaned
+            changed = True
+    return notes, changed
+
+
+def normalize_csv_blob(filename: str, blob: bytes) -> tuple[bytes, list[str], bool]:
+    """Deterministically normalize one formal CSV blob.
+
+    Normalization covers (1) the header: BOM dropped, invisible characters
+    removed, registered legacy aliases mapped to canonical field names, and
+    (2) controlled field values: registered enum aliases (e.g. English
+    relation categories) mapped to the canonical Chinese formal value.
+
+    Returns ``(normalized_blob, findings, changed)``.  Data field values and
+    row order are preserved semantically, but the CSV serialization format may
+    change (``csv.writer`` re-quotes and normalizes line endings), so hashes
+    must always refer to the exact blob that is uploaded rather than the
+    original file.
     """
     name = canonical_filename(filename)
-    if contract_for(name) is None:
+    contract = contract_for(name)
+    if contract is None:
         return bytes(blob), [], False
     try:
         text = bytes(blob).decode("utf-8-sig")
@@ -154,14 +231,15 @@ def normalize_csv_blob(filename: str, blob: bytes) -> tuple[bytes, list[str], bo
         return bytes(blob), [], False
     if not rows:
         return bytes(blob), [], False
-    normalized, notes, changed = normalize_csv_header(name, rows[0])
-    if not changed:
+    header, notes, header_changed = normalize_csv_header(name, rows[0])
+    rows[0] = header
+    value_notes, value_changed = _normalize_enum_values(contract, rows)
+    if not header_changed and not value_changed:
         return bytes(blob), [], False
-    rows[0] = normalized
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerows(rows)
-    return buffer.getvalue().encode("utf-8"), notes, True
+    return buffer.getvalue().encode("utf-8"), notes + value_notes, True
 
 
 def header_mismatch_messages(name: str, expected: Sequence[str],
@@ -211,6 +289,10 @@ class CSVContract:
     required: tuple[str, ...] = ()
     boolean: tuple[str, ...] = ()
     enum: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    # Registered alias values per enum field (e.g. English relation categories
+    # -> canonical Chinese values).  Applied before the enum check and during
+    # content normalization so the uploaded MinIO object uses the formal value.
+    enum_aliases: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     non_negative_int: tuple[str, ...] = ()
     code_pattern: Mapping[str, str] = field(default_factory=dict)
     unique: tuple[tuple[str, ...], ...] = ()
@@ -390,6 +472,7 @@ CONTRACTS: dict[str, CSVContract] = {
         required=("关系编码", "源逻辑实体编码", "源逻辑实体名称", "目标逻辑实体编码",
                   "目标逻辑实体名称", "关系分类", "关系中文名称", "关系基数", "关系描述"),
         enum={"关系分类": RELATION_CATEGORIES, "关系基数": CARDINALITIES},
+        enum_aliases={"关系分类": RELATION_CATEGORY_ALIASES},
         unique=(("关系编码",),),
         chinese_name=("源逻辑实体名称", "目标逻辑实体名称", "关系中文名称"),
         code_pattern={"关系编码": r"^[A-Za-z][A-Za-z0-9_]*$"},
@@ -647,11 +730,13 @@ def validate_row_contract(filename: str, header: Sequence[str], rows: Iterable[S
                 if field not in column_index:
                     continue
                 value = _nullable(row.get(field))
-                if value and value not in allowed:
-                    findings.append(ContractFinding(
-                        code=ENUM, severity=ERROR,
-                        message=f"第 {line_no} 行 {field}“{value}”不在契约字典 {list(allowed)} 中",
-                        field=field, row=line_no, artifact_id=value))
+                if value:
+                    candidate = normalize_enum_value(contract, field, value)
+                    if candidate not in allowed:
+                        findings.append(ContractFinding(
+                            code=ENUM, severity=ERROR,
+                            message=f"第 {line_no} 行 {field}“{value}”不在契约字典 {list(allowed)} 中",
+                            field=field, row=line_no, artifact_id=value))
             for field in contract.non_negative_int:
                 if field not in column_index:
                     continue
@@ -674,10 +759,15 @@ def validate_row_contract(filename: str, header: Sequence[str], rows: Iterable[S
                 if field not in column_index:
                     continue
                 value = _nullable(row.get(field))
-                if value and re.search(r"[A-Za-z]", value):
+                # A Chinese business name only needs at least one CJK
+                # character; English abbreviations (ID/PDF/API/URL/IP/ERP),
+                # digits and common punctuation are all allowed inside it.
+                # Pure English, pure digits or symbol-only values are rejected
+                # and must be filled into the corresponding English column.
+                if value and not re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", value):
                     findings.append(ContractFinding(
                         code=CHINESE_NAME, severity=ERROR,
-                        message=f"第 {line_no} 行 {field}“{value}”是中文名称，不能混入英文字母；英文内容应放入对应英文名称列",
+                        message=f"第 {line_no} 行 {field}“{value}”未包含中文字符；该字段为中文名称，纯英文内容应填写到对应英文名称字段",
                         field=field, row=line_no, artifact_id=value))
             for field in contract.english_identifier:
                 if field not in column_index:

@@ -854,7 +854,10 @@ class CompletionReadyConsistencyTests(_MinioHandlerHarness):
             self.assertIs(payload["completionReady"], True)
             self.assertIs(payload["task"]["completionReady"], True)
 
-    def test_upload_complete_semantic_failed_both_false(self):
+    def test_upload_complete_semantic_failed_both_true_with_warnings(self):
+        # Semantic/evidence issues are non-blocking warnings: as soon as every
+        # required result file is uploaded, completionReady is true both at
+        # the top level and inside task.summary(); no completionCode blocker.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_outputs(root, legacy_relations=False)
@@ -864,9 +867,11 @@ class CompletionReadyConsistencyTests(_MinioHandlerHarness):
             status, payload = responses[-1]
             self.assertEqual(status, 200)
             self.assertEqual(payload["uploaded"], 2)
-            self.assertIs(payload["completionReady"], False)
-            self.assertIs(payload["task"]["completionReady"], False)
-            self.assertEqual(payload.get("completionCode"), "UPLOAD_COMPLETION_GATE_PENDING")
+            self.assertIs(payload["completionReady"], True)
+            self.assertIs(payload["task"]["completionReady"], True)
+            self.assertNotIn("completionCode", payload)
+            self.assertTrue(payload.get("completionWarnings"))
+            self.assertIn("可以点击“完成”", payload.get("completionHint", ""))
 
     def test_missing_files_both_false(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -909,7 +914,9 @@ class CompletionReadyConsistencyTests(_MinioHandlerHarness):
             self.assertFalse(server.completion_ready_for_task(task))
             self.assertIs(task.summary()["completionReady"], False)
 
-    def test_page_refresh_keeps_complete_disabled(self):
+    def test_page_refresh_keeps_complete_enabled_with_semantic_warning(self):
+        # After a page refresh the summary must keep the button enabled: a
+        # missing/not-PASSED semantic marker is a warning, not a blocker.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._write_outputs(root, legacy_relations=False)
@@ -930,9 +937,11 @@ class CompletionReadyConsistencyTests(_MinioHandlerHarness):
                     "sha256": "b" * 64,
                 },
             }
-            self.assertIs(task.summary()["completionReady"], False)
+            self.assertIs(task.summary()["completionReady"], True)
+            self.assertTrue(task.summary()["completionWarnings"])
             self._ready_task(root)
             self.assertIs(task.summary()["completionReady"], True)
+            self.assertEqual(task.summary()["completionWarnings"], [])
 
 
 class UserReportedScenarioTests(_MinioHandlerHarness):
@@ -957,7 +966,10 @@ class UserReportedScenarioTests(_MinioHandlerHarness):
             "logical_entities.csv", to_csv(LOGICAL_ENTITIES_HEADER, rows), "")
         self.assertEqual(errors, [])
 
-    def test_same_task_completion_blocked_when_audit_missing(self):
+    def test_same_task_completion_allowed_when_audit_missing(self):
+        # The user's reported scenario: empty-BO logical entities with no audit
+        # state can be uploaded, and the same task can then be completed; the
+        # audit gap stays a non-blocking warning in validation_report.json.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "output"
@@ -974,11 +986,15 @@ class UserReportedScenarioTests(_MinioHandlerHarness):
             status, payload = responses[-1]
             self.assertEqual(status, 200)
             self.assertEqual(payload["uploaded"], 2)
-            self.assertIs(payload["completionReady"], False)
-            self.assertEqual(payload.get("completionCode"), "UPLOAD_COMPLETION_GATE_PENDING")
+            self.assertIs(payload["completionReady"], True)
+            self.assertIs(payload["task"]["completionReady"], True)
+            self.assertNotIn("completionCode", payload)
+            self.assertTrue(payload.get("completionWarnings"))
             payload2, error = server.build_completed_callback_payload(task)
-            self.assertIsNone(payload2)
-            self.assertIn("语义校验", error)
+            self.assertIsNone(error)
+            self.assertEqual(payload2["agentStatus"], "SUCCESS")
+            self.assertTrue(payload2.get("completedWithWarnings"))
+            self.assertTrue(payload2.get("warnings"))
 
 
 class FrontendUploadFeedbackContractTests(unittest.TestCase):
@@ -987,7 +1003,7 @@ class FrontendUploadFeedbackContractTests(unittest.TestCase):
     def test_uploadToMinio_renders_per_file_issues_before_top_level_error(self):
         source = Path(ROOT / "frontend/src/main.jsx").read_text(encoding="utf-8")
         start = source.index("const uploadToMinio = async () =>")
-        end = source.index("const changePlatformStatus")
+        end = source.index("const performPlatformAction = async (completed) => {")
         body = source[start:end]
         self.assertIn('const failed = (result.results || []).filter((item) => !item.ok)', body)
         self.assertIn('setUploadIssues(failed.map((item) => ({', body)
@@ -1010,7 +1026,431 @@ class FrontendUploadFeedbackContractTests(unittest.TestCase):
     def test_upload_distinguishes_format_from_storage_failure(self):
         source = Path(ROOT / "frontend/src/main.jsx").read_text(encoding="utf-8")
         self.assertIn('没有可上传的合法文件（${failed.length} 个文件校验失败，详见明细）', source)
-        self.assertIn('但最终语义校验尚未通过；修复后请再点击“完成”。', source)
+        # Semantic issues are non-blocking: no "修复后再点击完成" wording.
+        self.assertIn('但当前任务尚未满足完成条件，请检查上传明细。', source)
+        self.assertNotIn('修复后确认无误再点击“完成”。', source)
+        self.assertNotIn('修复后请再点击“完成”。', source)
+
+    def test_completion_confirm_uses_nonblocking_warnings(self):
+        source = Path(ROOT / "frontend/src/main.jsx").read_text(encoding="utf-8")
+        self.assertIn('Modal.confirm({', source)
+        self.assertIn('当前建模结果仍有校验提示（详见校验报告），是否继续完成？', source)
+        self.assertIn('performPlatformAction(completed)', source)
+
+
+
+
+class ChineseNameAndRelationCategoryTests(_MinioHandlerHarness):
+    """Chinese-name abbreviation tolerance and English relation categories."""
+
+    def _bo_row(self, name):
+        return ["BO0001", name, "purchase_order", "业务对象定义", "事务数据"]
+
+    def _relations(self, category):
+        row = relation_row()
+        row[5] = category
+        return to_csv(ENTITY_RELATIONS_HEADER, [row])
+
+    # ---------------- 中文名称 ----------------
+
+    def test_chinese_name_with_abbreviations_and_digits_passes(self):
+        names = ("源头单据子行ID", "源头单据ID", "源头单据行ID", "采购需求头ID",
+                 "采购需求行ID", "采购需求关系ID", "来源单据子行ID", "来源单据ID",
+                 "来源单据行ID", "税行ID", "交易事务行ID", "交易事务ID",
+                 "来源明细结果ID", "抵销税行关联的税行ID", "核销事务ID",
+                 "核销事务行ID", "支付单头ID", "支付单行ID", "员工ID", "采购员ID",
+                 "财报PDF文档", "财报PDF数据行", "客户ERP编码", "API调用记录",
+                 "URL地址", "IP地址", "B2B订单", "2D图纸", "3D模型", "纯中文名称")
+        for name in names:
+            with self.subTest(name=name):
+                self.assertEqual(server.validate_modeling_upload_artifact(
+                    "business_objects.csv",
+                    to_csv(BO_HEADER, [self._bo_row(name)]), ""), [])
+
+    def test_pure_english_chinese_name_fails_with_clear_message(self):
+        errors = server.validate_modeling_upload_artifact(
+            "business_objects.csv", to_csv(BO_HEADER, [self._bo_row("purchaseOrder")]), "")
+        self.assertTrue(errors)
+        self.assertTrue(any("未包含中文字符" in error for error in errors))
+        self.assertTrue(any("purchaseOrder" in error for error in errors))
+
+    def test_pure_digits_and_symbols_fail(self):
+        for name in ("12345", "!!!", "---"):
+            with self.subTest(name=name):
+                errors = server.validate_modeling_upload_artifact(
+                    "business_objects.csv", to_csv(BO_HEADER, [self._bo_row(name)]), "")
+                self.assertTrue(errors)
+                self.assertTrue(any("未包含中文字符" in error for error in errors))
+
+    def test_all_chinese_name_fields_share_one_rule(self):
+        # business_objects (业务对象名称), logical_entities (逻辑实体名称) and
+        # entity_relations (关系中文名称) all accept 中文+缩写 and reject pure English.
+        self.assertEqual(server.validate_modeling_upload_artifact(
+            "business_objects.csv", to_csv(BO_HEADER, [self._bo_row("采购订单PDF")]), ""), [])
+        le_header = LOGICAL_ENTITIES_HEADER
+        self.assertEqual(server.validate_modeling_upload_artifact(
+            "logical_entities.csv", to_csv(le_header, [
+                ["BO0001", "采购订单", "LE0001", "财报PDF数据行", "pdf_row",
+                 "定义", "Y", "事务数据"]]), ""), [])
+        rel_header = ENTITY_RELATIONS_HEADER
+        row = relation_row()
+        row[6] = "税行ID关联"
+        self.assertEqual(server.validate_modeling_upload_artifact(
+            "entity_relations.csv", to_csv(rel_header, [row]), ""), [])
+        le_pure = server.validate_modeling_upload_artifact(
+            "logical_entities.csv", to_csv(le_header, [
+                ["BO0001", "采购订单", "LE0001", "PDFRow", "pdf_row",
+                 "定义", "Y", "事务数据"]]), "")
+        self.assertTrue(le_pure)
+        rel_pure = server.validate_modeling_upload_artifact(
+            "entity_relations.csv", to_csv(rel_header, [relation_row()[:6] + ["belongsTo"] + relation_row()[7:]]), "")
+        self.assertTrue(rel_pure)
+
+    def test_first_row_mixed_name_passes_last_row_valid(self):
+        header = LOGICAL_ENTITIES_HEADER
+        rows = [
+            ["", "", "LE0001", "税行ID", "tax_line", "定义", "N", "事务数据"],
+            ["BO0001", "采购订单", "LE0002", "采购订单实体", "purchase_order_entity",
+             "定义", "Y", "事务数据"],
+        ]
+        self.assertEqual(server.validate_modeling_upload_artifact(
+            "logical_entities.csv", to_csv(header, rows), ""), [])
+
+    def test_middle_row_mixed_name_passes(self):
+        header = LOGICAL_ENTITIES_HEADER
+        rows = [
+            ["BO0001", "采购订单", "LE0001", "采购订单实体", "po_entity", "定义", "Y", "事务数据"],
+            ["", "", "LE0002", "财报PDF文档", "pdf_doc", "定义", "N", "事务数据"],
+            ["BO0001", "采购订单", "LE0003", "采购明细实体", "line_entity", "定义", "N", "事务数据"],
+        ]
+        self.assertEqual(server.validate_modeling_upload_artifact(
+            "logical_entities.csv", to_csv(header, rows), ""), [])
+
+    # ---------------- 关系分类 ----------------
+
+    def test_chinese_relation_categories_pass(self):
+        for category in ("关联", "依赖", "继承", "组合", "聚合"):
+            with self.subTest(category=category):
+                self.assertEqual(server.validate_modeling_upload_artifact(
+                    "entity_relations.csv", self._relations(category), ""), [])
+
+    def test_english_relation_categories_normalize_to_chinese(self):
+        cases = {
+            "COMPOSITION": "组合", "AGGREGATION": "聚合", "EXTENSION": "继承",
+            "INHERITANCE": "继承", "REFERENCE": "关联", "ASSOCIATION": "关联",
+            "DEPENDENCY": "依赖", "TRANSFORMATION": "依赖",
+        }
+        for alias, expected in cases.items():
+            with self.subTest(alias=alias):
+                self.assertEqual(server.validate_modeling_upload_artifact(
+                    "entity_relations.csv", self._relations(alias), ""), [])
+                normalized, notes, changed = normalize_csv_blob(
+                    "entity_relations.csv", self._relations(alias))
+                parsed = list(csv.reader(io.StringIO(normalized.decode("utf-8"), newline="")))
+                self.assertTrue(changed)
+                self.assertEqual(parsed[1][5], expected)
+                self.assertTrue(any("按受控别名规范化为" in note for note in notes))
+
+    def test_case_and_whitespace_variants_normalize(self):
+        for alias in ("composition", "Composition", " COMPOSITION ", "composition "):
+            with self.subTest(alias=alias):
+                normalized, _notes, changed = normalize_csv_blob(
+                    "entity_relations.csv", self._relations(alias))
+                parsed = list(csv.reader(io.StringIO(normalized.decode("utf-8"), newline="")))
+                self.assertTrue(changed)
+                self.assertEqual(parsed[1][5], "组合")
+
+    def test_unknown_english_relation_category_fails(self):
+        for category in ("UNKNOWN", "RELATION", "LINK", "ABC"):
+            with self.subTest(category=category):
+                errors = server.validate_modeling_upload_artifact(
+                    "entity_relations.csv", self._relations(category), "")
+                self.assertTrue(errors)
+                self.assertTrue(any("不在契约字典" in error for error in errors))
+
+    def test_minio_receives_chinese_category_and_local_keeps_english(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir(exist_ok=True)
+            local_blob = self._relations("REFERENCE")
+            (output / "entity_relations.csv").write_bytes(local_blob)
+            (output / "logical_entities.csv").write_bytes(
+                to_csv(LOGICAL_ENTITIES_HEADER, [logical_entity_row()]))
+            task = self._task(root)
+            responses, put_calls = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            status, payload = responses[-1]
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["uploaded"], 2)
+            relation_key, relation_blob = put_calls[0]
+            parsed = list(csv.reader(io.StringIO(relation_blob.decode("utf-8"), newline="")))
+            self.assertEqual(parsed[1][5], "关联")
+            # The local original file keeps the English category untouched.
+            self.assertEqual((output / "entity_relations.csv").read_bytes(), local_blob)
+            result = next(item for item in payload["results"]
+                          if item["name"] == "entity_relations.csv")
+            # Response sha256 must equal the actually uploaded blob's hash and
+            # differ from the original local blob whenever normalization ran.
+            self.assertEqual(result["sha256"], hashlib.sha256(relation_blob).hexdigest())
+            self.assertNotEqual(result["sha256"], hashlib.sha256(local_blob).hexdigest())
+            self.assertTrue(result.get("normalized"))
+            self.assertEqual(result.get("normalizationVersion"),
+                             HEADER_NORMALIZATION_VERSION)
+
+    def test_completion_hash_replays_value_normalization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=True)
+            relations_path = Path(root) / "output" / "entity_relations.csv"
+            parsed = list(csv.reader(io.StringIO(
+                relations_path.read_text(encoding="utf-8"), newline="")))
+            parsed[1][5] = "COMPOSITION"
+            buffer = io.StringIO()
+            writer = csv.writer(buffer, lineterminator="\n")
+            writer.writerows(parsed)
+            relations_path.write_text(buffer.getvalue(), encoding="utf-8")
+            task = self._task(root)
+            responses, _ = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            status, payload = responses[-1]
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["uploaded"], 2)
+            self.assertIs(payload["completionReady"], True)
+            payload2, error = server.build_completed_callback_payload(task)
+            self.assertIsNone(error)
+            self.assertEqual(payload2["agentStatus"], "SUCCESS")
+
+    def test_modify_relation_category_after_upload_fails_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=True)
+            task = self._task(root)
+            responses, _ = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            status, payload = responses[-1]
+            self.assertEqual(status, 200)
+            self.assertIs(payload["completionReady"], True)
+            relations_path = Path(root) / "output" / "entity_relations.csv"
+            parsed = list(csv.reader(io.StringIO(
+                relations_path.read_text(encoding="utf-8"), newline="")))
+            parsed[1][5] = "聚合"
+            buffer = io.StringIO()
+            writer = csv.writer(buffer, lineterminator="\n")
+            writer.writerows(parsed)
+            relations_path.write_text(buffer.getvalue(), encoding="utf-8")
+            payload2, error = server.build_completed_callback_payload(task)
+            self.assertIsNone(payload2)
+            self.assertIn("已变更", error)
+
+
+class CompletionPolicyTests(_MinioHandlerHarness):
+    """Semantic issues are non-blocking warnings; deterministic blockers remain."""
+
+    def _semantic_report(self, root, status):
+        work = Path(root) / "work"
+        work.mkdir(exist_ok=True)
+        (work / "validation_report.json").write_text(json.dumps({
+            "semantic_validation_status": status,
+            "errors": [{"code": "R1_EVIDENCE_MISSING"}] if status == "FAILED" else [],
+        }), encoding="utf-8")
+
+    def test_all_uploaded_semantic_failed_can_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=False)
+            # _ready_task mirrors the persisted state (matching input
+            # fingerprint + PASSED marker); overwrite the marker with FAILED.
+            task = self._ready_task(root)
+            self._semantic_report(root, "FAILED")
+            responses, _ = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            status, payload = responses[-1]
+            self.assertEqual(status, 200)
+            self.assertIs(payload["completionReady"], True)
+            self.assertIs(payload["task"]["completionReady"], True)
+            self.assertTrue(payload.get("completionWarnings"))
+            self.assertIn("可以点击“完成”", payload.get("completionHint", ""))
+            # The user's confirmed completion is allowed and sends SUCCESS.
+            payload2, error = server.build_completed_callback_payload(task)
+            self.assertIsNone(error)
+            self.assertEqual(payload2["agentStatus"], "SUCCESS")
+            self.assertTrue(payload2.get("completedWithWarnings"))
+            # validation_report.json keeps the original issues.
+            report = json.loads((Path(root) / "work" / "validation_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["semantic_validation_status"], "FAILED")
+            self.assertEqual(report["errors"][0]["code"], "R1_EVIDENCE_MISSING")
+
+    def test_all_uploaded_semantic_warning_can_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=False)
+            task = self._ready_task(root)
+            self._semantic_report(root, "WARNING")
+            responses, _ = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            status, payload = responses[-1]
+            self.assertEqual(status, 200)
+            self.assertIs(payload["completionReady"], True)
+            payload2, error = server.build_completed_callback_payload(task)
+            self.assertIsNone(error)
+            self.assertEqual(payload2["agentStatus"], "SUCCESS")
+
+    def test_missing_files_still_block_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=False)
+            task = self._ready_task(root)
+            responses, _ = self._run(task, root, ["output/entity_relations.csv"])
+            status, payload = responses[-1]
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["uploaded"], 1)
+            self.assertIs(payload["completionReady"], False)
+            self.assertIs(payload["task"]["completionReady"], False)
+            self.assertEqual(payload.get("completionCode"), "UPLOAD_COMPLETION_GATE_PENDING")
+            payload2, error = server.build_completed_callback_payload(task)
+            self.assertIsNone(payload2)
+            self.assertIn("请先上传全部结果文件", error)
+
+    def test_hash_change_still_blocks_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=False)
+            task = self._ready_task(root)
+            responses, _ = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            self.assertEqual(responses[-1][0], 200)
+            relations_path = Path(root) / "output" / "entity_relations.csv"
+            relations_path.write_text(
+                to_csv(ENTITY_RELATIONS_HEADER, [relation_row()]).decode("utf-8") + "  ",
+                encoding="utf-8")
+            payload2, error = server.build_completed_callback_payload(task)
+            self.assertIsNone(payload2)
+            self.assertIn("已变更", error)
+
+    def test_running_task_still_blocks_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=False)
+            task = self._ready_task(root)
+            responses, _ = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            self.assertEqual(responses[-1][0], 200)
+            task.status = "working"
+            self.assertFalse(server.completion_ready_for_task(task))
+            payload2, error = server.build_completed_callback_payload(task)
+            self.assertIsNone(payload2)
+            self.assertIn("仍在执行", error)
+
+    def test_invalid_context_still_blocks_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = self._ready_task(root)
+            task.mission_context = {"taskType": "modeling"}  # no expectedFiles
+            self.assertFalse(server.completion_ready_for_task(task))
+            payload2, error = server.build_completed_callback_payload(task)
+            self.assertIsNone(payload2)
+            self.assertIn("未声明", error)
+
+    def test_warnings_never_become_blockers_in_readiness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=False)
+            task = self._ready_task(root)
+            self._semantic_report(root, "FAILED")
+            task.platform_uploaded_files = {
+                "entity_relations.csv": {
+                    "name": "entity_relations.csv", "key": "k/entity_relations.csv",
+                    "objectKey": "k/entity_relations.csv",
+                    "fileUrl": "https://files.example/entity_relations.csv",
+                    "previewUrl": "https://files.example/entity_relations.csv",
+                    "sha256": "a" * 64,
+                },
+                "logical_entities.csv": {
+                    "name": "logical_entities.csv", "key": "k/logical_entities.csv",
+                    "objectKey": "k/logical_entities.csv",
+                    "fileUrl": "https://files.example/logical_entities.csv",
+                    "previewUrl": "https://files.example/logical_entities.csv",
+                    "sha256": "b" * 64,
+                },
+            }
+            readiness = server.completion_readiness(task)
+            self.assertTrue(readiness["ready"])
+            self.assertTrue(readiness["warnings"])
+            self.assertEqual(readiness["blockers"], [])
+            self.assertIs(task.summary()["completionReady"], True)
+            self.assertEqual(len(task.summary()["completionWarnings"]), 1)
+
+    def test_result_and_task_completion_ready_never_disagree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=False)
+            task = self._task(root)  # semantic marker absent -> warnings
+            responses, _ = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            status, payload = responses[-1]
+            self.assertEqual(status, 200)
+            self.assertIs(payload["completionReady"], payload["task"]["completionReady"])
+
+    def test_validation_report_survives_first_real_context(self):
+        # A task whose conversation is materialized before the first real
+        # execution-context (Task.__init__ default) must not have its
+        # validation_report.json wiped by the empty deferred-context write:
+        # the report is a non-blocking warning and must survive the upload.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_outputs(root, legacy_relations=False)
+            work = root / "work"
+            work.mkdir(exist_ok=True)
+            (work / "validation_report.json").write_text(json.dumps({
+                "semantic_validation_status": "FAILED",
+                "errors": [{"code": "R1_EVIDENCE_MISSING"}],
+            }), encoding="utf-8")
+            task = self._task(root)  # Task.__init__ materializes the conversation
+            responses, _ = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            status, payload = responses[-1]
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["uploaded"], 2)
+            self.assertIs(payload["completionReady"], True)
+            report = json.loads((work / "validation_report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["semantic_validation_status"], "FAILED")
+            self.assertEqual(report["errors"][0]["code"], "R1_EVIDENCE_MISSING")
+            # No fingerprint-mismatch archive was created for an empty context.
+            self.assertFalse(list(work.glob("modeling_state.*.json")))
+
+    def test_user_actual_file_combination_uploads_and_completes(self):
+        # 16-column legacy entity_relations.csv with an English category plus
+        # empty-BO logical entities LE000020~LE000024: upload and complete.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            output.mkdir(exist_ok=True)
+            legacy = list(ENTITY_RELATIONS_HEADER)
+            legacy[10] = "源关联属性编码"
+            legacy[13] = "目标关联属性编码"
+            rel_row = relation_row()
+            rel_row[5] = "COMPOSITION"
+            (output / "entity_relations.csv").write_bytes(to_csv(legacy, [rel_row]))
+            rows = [logical_entity_row(bo_code="", bo_name="", le_code=f"LE0000{i}", main="N",
+                                       le_name=f"待归属逻辑实体{i}")
+                    for i in range(20, 25)]
+            (output / "logical_entities.csv").write_bytes(
+                to_csv(LOGICAL_ENTITIES_HEADER, rows))
+            task = self._task(root)
+            responses, put_calls = self._run(task, root, [
+                "output/entity_relations.csv", "output/logical_entities.csv"])
+            status, payload = responses[-1]
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["uploaded"], 2)
+            self.assertIs(payload["completionReady"], True)
+            rel_key, rel_blob = put_calls[0]
+            parsed = list(csv.reader(io.StringIO(rel_blob.decode("utf-8"), newline="")))
+            self.assertEqual(parsed[0][10], "源业务属性编码")
+            self.assertEqual(parsed[1][5], "组合")
+            payload2, error = server.build_completed_callback_payload(task)
+            self.assertIsNone(error)
+            self.assertEqual(payload2["agentStatus"], "SUCCESS")
 
 
 if __name__ == "__main__":
