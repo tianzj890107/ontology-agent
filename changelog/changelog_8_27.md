@@ -216,7 +216,7 @@
 
 - 移除可视化工具栏“布局”选择器整体容器的外边框与外层阴影；内部下拉选择、提示图标、尺寸、位置和交互保持不变。
 - 主要文件：`frontend/src/styles.css`、`tests/test_frontend_contract.py`、`frontend/dist`。
-- 验证结果：`pytest tests/test_frontend_contract.py -q` 14 passed；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。发布结果待部署后补充。
+- 验证结果：`pytest tests/test_frontend_contract.py -q` 14 passed；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。提交 `f5c67a1` 已推送并部署 47313/47314；部署测试 22/22 通过，两服务健康检查均为 HTTP 200，线上样式 bundle 为 `index-CUc3SYoo.css`。
 
 ### 业务对象编码契约收紧：BO + 4 位流水码
 
