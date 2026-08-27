@@ -132,8 +132,10 @@ const ONTOLOGY_ARTIFACT_ALIASES = {
   businessObject: ["business_objects.csv"],
   logicalEntity: ["logical_entities.csv"],
   businessAttribute: ["business_attributes.csv"],
+  entityRelation: ["entity_relations.csv", "entity_relationships.csv"],
   metric: ["metrics.csv", "indicators.csv", "indicator.csv", "atomic_indicators.csv", "composite_indicators.csv"],
   businessRule: ["business_rules.csv", "rules.csv"],
+  action: ["actions.csv"],
 };
 const ONTOLOGY_ARTIFACT_NAMES = new Set(Object.values(ONTOLOGY_ARTIFACT_ALIASES).flat());
 

@@ -39,8 +39,10 @@ const EMPTY_AVAILABILITY = {
   businessObject: false,
   logicalEntity: false,
   businessAttribute: false,
+  entityRelation: false,
   metric: false,
   businessRule: false,
+  action: false,
 };
 
 test("OntologyTreePreview 真实渲染不再抛出 useCallback is not defined", () => {
@@ -62,8 +64,10 @@ test("不同数据形态都能渲染 OntologyTreePreview", () => {
       businessObject: true,
       logicalEntity: true,
       businessAttribute: true,
+      entityRelation: true,
       metric: true,
       businessRule: true,
+      action: true,
     }, [{ id: "businessObject:BO000001", layer: "businessObject" }], []),
     graphData(EMPTY_AVAILABILITY),
   ];

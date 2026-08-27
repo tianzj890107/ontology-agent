@@ -4,8 +4,10 @@ export const ONTOLOGY_LAYER_DEFINITIONS = [
   { key: "businessObject", label: "业务对象", color: "#2563eb", baseRadius: 88, sigmaSize: 15 },
   { key: "logicalEntity", label: "逻辑实体", color: "#0f766e", baseRadius: 188, sigmaSize: 10 },
   { key: "businessAttribute", label: "业务属性", color: "#64748b", baseRadius: 300, sigmaSize: 4 },
+  { key: "entityRelation", label: "实体关系", color: "#0891b2", baseRadius: 356, sigmaSize: 6 },
   { key: "metric", label: "指标", color: "#7c3aed", baseRadius: 412, sigmaSize: 7 },
   { key: "businessRule", label: "业务规则", color: "#c2410c", baseRadius: 524, sigmaSize: 7 },
+  { key: "action", label: "动作", color: "#0e7490", baseRadius: 636, sigmaSize: 7 },
 ];
 
 const LAYER_BY_KEY = new Map(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => [layer.key, layer]));
@@ -77,17 +79,26 @@ export function buildOntologyGraph(records) {
     node.sectorId = parent?.sectorId || "ontology:unassigned";
     if (parent) addLink(parent.id, node.id, "logicalEntityBusinessAttribute", 1.35);
   });
+  rows("entityRelation").forEach((row, index) => {
+    const code = row["关系编码"] || `relation-${index + 1}`;
+    const name = row["关系中文名称"] || row["关系英文名称"] || code;
+    const node = addNode("entityRelation", code, name, row, index, "entity_relations.csv");
+    const source = indexes.logicalEntity.get(row["源逻辑实体编码"]) || indexes.logicalEntity.get(row["源逻辑实体名称"]);
+    const target = indexes.logicalEntity.get(row["目标逻辑实体编码"]) || indexes.logicalEntity.get(row["目标逻辑实体名称"]);
+    node.parentId = source?.id || target?.id || null;
+    node.sectorId = source?.sectorId || target?.sectorId || "ontology:relations";
+    if (source) addLink(source.id, node.id, "entityRelationSource", 1.6);
+    if (target) addLink(node.id, target.id, "entityRelationTarget", 1.6);
+  });
   rows("metric").forEach((row, index) => {
     const code = row["指标编码"] || `metric-${index + 1}`;
     const node = addNode("metric", code, row["指标名称"] || code, row, index, "metric-compatible.csv");
-    const sources = [
-      ["来源业务属性", "businessAttribute"],
-      ["来源逻辑实体", "logicalEntity"],
-      ["来源业务对象", "businessObject"],
-    ];
+    const sources = ["来源业务属性", "来源逻辑实体", "来源业务对象"];
     const linked = new Set();
-    sources.forEach(([field, layer]) => ontologyReferences(row[field]).forEach((reference) => {
-      const parent = indexes[layer].get(reference);
+    sources.forEach((field) => ontologyReferences(row[field]).forEach((reference) => {
+      const parent = indexes.businessAttribute.get(reference)
+        || indexes.logicalEntity.get(reference)
+        || indexes.businessObject.get(reference);
       if (parent && !linked.has(parent.id)) {
         addLink(parent.id, node.id, "metricSource", 1.5);
         linked.add(parent.id);
@@ -100,9 +111,26 @@ export function buildOntologyGraph(records) {
   rows("businessRule").forEach((row, index) => {
     const code = row["规则编码"] || `rule-${index + 1}`;
     const node = addNode("businessRule", code, row["规则名称"] || code, row, index, "business_rules.csv");
-    node.sectorId = "ontology:rules";
-    // Current formal rule output has no trusted ontology ownership columns.
-    // Keep the node isolated rather than inferring an edge from free text.
+    const searchable = Object.values(row).map((value) => String(value || "")).join("\n");
+    const linked = new Set();
+    const linkExactMentions = (indexMap) => indexMap.forEach((parent, reference) => {
+      if (!reference || !searchable.includes(reference) || linked.has(parent.id)) return;
+      addLink(parent.id, node.id, "ruleScope", 1.35);
+      linked.add(parent.id);
+    });
+    linkExactMentions(indexes.businessObject);
+    linkExactMentions(indexes.logicalEntity);
+    const primaryParent = nodes.find((candidate) => linked.has(candidate.id));
+    node.parentId = primaryParent?.id || null;
+    node.sectorId = primaryParent?.sectorId || "ontology:rules";
+  });
+  rows("action").forEach((row, index) => {
+    const code = row["动作编码"] || `action-${index + 1}`;
+    const node = addNode("action", code, row["动作名称"] || code, row, index, "actions.csv");
+    const parent = indexes.businessObject.get(row["业务对象编码"]);
+    node.parentId = parent?.id || null;
+    node.sectorId = parent?.sectorId || "ontology:actions";
+    if (parent) addLink(parent.id, node.id, "businessObjectAction", 1.5);
   });
   const availability = Object.fromEntries(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => [layer.key, nodes.some((node) => node.layer === layer.key)]));
   return { nodes, links, availability };

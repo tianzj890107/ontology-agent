@@ -200,6 +200,18 @@
 
 验证与发布：`pytest tests/test_frontend_contract.py -q` 14 passed；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。提交 `bc74d0a` 已推送并部署 47313，部署测试 22/22 通过，健康检查 HTTP 200；线上 bundle 已更新为 `index-D6BFzPhS.js`。
 
+### 关系聚类可视化扩展为七类真实挂载
+
+- 筛选层级从原五类扩展为七类并默认展示当前产物中存在的全部层级：业务对象、逻辑实体、业务属性、实体关系、指标、业务规则、动作。新增读取 `entity_relations.csv` 与 `actions.csv`，实体关系显示为可筛选节点并按源/目标逻辑实体建立两端连线，动作按正式 `业务对象编码` 挂载业务对象。
+- 指标挂载修复：旧实现把“来源业务属性/来源逻辑实体/来源业务对象”分别限制在单一层级索引；真实任务 `RM2092866461941178368` 的指标文件中“来源逻辑实体”填业务对象名、“来源业务属性”填逻辑实体名，导致 8 个指标全部失配。现改为在真实业务属性、逻辑实体、业务对象索引中按编码/名称精确交叉解析，不做模糊猜测。
+- 规则挂载修复：规则六列表头没有独立归属列，改为仅使用规则名称、描述、触发条件、判断结果和处置动作中的真实业务对象/逻辑实体编码或名称精确命中后建立 `ruleScope` 连线；未命中仍保持孤立，不凭常识臆造归属。
+- 样式：仅关系聚类布局移除最外层边框和圆角；内部画布、工具栏、筛选、缩放、全屏及其他布局样式不变。按用户要求本批不处理语义环形布局。
+- 服务器真实产物只读核验：实体关系 18/18、指标 8/8、规则 12/12、动作 16/16 均能命中真实挂载目标。
+
+主要文件：`frontend/src/ontologyGraphModel.js`、`frontend/src/main.jsx`、`frontend/src/styles.css`、`frontend/tests/ontologyGraphModel.test.mjs`、`frontend/tests/ontologyRadialLayout.test.mjs`、`frontend/tests/ontologyPreviewRuntime.test.mjs`、`tests/test_frontend_contract.py`、`frontend/dist`。
+
+验证结果：前端 Node 测试 74/74；`pytest tests/test_frontend_contract.py -q` 14 passed；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。发布结果待部署后补充。
+
 ### 业务对象编码契约收紧：BO + 4 位流水码
 
 完成此前只改了一半的业务对象编码收紧：正式建模产物中的 `业务对象编码` 统一为 `BO` + 4 位流水码（`^BO\d{4}$`，如 `BO0001`），不再接受任意字母开头的旧格式（如 `CO001`、`BO1`）。

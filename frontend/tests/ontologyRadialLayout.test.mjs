@@ -20,8 +20,8 @@ import {
 const makeNode = (layer, id, width = 92, height = 38) => ({ id, layer, nodeType: layer, name: id, symbolSize: [width, height] });
 const relation = (source, target) => ({ source, target });
 
-test("五个语义层按固定配置顺序声明", () => {
-  assert.deepEqual(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key), ["businessObject", "logicalEntity", "businessAttribute", "metric", "businessRule"]);
+test("七个语义层按固定配置顺序声明", () => {
+  assert.deepEqual(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key), ["businessObject", "logicalEntity", "businessAttribute", "entityRelation", "metric", "businessRule", "action"]);
 });
 
 test("节点尺寸、轨道容量、轨道数和半径计算", () => {
