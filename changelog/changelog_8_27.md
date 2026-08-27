@@ -72,6 +72,7 @@
 - 建模引擎与前端：`modeling_reliability.py`、`document_parser.py` 改用 workspace_paths；前端文件树分组显示“输入/工作/输出”，`main.jsx` 的 `mission-output/` 产物匹配改为 `output/`；API 文档、SOP、`agent_knowledge/**` 活动规范与 `scripts/build_agent_knowledge.py` 提示词全部去除 `mission-*`（历史 changelog 不改）。
 - 新增 `tests/test_workspace_paths.py`（15 项：仓库根/源码目录/HOME/空路径/相对与符号链接逃逸拒绝、合法任务目录可用、canonical 优先与 legacy 只读回退、新写入只进 canonical、47313/47314 新任务只创建 input/work/output）；重写 `tests/test_task_workspace_files.py`（canonical 列表、legacy 逻辑路径映射、双布局共存 canonical 优先）；更新 `test_sandbox_security.py`、`test_semantic_finalize_upload_boundary.py`、`test_modeling_csv_contract.py`、`test_modeling_reliability.py`、`test_database_modeling_evidence.py`、`test_document_parser.py`、`test_credential_crypto.py`、`test_ontology_knowledge.py`、`test_standalone_modeling_server.py`、`test_frontend_contract.py`、`test_v0001_rule_registry.py` 至 canonical 契约。
 - 验证结果：全量 `pytest tests` 558 passed / 13 skipped / 371 subtests；`py_compile` 全部改动 Python 文件通过；`npm run build` 成功（仅既有大 chunk 警告，新 hash bundle 已生成）；`git diff --check` 通过。
+- 前端 Node 测试 35/35 通过：将迁移校验后的真实五层输出 CSV 恢复为 `frontend/output/` 本地测试夹具（该目录已加入 `.gitignore`，不入库、不参与部署），消除此前既有的“仓库真实五层输出”夹具缺失失败项。
 
 ### 部署与线上验证（工作区统一命名）
 
