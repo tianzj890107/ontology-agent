@@ -136,6 +136,59 @@
 - `frontend/src/main.jsx` 与 `frontend/src/styles.css`：上传提示更新、逐文件错误展示与上传结果明细 Modal、完成前非阻断确认（`Modal.confirm`）。
 - 新增/更新 `tests/test_upload_gate_separation.py`（88 项：表头规范化、多行逐行校验、LE 上传规则、双哈希完成校验、中英文混合名称、英文关系分类规范化、完成策略与语义非阻断、completionReady 一致性、用户实际文件组合、空上下文不误删校验报告、MinIO API 行为、前端契约）；`tests/test_modeling_csv_contract.py` 中文名称规则更新；`tests/test_ontology_knowledge.py` 假任务 `summary()` 兼容新签名。
 
+### 本体可视化运行时错误隔离（47313/47314 useCallback 漏导入修复）
+
+47314 点击“本体可视化”后整页空白、47313 入口存在同类风险的根因：`frontend/src/main.jsx` 顶部 React 导入缺少 `useCallback`，而 `OntologyTreePreview` 的 `ensureRadialReady` 使用它；首次渲染时抛出 `ReferenceError: useCallback is not defined`，异常发生在组件自身 render/hook 初始化阶段，原 `OntologyPreviewErrorBoundary` 只包裹 `OntologySigmaPreview` 无法捕获，异常继续传播到 React 根节点导致整页卸载。
+
+- `useCallback` 导入修复：React 导入补上 `useCallback`（`useEffect/useLayoutEffect/useMemo/useRef/useState/useCallback`），保持既有 hooks 导入风格，不使用 `React.useCallback` 混用。
+- 外层可视化错误隔离：47313（工作台文件面板）与 47314（独立建模页）两处预览 Modal 中的 `<OntologyTreePreview>` 整体包在 `<OntologyPreviewErrorBoundary resetKey={ontologyPreviewResetKey(preview.ontologyGraph)} message="本体可视化加载失败，请关闭后重试">` 内。渲染异常、hooks 初始化异常、图层筛选/布局选择器异常、Sigma/ECharts 初始化异常、图数据异常、ResizeObserver 异常与 `React.lazy` 加载异常都只影响预览卡片，页面侧栏、历史运行、会话内容、文件面板、输入框与 Modal 关闭按钮保留；错误后关闭 Modal 可再次打开，`resetKey` 随图数据（节点/连线数量 + 可用层级）变化可重试。
+- 既有保护不回退：内部 Sigma ErrorBoundary 默认文案“关系布局加载失败，请稍后重试”保留；`OntologySigmaPreview` 保持 `React.lazy` + `React.Suspense` 懒加载；默认关系聚类可视化、后台环形布局预计算、五层筛选、布局下拉框、全屏与平移缩放均不变。
+- `drawStandaloneOntology` 既有 try/catch 保留：CSV 读取/解析/构图失败时 `setError`，`selectedRunIdRef` 变化后不再写入旧 run 状态，`finally` 关闭绘制状态；React 渲染异常统一交给外层 ErrorBoundary。
+- 测试：新增 `frontend/tests/hooksContract.test.mjs`（静态 hooks 契约：文件中使用的 React hooks ⊆ 导入集合、`useCallback` 导入并使用、无 `React.useXxx` 混用、47313/47314 两处 Modal 均被外层 ErrorBoundary 包裹、Sigma 懒加载与 Suspense 保留）。新增 `frontend/tests/ontologyPreviewRuntime.test.mjs`（Vite SSR 真实加载 `main.jsx` 渲染 `OntologyTreePreview`，复现修复前 `useCallback is not defined`、修复后正常渲染，覆盖仅 LE/BO+LE/LE+属性/五层/空数据等数据形态；`react-test-renderer` 验证外层 ErrorBoundary 局部占位、页面外壳与历史运行保留、`resetKey` 重试、卸载后重开、默认与自定义文案、`onError` 回调）。新增 devDependency `react-test-renderer@18.3.1`（与 react 18.3.1 匹配）与 `frontend/tests/fixtures/react-dom-client-stub.mjs`（Vite SSR 加载时桩掉 `createRoot` 启动入口，不新建任何隐藏 DOM）。`tests/test_frontend_contract.py` 预览契约断言更新为外层边界包裹结构并校验两处入口。
+
+主要文件：`frontend/src/main.jsx`、`frontend/package.json`、`frontend/package-lock.json`、`frontend/tests/hooksContract.test.mjs`、`frontend/tests/ontologyPreviewRuntime.test.mjs`、`frontend/tests/fixtures/react-dom-client-stub.mjs`、`tests/test_frontend_contract.py`；`frontend/dist` 重新构建。
+
 验证结果：
-- 全量 `pytest tests`：663 passed / 13 skipped / 445 subtests；`py_compile` 改动 Python 文件通过；Node 测试 47/47；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。
+- 全量 `pytest tests`：664 passed / 13 skipped / 445 subtests；`py_compile` 通过；Node 测试 60/60（原 47 + 新增 13）；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。
 - 发布：本批改动仅完成本地修改与验证，未部署、未 SSH、未重启 47313/47314、未 commit/push；服务器任务、run、数据库与用户产物未修改。
+
+### 自动确认修复：202 后台执行的审批自动放行
+
+修复 47313“自动确认已开启，但任务仍等待用户点击允许执行”：HTTP 202 后台执行只通过 `/api/tasks/:id/events` 绝对游标轮询回传事件，旧的自动确认只挂在 SSE `consume` 分支，`pollTaskEvents` 仅合并事件不调用 `/approve`；且 `openTask`/`toggleAutoApprove` 用 `find(approval_request)` 找第一条请求，未排除已存在 `approval_result` 的历史请求，可能确认过期请求而漏掉真正挂起的新请求。
+
+- 统一未决审批识别：`frontend/src/eventSync.js` 新增纯函数 `unresolvedApprovalRequests(events)`（收集 `approval_result` id 去重、过滤无 id 请求、按 seq 稳定排序、只返回无对应结果的请求）与 `approvalsNeedingAutoApprove({events, freshEvents, autoApprove, pendingApproval, inFlightIds})`（仅当自动确认开启，且请求属于“本窗口新到达”或“与服务端 `pendingApproval.id` 匹配”，并跳过 in-flight id）。轮询、刷新恢复、重开历史会话、动态开启开关统一使用该函数，服务端 `pendingApproval` 为最终权威，绝不确认历史已完成会话里的孤立旧请求。
+- 前端轮询与开关：`pollTaskEvents` 用 `eventsRef.current` 与 delta 合并后即按上述规则逐个 `approve(id, true, task)`，同一 id 由 `approvalInFlightRef` 保证只有一个在途确认，400“请求已过期”按幂等竞争静默处理；`openTask` 不再找第一条请求，并按 `current.autoApprove` 恢复开关与批准服务端仍挂起的请求；`toggleAutoApprove` 同时调用服务端 `/auto-approve`；`sendToTask` 的 `/send` body 增加 `autoApprove`；`approve()` 成功响应不再本地合成 `approval_result`，正式结果统一由服务端经 SSE/轮询返回（带稳定 seq），避免重复结果事件。
+- 服务端 execution 级自动确认：`Task` 新增任务级持久默认 `auto_approve` 与仅本次 execution 生效的 `_execution_auto_approve`；`stream_turn`/`_TaskExecutionAdapter.register` 透传 `auto_approve`；`_web_prompt_user` 记录 `approval_request` 后若本次 execution 或任务级已启用自动确认，立即记录 `approval_result {approved:true, automatic:true}` 并直接放行，不 `Event.wait()`；人工/超时结果的 `approval_result` 补充 `automatic:false`，审计事件完整保留。
+- 幂等与竞态：新增 `_resolve_approval(req_id, approved, automatic)`（对同一 `_last_approval_id` 幂等，正式 `approval_result` 只由 worker 记录，最终每个审批 id 至多一个结果）；`auto_approve_current()` 放行当前挂起审批；超时与批准竞争下结果唯一；审批绑定 execution，旧 execution 的审批不能批准新 execution 的工具。
+- 动态开关接口：新增 `POST /api/tasks/:id/auto-approve`（任务所有权鉴权），开启时立即放行当前挂起审批，关闭后恢复人工等待，已批准的工具调用不回滚；`Task.summary()` 与 `/events` 响应增加 `autoApprove`、`pendingApproval`（仅 `id/tool/summary`，不泄露敏感 detail）；`persist_tasks`/`restore_tasks` 持久化任务级 `autoApprove`，重启后按任务恢复。
+- 47314 检查：`standalone_modeling_server.py` 权限模式为 `always_allow`、无人工审批通道，不需要自动确认改动，未修改。
+- 测试：新增 `frontend/tests/eventApproval.test.mjs`（14 项：`unresolvedApprovalRequests` 未决/已处理/部分处理/重复 id/无 id/排序/跨 run 边界，`approvalsNeedingAutoApprove` 轮询触发/下一轮不重复/in-flight 跳过/关闭不批/刷新恢复/历史过期不批）；`tests/test_tasks.py` 新增 `AutoApproveFlowTests`（11 项：execution 级自动放行与审计、任务级默认、人工等待、超时唯一结果、幂等、`auto_approve_current`、summary 安全字段、`/auto-approve` 开启放行/关闭恢复、用户/任务隔离、重启持久化）；`tests/test_frontend_contract.py` 更新轮询合并与统一审批识别契约断言。
+- 主要文件：`frontend/src/eventSync.js`、`frontend/src/main.jsx`、`open-claude/oc_codex_server.py`、`tests/test_frontend_contract.py`、`tests/test_tasks.py`、`frontend/tests/eventApproval.test.mjs`；`frontend/dist` 重新构建。
+
+验证结果：
+- 指定四文件 `pytest`：202 passed / 16 subtests；`py_compile` 通过（`oc_codex_server.py`、`standalone_modeling_server.py`）；Node 测试 74/74；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。
+- 发布：本批改动仅完成本地修改与验证，未部署、未 SSH、未重启 47313/47314、未 commit/push；服务器任务、run、数据库、MinIO 与用户产物未修改。
+
+### 模型传输/协议错误改为本地可重试暂停
+
+- 建模任务遇到模型传输或协议类错误时仍在本地事件日志记录完整 `error` 供排查，但不再向平台回写 `FAILED`；本地任务保留可续跑的 `error` 状态，平台任务状态维持 `RUNNING`，`runResult` 记录为 `PAUSED` 与 `RECOVERABLE_PROVIDER_ERROR`，用户可在同一任务直接重试。
+- DeepSeek thinking 模式的 `reasoning_content must be passed back`、工具消息链不完整、无合法 assistant content/tool_calls，以及连接中断、连接/读写/网关超时均纳入可恢复范围；余额不足、鉴权失败和普通业务 400 不纳入，仍按真实失败处理。
+- 完成门禁不再仅因历史 `FAILED/CANCELLED` 平台状态阻断已经齐备且哈希一致的正式产物；活动 execution、文件缺失、上传不完整、哈希不一致等确定性问题仍然阻断。
+- 服务器最新任务 `RM2092866461941178368` 的 8 个真实输出文件均已上传至 `ontology/1/modeling-tasks/RM2092866461941178368/agent-output/`；会话尾部 DeepSeek 协议 error 将在精确备份后替换为基于真实产物统计的成功输出摘要，任务本地平台状态恢复为 `RUNNING`，不修改 CSV、MinIO 对象或数据库数据。
+
+主要文件：`open-claude/oc_codex_server.py`、`tests/test_tasks.py`、`changelog/changelog_8_27.md`。
+
+验证结果：`pytest tests/test_tasks.py -q` 92 passed；`py_compile open-claude/oc_codex_server.py` 与 `git diff --check` 通过。部署与服务器会话修复结果见文末最终发布记录。
+
+### 业务对象编码契约收紧：BO + 4 位流水码
+
+完成此前只改了一半的业务对象编码收紧：正式建模产物中的 `业务对象编码` 统一为 `BO` + 4 位流水码（`^BO\d{4}$`，如 `BO0001`），不再接受任意字母开头的旧格式（如 `CO001`、`BO1`）。
+
+- 契约生效范围：`modeling_csv_contract.py` 中 `business_objects.csv`、`logical_entities.csv`、`business_object_relations.csv`（源/目标业务对象编码）、`statuses.csv`、`actions.csv` 的 `code_pattern` 全部收紧为 `^BO\d{4}$`；逻辑实体编码、状态编码、关系编码等保持各自原有格式不变。`tests/test_modeling_csv_contract.py` 新增非法用例 `BO00001`（5 位数字）、`BO001`（3 位数字）、`CO0001`（非 BO 前缀）。
+- 知识库与文档同步：`scripts/build_agent_knowledge.py` 移除“Ontology平台模型编码规范”作为任务固定参考，`CODE_STANDARD_RULES` 改为“本体元素编码契约（强制）”并写明业务对象为 `BO` + 4 位流水码、示例 `BO0005`；`agent_knowledge/*` 相关 base/all_sources 重新生成；`API/backend-agent-interaction-api.md` 写入业务对象编码规范。任务参考文件不再下发旧编码规范，历史任务的旧格式产物仍按原样保留、不做批量迁移。
+- 测试夹具对齐：正式 `business_objects.csv`/`logical_entities.csv`/`business_object_relations.csv`/`statuses.csv`/`actions.csv` 夹具中的 `CO1/CO001/CO0001/BO1/BO00001/BO00002` 统一改为合法 `BO0001/BO0002/BO0003` 等，保持测试内决策候选与正式 CSV 行配对一致；决策审计候选编码（`business_object_decisions.csv`、`candidateCode`）属于中间态内部标识，不强制 BO 格式。涉及 `tests/test_gate_action_normalization.py`、`tests/test_semantic_finalize_upload_boundary.py`、`tests/test_standalone_modeling_server.py`、`tests/test_v0001_rule_registry.py`、`tests/test_modeling_reliability.py`、`tests/test_ontology_knowledge.py`。
+- 主要文件：`open-claude/open_claude/modeling_csv_contract.py`、`scripts/build_agent_knowledge.py`、`agent_knowledge/*`、`API/backend-agent-interaction-api.md` 及上述测试文件。
+
+验证结果：
+- 全量 `.venv/bin/python -m pytest tests`：676 passed / 13 skipped / 448 subtests；`py_compile` 通过（服务端与全部改动测试文件）；Node 测试 74/74；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。
+- 发布：本批改动仅完成本地修改与验证，未部署、未 SSH、未重启 47313/47314、未 commit/push；服务器任务、run、数据库、MinIO 与用户产物未修改。

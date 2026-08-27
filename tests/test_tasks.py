@@ -123,10 +123,7 @@ class TaskStateMachineTests(unittest.TestCase):
             self.assertEqual(task.conv.messages[-1]["content"][0]["text"],
                              "从断点继续完成")
 
-    def test_provider_timeout_fires_failed_callback_exactly_once(self):
-        # A provider timeout must terminate the turn with a single FAILED
-        # platform callback.  The shared-layer fix discards the partial
-        # assistant but must never duplicate the lifecycle callback.
+    def test_provider_timeout_keeps_platform_running_without_failed_callback(self):
         with tempfile.TemporaryDirectory() as directory:
             task = oc_codex_server.Task(
                 project="cb-once",
@@ -168,11 +165,22 @@ class TaskStateMachineTests(unittest.TestCase):
                                  side_effect=counting_callback):
                 task.stream_turn("继续", lambda _event: None)
 
-            failed = [c for c in calls if c[0] == "FAILED"]
-            self.assertEqual(len(failed), 1)
-            self.assertEqual(failed[0][1], "AGENT_EXECUTION_FAILED")
+            self.assertFalse([c for c in calls if c[0] == "FAILED"])
+            self.assertEqual(task.platform_status, "RUNNING")
+            self.assertEqual(task.run_result["status"], "PAUSED")
             # The partial reasoning is not part of provider history.
             self.assertEqual([m["role"] for m in task.conv.messages], ["user"])
+
+    def test_deepseek_reasoning_protocol_error_is_recoverable(self):
+        message = ("litellm.BadRequestError: DeepseekException - The "
+                   "`reasoning_content` in the thinking mode must be passed back to the API")
+        self.assertTrue(oc_codex_server.is_recoverable_provider_error(message))
+
+    def test_provider_balance_and_auth_errors_are_not_recoverable(self):
+        self.assertFalse(oc_codex_server.is_recoverable_provider_error(
+            "litellm.BadRequestError: DeepseekException - Insufficient Balance"))
+        self.assertFalse(oc_codex_server.is_recoverable_provider_error(
+            "authentication failed", "LLM_AUTH_ERROR"))
 
     def test_partial_text_timeout_is_audited_but_not_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1741,6 +1749,16 @@ class TaskSchedulerIntegrationTests(unittest.TestCase):
             codes = [issue["code"] for issue in issues]
             self.assertIn("TASK_STATE_CONFLICT", codes)
 
+    def test_completion_gate_allows_prior_failed_state_when_artifacts_are_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            task.status = "error"
+            task.platform_status = "FAILED"
+            task.mission_context = {"expectedFiles": ["business_objects.csv"]}
+            task.platform_uploaded_files = {"business_objects.csv": {"sha256": "abc"}}
+            issues = oc_codex_server.task_completion_gate(task)
+            self.assertNotIn("TASK_STATE_CONFLICT", [issue["code"] for issue in issues])
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -1983,3 +2001,289 @@ class TaskLifecycleGateTests(unittest.TestCase):
             self.assertIsNotNone(conflict)
             self.assertEqual(conflict["code"], "EXECUTION_ACTIVE")
             self.assertEqual(conflict["executionId"], "exec-1")
+
+
+class AutoApproveFlowTests(unittest.TestCase):
+    """47313 自动确认：execution/任务级服务端自动放行 + 审计 + 幂等。
+
+    根因回归：202 后台执行只通过轮询回传 approval_request，旧前端自动确认
+    只存在于 SSE 分支；服务端 execution 级自动放行使浏览器无关路径也可靠，
+    同时保留完整 approval_request/approval_result 审计。
+    """
+
+    def _task(self, directory, task_id="abcd1234ef01", user_id="test"):
+        task = oc_codex_server.Task("p", directory, task_id=task_id,
+                                    user_id=user_id)
+        task.conv = _FakeConversation()
+        return task
+
+    def _recording(self, task):
+        events = []
+
+        def rec(event):
+            stamped = task._record_event(event)
+            events.append(stamped)
+            return stamped
+
+        task._rec = rec
+        return events
+
+    @staticmethod
+    def _run_prompt(task, outcome, command="ls"):
+        outcome["ok"], outcome["err"] = task._web_prompt_user(
+            "Bash", {"command": command})
+
+    @staticmethod
+    def _wait_pending(task, timeout=2.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if task.pending_approval:
+                return task.pending_approval
+            time.sleep(0.005)
+        return None
+
+    def _result_event(self, events):
+        return next(event for event in events
+                    if event["type"] == "approval_result")
+
+    def test_execution_auto_approve_never_waits_and_records_automatic_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            events = self._recording(task)
+            task._execution_auto_approve = True
+            started = time.time()
+            with patch.object(oc_codex_server, "_append_task_history"):
+                ok, err = task._web_prompt_user("Bash", {"command": "ls"})
+            self.assertTrue(ok)
+            self.assertEqual(err, "")
+            self.assertLess(time.time() - started, 2.0)
+            self.assertEqual([event["type"] for event in events],
+                             ["approval_request", "approval_result"])
+            result = self._result_event(events)
+            self.assertTrue(result["approved"])
+            self.assertTrue(result["automatic"])
+            self.assertIsNone(task.pending_approval)
+
+    def test_task_level_auto_approve_releases_prompt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            task.auto_approve = True
+            events = self._recording(task)
+            with patch.object(oc_codex_server, "_append_task_history"):
+                ok, _ = task._web_prompt_user("Edit", {"file_path": "x.py"})
+            self.assertTrue(ok)
+            self.assertTrue(self._result_event(events)["automatic"])
+
+    def test_manual_approval_still_waits_and_records_manual_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            events = self._recording(task)
+            outcome = {}
+            thread = threading.Thread(target=self._run_prompt,
+                                      args=(task, outcome))
+            with patch.object(oc_codex_server, "_append_task_history"):
+                thread.start()
+                pending = self._wait_pending(task)
+                self.assertIsNotNone(pending)
+                self.assertTrue(task.resolve_approval(pending["id"], True))
+                thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(outcome["ok"])
+            result = self._result_event(events)
+            self.assertTrue(result["approved"])
+            self.assertFalse(result.get("automatic"))
+
+    def test_timeout_records_rejected_result_without_automatic_flag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            events = self._recording(task)
+            old = os.environ.get("ONTOLOGY_APPROVAL_TIMEOUT_SECONDS")
+            os.environ["ONTOLOGY_APPROVAL_TIMEOUT_SECONDS"] = "0.05"
+            try:
+                with patch.object(oc_codex_server, "_append_task_history"):
+                    ok, err = task._web_prompt_user("Bash", {"command": "ls"})
+            finally:
+                if old is None:
+                    os.environ.pop("ONTOLOGY_APPROVAL_TIMEOUT_SECONDS", None)
+                else:
+                    os.environ["ONTOLOGY_APPROVAL_TIMEOUT_SECONDS"] = old
+            self.assertFalse(ok)
+            self.assertIn("超时", err)
+            result = self._result_event(events)
+            self.assertFalse(result["approved"])
+            self.assertTrue(result.get("timeout"))
+            self.assertFalse(result.get("automatic"))
+
+    def test_resolve_approval_is_idempotent_after_formal_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            events = self._recording(task)
+            outcome = {}
+            thread = threading.Thread(target=self._run_prompt,
+                                      args=(task, outcome))
+            with patch.object(oc_codex_server, "_append_task_history"):
+                thread.start()
+                pending = self._wait_pending(task)
+                req_id = pending["id"]
+                self.assertTrue(task.resolve_approval(req_id, True))
+                thread.join(timeout=5)
+                # 正式结果已产生后重复提交同一 id 视为幂等成功，不再报错。
+                self.assertTrue(task.resolve_approval(req_id, True))
+            self.assertFalse(thread.is_alive())
+            results = [event for event in events
+                       if event["type"] == "approval_result"
+                       and event["id"] == req_id]
+            self.assertEqual(len(results), 1)
+
+    def test_auto_approve_current_resolves_pending_with_automatic_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            events = self._recording(task)
+            outcome = {}
+            thread = threading.Thread(target=self._run_prompt,
+                                      args=(task, outcome))
+            with patch.object(oc_codex_server, "_append_task_history"):
+                thread.start()
+                pending = self._wait_pending(task)
+                self.assertIsNotNone(pending)
+                self.assertTrue(task.auto_approve_current())
+                thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(outcome["ok"])
+            result = self._result_event(events)
+            self.assertTrue(result["approved"])
+            self.assertTrue(result["automatic"])
+
+    def test_summary_exposes_safe_pending_approval_and_auto_approve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            task.auto_approve = True
+            summary = task.summary()
+            self.assertTrue(summary["autoApprove"])
+            self.assertIsNone(summary["pendingApproval"])
+            task.pending_approval = {
+                "id": "req-1", "tool": "Bash", "summary": "执行命令",
+                "detail": "SECRET-COMMAND",
+            }
+            safe = task.pending_approval_safe()
+            self.assertEqual(safe["id"], "req-1")
+            self.assertEqual(safe["tool"], "Bash")
+            self.assertEqual(safe["summary"], "执行命令")
+            self.assertNotIn("detail", safe)
+            self.assertNotIn("SECRET-COMMAND", json.dumps(safe))
+
+    def test_auto_approve_endpoint_enables_and_resolves_pending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            events = self._recording(task)
+            outcome = {}
+            thread = threading.Thread(target=self._run_prompt,
+                                      args=(task, outcome))
+            handler = object.__new__(oc_codex_server.Handler)
+            handler.path = f"/api/tasks/{task.id}/auto-approve"
+            handler.headers = {}
+            handler._requires_auth = lambda path: False
+            handler._require_user = lambda: "test"
+            handler._owned_task = lambda task_id: task
+            handler._read_body = lambda: {"enabled": True}
+            response = []
+            handler._send_json = lambda payload, status=200: response.append(
+                (status, payload))
+            with patch.object(oc_codex_server, "_append_task_history"), \
+                    patch.object(oc_codex_server, "persist_tasks"):
+                thread.start()
+                pending = self._wait_pending(task)
+                self.assertIsNotNone(pending)
+                handler.do_POST()
+                thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(outcome["ok"])
+            self.assertTrue(task.auto_approve)
+            self.assertEqual(response[0][0], 200)
+            payload = response[0][1]
+            self.assertTrue(payload["autoApprove"])
+            self.assertTrue(payload["resolved"])
+            self.assertTrue(self._result_event(events)["automatic"])
+
+    def test_auto_approve_endpoint_disable_restores_manual_wait(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task = self._task(directory)
+            task.auto_approve = True
+            handler = object.__new__(oc_codex_server.Handler)
+            handler.path = f"/api/tasks/{task.id}/auto-approve"
+            handler.headers = {}
+            handler._requires_auth = lambda path: False
+            handler._require_user = lambda: "test"
+            handler._owned_task = lambda task_id: task
+            handler._read_body = lambda: {"enabled": False}
+            response = []
+            handler._send_json = lambda payload, status=200: response.append(
+                (status, payload))
+            with patch.object(oc_codex_server, "persist_tasks"):
+                handler.do_POST()
+            self.assertFalse(task.auto_approve)
+            self.assertFalse(task._execution_auto_approve)
+            self.assertEqual(response[0][0], 200)
+            self.assertFalse(response[0][1]["resolved"])
+
+    def test_auto_approve_does_not_leak_across_tasks_or_users(self):
+        with tempfile.TemporaryDirectory() as directory:
+            task_a = self._task(directory, task_id="aaaa00000001",
+                               user_id="user-a")
+            task_b = self._task(directory, task_id="bbbb00000002",
+                               user_id="user-b")
+            task_a.auto_approve = True
+            self.assertFalse(task_b.auto_approve)
+            self.assertFalse(task_b._execution_auto_approve)
+            # 任务 B 未启用自动确认时仍进入人工等待流程。
+            events_b = self._recording(task_b)
+            outcome = {}
+            thread = threading.Thread(target=self._run_prompt,
+                                      args=(task_b, outcome))
+            with patch.object(oc_codex_server, "_append_task_history"):
+                thread.start()
+                pending = self._wait_pending(task_b)
+                self.assertIsNotNone(pending)
+                self.assertTrue(task_b.resolve_approval(pending["id"], True))
+                thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(outcome["ok"])
+            self.assertFalse(self._result_event(events_b).get("automatic"))
+
+    def test_auto_approve_persists_and_restores_per_task(self):
+        import oc_codex_server as web
+        old_sandbox = web.SANDBOX_DIR
+        old_state = web.TASKS_STATE_PATH
+        old_history = web.TASK_HISTORY_DIR
+        old_enabled = web.WEB_TASK_PERSISTENCE_ENABLED
+        old_tasks = web.TASKS
+        try:
+            with tempfile.TemporaryDirectory() as sandbox_dir:
+                web.SANDBOX_DIR = sandbox_dir
+                web.TASKS_STATE_PATH = os.path.join(
+                    sandbox_dir, ".web_tasks.json")
+                web.TASK_HISTORY_DIR = os.path.join(sandbox_dir, ".task_history")
+                web.WEB_TASK_PERSISTENCE_ENABLED = True
+                os.makedirs(os.path.join(sandbox_dir, "p"), exist_ok=True)
+                enabled = web.Task("p", os.path.join(sandbox_dir, "p"),
+                                   task_id="aa-restore-1", user_id="test",
+                                   auto_approve=True)
+                disabled = web.Task("p", os.path.join(sandbox_dir, "p"),
+                                    task_id="aa-restore-2", user_id="test",
+                                    auto_approve=False)
+                with patch.object(web, "_append_task_history"):
+                    enabled._record_event({"type": "user", "text": "a"})
+                    disabled._record_event({"type": "user", "text": "b"})
+                web.TASKS = {enabled.id: enabled, disabled.id: disabled}
+                web.persist_tasks()
+                web.TASKS = {}
+                web.restore_tasks()
+                restored = {t.id: t for t in web.TASKS.values()}
+                self.assertTrue(restored[enabled.id].auto_approve)
+                self.assertFalse(restored[disabled.id].auto_approve)
+        finally:
+            web.SANDBOX_DIR = old_sandbox
+            web.TASKS_STATE_PATH = old_state
+            web.TASK_HISTORY_DIR = old_history
+            web.WEB_TASK_PERSISTENCE_ENABLED = old_enabled
+            web.TASKS = old_tasks

@@ -196,6 +196,35 @@ def is_recoverable_guard_pause(reason: str) -> bool:
     return str(reason or "") in GUARD_RECOVERABLE_PAUSES
 
 
+def is_recoverable_provider_error(error: object, code: object = "") -> bool:
+    """Return whether a provider failure should pause without failing the mission."""
+    normalized_code = str(code or "").strip().upper()
+    message = str(error or "").lower()
+    if normalized_code in {
+        "LLM_STREAM_TIMEOUT", "LLM_CONNECTION_ERROR",
+        "PROVIDER_STREAM_TIMEOUT", "PROVIDER_CONNECTION_ERROR",
+    }:
+        return True
+    return any(marker in message for marker in (
+        "reasoning_content",
+        "must be passed back",
+        "content or tool_calls must be set",
+        "invalid assistant message",
+        "insufficient tool messages",
+        "tool_call_id",
+        "connection error",
+        "connection reset",
+        "connection refused",
+        "apiconnectionerror",
+        "apitimeouterror",
+        "read timeout",
+        "connect timeout",
+        "write timeout",
+        "upstream timeout",
+        "gateway timeout",
+    ))
+
+
 def _bounded_env_number(name: str, default: float, minimum: float = 1.0) -> float:
     try:
         value = float(os.environ.get(name, str(default)))
@@ -1698,8 +1727,11 @@ def task_completion_gate(task) -> list[dict]:
     status = str(getattr(task, "status", "") or "").lower()
     if status in {"working", "queued"}:
         issues.append({"code": "TASK_STATE_CONFLICT", "message": "任务仍在执行中，不能完成"})
-    if normalize_platform_status(getattr(task, "platform_status", "")) in {"FAILED", "CANCELLED"}:
-        issues.append({"code": "TASK_STATE_CONFLICT", "message": "任务当前处于失败或取消状态，不能直接完成"})
+    # A prior execution/platform failure is historical state, not evidence
+    # that the current uploaded artifact set is incomplete.  Let users finish
+    # after every required artifact has been uploaded and verified; active
+    # executions, missing artifacts and explicit artifact failures below
+    # remain deterministic blockers.
     context = getattr(task, "mission_context", {})
     expected = normalize_expected_files(context.get("expectedFiles")) if isinstance(context, dict) else set()
     if task_callback_kind(task) == "integration":
@@ -2630,7 +2662,6 @@ if __name__ == "__main__":
 def ensure_mission_reference_files(cwd):
     """为每个本体任务准备元模型和模板参考文件,避免重复手动上传。"""
     reference_names = (
-        "Ontology平台模型编码规范v0.0.1.xlsx",
         "本体元模型v0.0.1.xlsx",
         "本体元模型模板v.0.0.1.xlsx",
         "本体元模型模板v0.0.1（含样例数据）.xlsx",
@@ -2651,6 +2682,7 @@ def ensure_mission_reference_files(cwd):
     # not user business inputs. Remove only those known legacy copies so an
     # existing task cannot accidentally mix two rule/template versions.
     legacy_reference_names = (
+        "Ontology平台模型编码规范v0.0.1.xlsx",
         "Ontology平台模型编码规范.xlsx",
         "Ontology平台模型编码规范v0.01.xlsx",
         "本体元模型3.xlsx",
@@ -3856,7 +3888,7 @@ class Task:
                  task_workspace_relpath: str = "", platform_status: str = "",
                  platform_updated: float = 0, platform_uploaded_files: dict | None = None,
                  platform_output_prefix: str = "", platform_last_error: str = "",
-                 defer_runtime: bool = False):
+                 defer_runtime: bool = False, auto_approve: bool = False):
         self.id = task_id or uuid.uuid4().hex[:12]
         self.project = project
         self.workspace = workspace or project
@@ -3933,6 +3965,15 @@ class Task:
         self._rec = None              # 当前回合的 record+emit,供确认流推送事件
         self._modeling_guard: ModelingExecutionGuard | None = None
         self.modeling_block_reason = ""
+
+        # 自动确认意图是当前用户/任务/execution 的明确配置，不是全局开关。
+        # ``auto_approve`` 是任务级持久化默认值（由 /auto-approve 或 send
+        # 请求中的 autoApprove 显式设置）；``_execution_auto_approve`` 只在
+        # stream_turn 期间表示本次 execution 的即时策略。
+        self.auto_approve = bool(auto_approve)
+        self._execution_auto_approve = False
+        self._approval_automatic = False
+        self._last_approval_id = ""
 
         # Full-capability agent, confined to the project dir by OC_SANDBOX_ROOT.
         # default mode: dangerous tools (Bash/Write/Edit) route to _prompt_user,
@@ -4058,7 +4099,7 @@ class Task:
         if reference_files:
             safe["agentReferenceFiles"] = reference_files
             safe["agentReferenceInstructions"] = (
-                "Ontology平台模型编码规范v0.0.1、本体元模型v0.0.1、本体元模型模板v0.0.1和含样例数据模板已自动放入任务项目，直接使用这些本地文件；"
+                "本体元模型v0.0.1、本体元模型模板v0.0.1和含样例数据模板已自动放入任务项目，直接使用这些本地文件；"
                 "其中含样例数据的模板仅用于理解字段、编码和页面显示等填写示例，不是当前任务真实输入，"
                 "不得把样例行复制到结果或据此新增建模对象；不要要求用户再次上传。"
             )
@@ -4168,7 +4209,12 @@ class Task:
     def _web_prompt_user(self, tool_name: str, tool_input: dict,
                          forced_by: str = "") -> tuple[bool, str]:
         """Replace the CLI permission prompt: push a confirm card to the web UI
-        and block this turn until the user clicks 允许/拒绝 (or times out)."""
+        and block this turn until the user clicks 允许/拒绝 (or times out).
+
+        When the current task or execution explicitly enables auto-approve,
+        the request is still journaled for audit but is released immediately
+        with ``automatic: true`` instead of waiting for a browser click.
+        """
         # 新建文件的 Write 自动放行;只有覆盖已有文件才要求确认
         if tool_name == "Write":
             fp = str(tool_input.get("file_path") or "")
@@ -4190,30 +4236,80 @@ class Task:
         req_id = uuid.uuid4().hex[:8]
         self._approval_event = threading.Event()
         self._approval_answer = False
+        self._approval_automatic = False
         req = {"type": "approval_request", "id": req_id, "tool": tool_name,
                "summary": summary, "detail": detail[:2000]}
         self.pending_approval = req
         rec(req)
+        # 本次 execution 的 autoApprove（send 请求）或任务级 auto_approve
+        # （/auto-approve 开关）任一为真即自动放行；审计仍完整保留 request。
+        if self._execution_auto_approve or self.auto_approve:
+            self.pending_approval = None
+            self._approval_event = None
+            self._last_approval_id = req_id
+            rec({"type": "approval_result", "id": req_id, "approved": True,
+                 "automatic": True})
+            return True, ""
         approval_timeout = _bounded_env_number(
             APPROVAL_TIMEOUT_ENV, DEFAULT_APPROVAL_TIMEOUT_SECONDS)
         answered = self._approval_event.wait(timeout=approval_timeout)
         self.pending_approval = None
         self._approval_event = None
+        self._last_approval_id = req_id
         approved = bool(self._approval_answer) if answered else False
         rec({"type": "approval_result", "id": req_id, "approved": approved,
-             "timeout": (not answered)})
+             "timeout": (not answered),
+             "automatic": bool(self._approval_automatic)})
         if approved:
             return True, ""
         return False, ("等待用户确认超时,已跳过该操作" if not answered else "用户拒绝执行该操作")
 
     def resolve_approval(self, req_id: str, approved: bool) -> bool:
         """Called from the /approve endpoint thread."""
+        return self._resolve_approval(req_id, approved, automatic=False)
+
+    def _resolve_approval(self, req_id: str, approved: bool, automatic: bool) -> bool:
+        """Idempotent approval resolution, shared by /approve and auto-approve.
+
+        Only the worker's ``_web_prompt_user`` records the formal
+        ``approval_result`` event, so concurrent resolutions (two browser tabs,
+        a manual click racing the server-side auto-approve, or a late click
+        after timeout) can never produce more than one final result for the
+        same request id.
+        """
         pa, ev = self.pending_approval, self._approval_event
-        if not pa or not ev or (req_id and req_id != pa.get("id")):
+        if pa and ev and (not req_id or req_id == pa.get("id")):
+            self._approval_answer = bool(approved)
+            self._approval_automatic = bool(automatic)
+            ev.set()
+            return True
+        # 幂等成功：同一个审批已经产生正式结果（超时/批准/拒绝）后，重复提交
+        # 视为已处理而不是通用错误，避免轮询/刷新与并发点击互相报错。
+        if req_id and req_id == getattr(self, "_last_approval_id", ""):
+            return True
+        return False
+
+    def auto_approve_current(self) -> bool:
+        """Resolve the currently pending web approval automatically (audited)."""
+        pa = self.pending_approval
+        if not pa or not pa.get("id"):
             return False
-        self._approval_answer = bool(approved)
-        ev.set()
-        return True
+        return self._resolve_approval(str(pa.get("id")), True, automatic=True)
+
+    def pending_approval_safe(self) -> dict | None:
+        """Server-truth snapshot of the currently pending approval for the UI.
+
+        Only the id/tool/summary are exposed; tool arguments stay server-side.
+        Returns None when the server is not waiting on any approval.
+        """
+        pa = self.pending_approval
+        if not pa or not pa.get("id"):
+            return None
+        return {
+            "id": str(pa.get("id") or ""),
+            "tool": str(pa.get("tool") or ""),
+            "summary": str(pa.get("summary") or ""),
+        }
 
     def effective_model(self) -> str:
         """Return the task's live model without materializing a conversation."""
@@ -4240,6 +4336,8 @@ class Task:
                 "uploadedResultCount": len(self.platform_uploaded_files),
                 "completionReady": completion_ready,
                 "completionWarnings": readiness["warnings"],
+                "autoApprove": bool(self.auto_approve),
+                "pendingApproval": self.pending_approval_safe(),
                 "runResult": self.run_result, "model": self.effective_model(),
                 "modelingPlan": self.modeling_plan if self.modeling_plan else None,
                 "hasConversation": self.has_conversation()}
@@ -4481,7 +4579,8 @@ class Task:
                     platform_authorization: str = "", conversational: bool = False,
                     client_message_id: str = "", execution_id: str = "",
                     cancellation_token=None, execution_guard=None,
-                    provider_slots=None, database_slots=None):
+                    provider_slots=None, database_slots=None,
+                    auto_approve: bool = False):
         """Run one turn; keep an optional short UI label separate from LLM input.
 
         ``conversational`` is used for a normal question/cancellation inside a
@@ -4525,6 +4624,7 @@ class Task:
         with self.lock:
             conv = self.ensure_conversation()
             original_system_prompt = conv.system_prompt
+            self._execution_auto_approve = bool(auto_approve)
             if conversational:
                 conv.system_prompt = original_system_prompt + (
                     "\n\n[当前回合是普通咨询，不是建模启动指令]\n"
@@ -4780,6 +4880,7 @@ class Task:
             finally:
                 self._modeling_guard = None
                 self._rec = None
+                self._execution_auto_approve = False
                 flush_text()
                 if execution_id:
                     # Release only this execution's claim; a stale worker's
@@ -4808,7 +4909,17 @@ class Task:
                         if finalize_result.get("status") != "PASSED":
                             self.status = "error"
                             failure_message = "建模语义 finalize 未通过，正式结果不可交付"
-                if self.status == "error" and self.task_code:
+                if (self.status == "error" and self.task_code
+                        and getattr(self, "_provider_error_recoverable", False)):
+                    # Provider transport/protocol failures do not invalidate
+                    # generated artifacts. Keep the platform mission RUNNING
+                    # and preserve the local error event for a same-task retry.
+                    self.platform_status = "RUNNING"
+                    self.platform_last_error = ""
+                    set_task_run_result(self, "PAUSED",
+                                        warnings=["RECOVERABLE_PROVIDER_ERROR"])
+                    self.platform_updated = time.time()
+                elif self.status == "error" and self.task_code:
                     # A tool rejection is represented in normal tool results; only an
                     # error-ended turn/unhandled exception reaches this branch.
                     # A lease-lost or stale worker must never push FAILED over
@@ -4857,6 +4968,7 @@ class Task:
         turn_text: list[str] = []
         turn_thinking: list[str] = []
         stop_reason = "end_turn"
+        self._provider_error_recoverable = False
 
         provider = get_model_provider(conv.model)
         api_key = user_api_key(self.user_id, provider)
@@ -4953,8 +5065,11 @@ class Task:
                     error_payload = {"type": "error", "error": ev["error"]}
                     if ev.get("code"):
                         error_payload["code"] = ev["code"]
-                    if ev.get("recoverable"):
+                    provider_recoverable = bool(ev.get("recoverable")) or \
+                        is_recoverable_provider_error(ev.get("error"), ev.get("code"))
+                    if provider_recoverable:
                         error_payload["recoverable"] = True
+                        self._provider_error_recoverable = True
                     error_event = self._record_event(error_payload)
                     emit(error_event)
                     # A provider read-timeout pauses the turn at the current
@@ -4962,7 +5077,7 @@ class Task:
                     # this turn.  Both keep the task error so a continue can
                     # resume, but only the timeout is marked recoverable.
                     stop_reason = ("timeout"
-                                   if ev.get("recoverable")
+                                   if provider_recoverable
                                    and ev.get("code") == "LLM_STREAM_TIMEOUT"
                                    else "error")
                     break
@@ -5077,7 +5192,8 @@ class _TaskExecutionAdapter:
     def register(self, execution_id: str, task_id: str, text: str,
                  display_text: str, conversational: bool,
                  client_message_id: str, authorization: str,
-                 platform_execution: bool = False) -> None:
+                 platform_execution: bool = False,
+                 auto_approve: bool = False) -> None:
         with self._lock:
             self._requests[task_id] = {
                 "execution_id": execution_id, "task_id": task_id,
@@ -5086,6 +5202,7 @@ class _TaskExecutionAdapter:
                 "client_message_id": client_message_id,
                 "authorization": authorization,
                 "platform_execution": platform_execution,
+                "auto_approve": bool(auto_approve),
             }
 
     def unregister(self, execution_id: str, task_id: str) -> None:
@@ -5223,7 +5340,8 @@ class _TaskExecutionAdapter:
                 provider_slots=(coordinator.provider_slots
                                 if coordinator is not None else None),
                 database_slots=(coordinator.database_slots
-                                if coordinator is not None else None))
+                                if coordinator is not None else None),
+                auto_approve=bool(request.get("auto_approve", False)))
         except Exception:
             pass
 
@@ -5404,6 +5522,7 @@ def persist_tasks():
         for t in TASKS.values():
             rows.append({**t.summary(),
                          "eventSeq": getattr(t, "event_seq", 0),
+                         "autoApprove": getattr(t, "auto_approve", False),
                          "activeExecutionId": getattr(t, "active_execution_id", ""),
                          "executionStartedAt": getattr(t, "execution_started_at", 0),
                          "missionContext": _mask_mission_secrets(t.mission_context),
@@ -5491,7 +5610,8 @@ def restore_tasks():
                                               if isinstance(row.get("platformUploadedFiles"), dict) else None),
                      platform_output_prefix=str(row.get("platformOutputPrefix") or ""),
                      platform_last_error=str(row.get("platformLastError") or ""),
-                     defer_runtime=True)
+                     defer_runtime=True,
+                     auto_approve=bool(row.get("autoApprove", False)))
             if task_rel:
                 ensure_workspace_shared_files(workspace, cwd)
             t.title = str(row.get("title") or "新任务")
@@ -5991,6 +6111,8 @@ class Handler(BaseHTTPRequestHandler):
                     events, start, end, total, scope_id=task.id,
                     scope_key="taskId")
                 response["model"] = task.effective_model()
+                response["autoApprove"] = bool(task.auto_approve)
+                response["pendingApproval"] = task.pending_approval_safe()
                 self._send_json(response)
                 return
             m = re.match(r"^/api/tasks/([0-9a-f]+)$", path)
@@ -6100,6 +6222,30 @@ class Handler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/tasks/([0-9a-f]+)/platform-status$", path)
             if m:
                 self._handle_platform_status(m.group(1))
+                return
+            m = re.match(r"^/api/tasks/([0-9a-f]+)/auto-approve$", path)
+            if m:
+                task = self._owned_task(m.group(1))
+                data = self._read_body()
+                if not task:
+                    return
+                enabled = bool(data.get("enabled"))
+                task.auto_approve = enabled
+                # 运行中开启：立即更新本次 execution 的审批策略，并直接放行
+                # 当前挂起的审批（审计结果 automatic=true）。关闭时恢复人工等待，
+                # 已批准的调用不回滚。
+                task._execution_auto_approve = enabled
+                resolved = bool(enabled and task.auto_approve_current())
+                try:
+                    persist_tasks()
+                except Exception:
+                    pass
+                self._send_json({
+                    "ok": True,
+                    "autoApprove": bool(task.auto_approve),
+                    "pendingApproval": task.pending_approval_safe(),
+                    "resolved": resolved,
+                })
                 return
             m = re.match(r"^/api/tasks/([0-9a-f]+)/approve$", path)
             if m:
@@ -6956,6 +7102,18 @@ class Handler(BaseHTTPRequestHandler):
         if intent == "execute":
             conversational_turn = False
         task_execution_request = not conversational_turn
+        # 自动确认是当前用户/任务/execution 的明确配置：send 请求中的
+        # autoApprove（布尔）同时更新任务级默认值并应用到本次 execution，
+        # 不会成为跨用户/跨任务的全局开关。
+        if task:
+            explicit_auto_approve = data.get("autoApprove")
+            if explicit_auto_approve is not None:
+                task.auto_approve = bool(explicit_auto_approve)
+                try:
+                    persist_tasks()
+                except Exception:
+                    pass
+        execution_auto_approve = bool(getattr(task, "auto_approve", False))
         if task:
             # 任务绑定后，服务端重新读取 execution-context，避免浏览器篡改任务规则/输出范围。
             server_context = fetch_execution_context(
@@ -7064,7 +7222,8 @@ class Handler(BaseHTTPRequestHandler):
                     execution_id, task.id, text, display_text,
                     conversational_turn, client_message_id,
                     self.headers.get("Authorization") or "",
-                    platform_execution=bool(task.task_code and task_execution_request))
+                    platform_execution=bool(task.task_code and task_execution_request),
+                    auto_approve=execution_auto_approve)
             attempt = int(getattr(task, "attempt_number", 0) or 0) + 1
             claim = coordinator.claim(task.id, execution_id, task.user_id,
                                       attempt=attempt)
@@ -7210,20 +7369,23 @@ class Handler(BaseHTTPRequestHandler):
                                      platform_authorization=self.headers.get("Authorization") or "",
                                      conversational=conversational_turn,
                                      client_message_id=client_message_id,
-                                     execution_id=execution_id)
+                                     execution_id=execution_id,
+                                     auto_approve=execution_auto_approve)
             elif scheduler is not None:
                 with scheduler.provider_slots:
                     task.stream_turn(text, emit, display_text,
                                      platform_authorization=self.headers.get("Authorization") or "",
                                      conversational=conversational_turn,
                                      client_message_id=client_message_id,
-                                     execution_id=execution_id)
+                                     execution_id=execution_id,
+                                     auto_approve=execution_auto_approve)
             else:
                 task.stream_turn(text, emit, display_text,
                                  platform_authorization=self.headers.get("Authorization") or "",
                                  conversational=conversational_turn,
                                  client_message_id=client_message_id,
-                                 execution_id=execution_id)
+                                 execution_id=execution_id,
+                                 auto_approve=execution_auto_approve)
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Client disconnected mid-stream; the turn state is already saved.
             pass
