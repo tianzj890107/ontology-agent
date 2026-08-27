@@ -96,7 +96,12 @@ from open_claude.modeling_reliability import (
 )
 from open_claude.modeling_csv_contract import (
     CONTRACTS,
+    HEADER_NORMALIZATION_VERSION,
+    ValidationPhase,
+    header_mismatch_messages,
     logical_entity_assignment_statuses,
+    normalize_csv_blob,
+    normalize_header_cell,
     validate_row_contract,
 )
 from open_claude.event_journal import (
@@ -1000,14 +1005,42 @@ _MODELING_HEADERS = {name: list(contract.headers)
                      for name, contract in CONTRACTS.items()
                      if name in _MODELING_CONTRACT_NAMES}
 
+# Stable upload error categories surfaced per file in /api/minio/upload and
+# rendered by the frontend.  They intentionally distinguish pre-upload
+# validation failures, platform/context failures, object-storage failures and
+# the completion gate, so a format error is never reported as a network error.
+UPLOAD_ARTIFACT_HEADER_INVALID = "UPLOAD_ARTIFACT_HEADER_INVALID"
+UPLOAD_ARTIFACT_ROW_INVALID = "UPLOAD_ARTIFACT_ROW_INVALID"
+UPLOAD_ARTIFACT_NOT_ALLOWED = "UPLOAD_ARTIFACT_NOT_ALLOWED"
+UPLOAD_TASK_CONFLICT = "UPLOAD_TASK_CONFLICT"
+UPLOAD_CONTEXT_UNAVAILABLE = "UPLOAD_CONTEXT_UNAVAILABLE"
+UPLOAD_CONTEXT_INVALID = "UPLOAD_CONTEXT_INVALID"
+UPLOAD_STORAGE_FAILED = "UPLOAD_STORAGE_FAILED"
+UPLOAD_COMPLETION_GATE_PENDING = "UPLOAD_COMPLETION_GATE_PENDING"
 
-def _row_contract_errors(name, rows, assignment_statuses=None):
+
+def _row_contract_errors(name, rows, assignment_statuses=None,
+                        phase=ValidationPhase.FINALIZE):
     """Run the shared deterministic per-row field contract on parsed rows."""
     errors = []
     for finding in validate_row_contract(name, rows[0], rows[1:],
-                                         assignment_statuses=assignment_statuses):
+                                         assignment_statuses=assignment_statuses,
+                                         phase=phase):
         errors.append(finding.message)
     return errors[:20]
+
+
+def _parse_csv_blob(blob):
+    """Decode (BOM-safe) and parse one CSV blob; return (rows, error)."""
+    try:
+        text = bytes(blob).decode("utf-8-sig")
+    except (TypeError, UnicodeDecodeError):
+        return None, ["必须使用 UTF-8 CSV 编码"]
+    try:
+        rows = list(csv.reader(io.StringIO(text, newline="")))
+    except csv.Error as exc:
+        return None, [f"CSV 解析失败: {exc}"]
+    return rows, []
 
 
 def validate_integration_csv(filename, blob):
@@ -1015,26 +1048,25 @@ def validate_integration_csv(filename, blob):
 
     csv.reader is deliberately used instead of counting commas: quoted commas
     and quoted newlines are valid CSV, while unquoted ones must be rejected.
-    Every row is also checked against the shared v0.0.1 field contract
-    (required fields, Y/N booleans, enums, codes, uniqueness and conditional
-    structure) so deterministic format errors are rejected here and again at
-    finalize with the same rules.
+    The header is normalized first (BOM, invisible characters, registered
+    legacy aliases) and compared with a precise per-column diff.  Every row is
+    also checked against the shared v0.0.1 field contract (required fields,
+    Y/N booleans, enums, codes, uniqueness and conditional structure) so
+    deterministic format errors are rejected here and again at finalize with
+    the same rules.  Integration upload is structurally scoped (UPLOAD phase);
+    semantic judgments stay in finalize.
     """
     name = os.path.basename(str(filename or "")).lower()
     expected = _INTEGRATION_HEADERS.get(name)
     if not expected:
         return []
-    try:
-        text = bytes(blob).decode("utf-8-sig")
-    except (TypeError, UnicodeDecodeError):
-        return ["必须使用 UTF-8 CSV 编码"]
-    try:
-        rows = list(csv.reader(io.StringIO(text, newline="")))
-    except csv.Error as exc:
-        return [f"CSV 解析失败: {exc}"]
+    normalized, _notes, _changed = normalize_csv_blob(name, blob)
+    rows, errors = _parse_csv_blob(normalized)
+    if rows is None:
+        return errors
     if not rows or rows[0] != expected:
         actual = rows[0] if rows else []
-        return [f"表头不匹配，期望 {len(expected)} 列 {expected}，实际 {len(actual)} 列 {actual}"]
+        return header_mismatch_messages(name, expected, actual)
     errors = []
     width = len(expected)
     for line_no, row in enumerate(rows[1:], 2):
@@ -1042,66 +1074,92 @@ def validate_integration_csv(filename, blob):
             continue
         if len(row) != width:
             errors.append(f"第 {line_no} 行应有 {width} 列，实际 {len(row)} 列；检查逗号字段是否使用双引号")
-    errors.extend(_row_contract_errors(name, rows))
+    errors.extend(_row_contract_errors(name, rows, phase=ValidationPhase.UPLOAD))
     return errors[:20]
 
 
 def validate_modeling_csv(filename, blob, *, semantic_checks=True,
-                          assignment_statuses=None):
+                          assignment_statuses=None,
+                          phase=ValidationPhase.FINALIZE):
     """Validate a modeling CSV against the shared v0.0.1 field contract.
 
-    Upload (semantic_checks=False) and finalize (True) callers run the same
-    deterministic per-row contract: required fields, Y/N booleans, enum and
-    integer formats, code patterns, in-file uniqueness and conditional
-    structure rules.  The parameter is retained for historical callers; it no
-    longer switches deterministic format rules on and off, because the upload
-    gate must reject exactly the same structural defects the finalize gate
-    blocks.  R1-R5 evidence, evidence sufficiency and cross-file decision
-    consistency stay out of this function and belong to the semantic gate.
+    The deterministic per-row contract (required fields, Y/N booleans, enum
+    and integer formats, code patterns, in-file uniqueness and conditional
+    structure rules) is shared by upload and finalize.  ``phase`` selects the
+    scope: UPLOAD runs only file-internal structural rules (never reads
+    modeling_state.json or audit state); FINALIZE/COMPLETION additionally
+    apply the audit-aware logical-entity assignment rules.  R1-R5 evidence,
+    evidence sufficiency and cross-file decision consistency stay out of this
+    function and belong to the semantic gate.
     """
     name = os.path.basename(str(filename or "")).lower()
     expected = _MODELING_HEADERS.get(name)
     if not expected:
         return []
-    try:
-        text = bytes(blob).decode("utf-8-sig")
-        rows = list(csv.reader(io.StringIO(text, newline="")))
-    except (TypeError, UnicodeDecodeError):
-        return ["必须使用 UTF-8 CSV 编码"]
-    except csv.Error as exc:
-        return [f"CSV 解析失败: {exc}"]
+    normalized, _notes, _changed = normalize_csv_blob(name, blob)
+    rows, errors = _parse_csv_blob(normalized)
+    if rows is None:
+        return errors
     if not rows or rows[0] != expected:
         actual = rows[0] if rows else []
-        return [f"表头不匹配，期望 {len(expected)} 列，实际 {len(actual)} 列；不能使用 id,name,description 临时表头"]
+        return header_mismatch_messages(name, expected, actual)
     width = len(expected)
     errors = []
     for line_no, row in enumerate(rows[1:], 2):
         if row and any(str(value).strip() for value in row) and len(row) != width:
             errors.append(f"第 {line_no} 行应有 {width} 列，实际 {len(row)} 列；检查逗号字段是否使用双引号")
-    errors.extend(_row_contract_errors(name, rows, assignment_statuses))
+    errors.extend(_row_contract_errors(name, rows, assignment_statuses, phase))
     return errors[:20]
+
+
+def validate_modeling_upload_artifact_detailed(filename: str, blob: bytes) -> tuple[bytes, str, list[str]]:
+    """Validate one modeling artifact for upload.
+
+    Returns ``(normalized_blob, code, errors)``.  The upload gate is
+    structurally scoped (``ValidationPhase.UPLOAD``): it checks UTF-8 CSV
+    encoding, parseability, a normalizable/contract-matching header with a
+    precise diff, row widths, template-required fields, Y/N/enum/integer/code
+    formats, in-file uniqueness and file-internal conditional rules.  It never
+    depends on modeling_state.json, logical_entity_decisions.csv or audit
+    assignment status — those belong to the completion gate.  The returned
+    blob carries the canonical header (legacy aliases normalized) and is the
+    exact content that should be uploaded and hashed.
+    """
+    name = os.path.basename(str(filename or "")).lower()
+    expected = _MODELING_HEADERS.get(name)
+    if not expected:
+        return bytes(blob), "", []
+    normalized, _notes, _changed = normalize_csv_blob(name, blob)
+    rows, errors = _parse_csv_blob(normalized)
+    if rows is None:
+        return bytes(blob), UPLOAD_ARTIFACT_ROW_INVALID, errors
+    if not rows or rows[0] != expected:
+        actual = rows[0] if rows else []
+        return normalized, UPLOAD_ARTIFACT_HEADER_INVALID, header_mismatch_messages(name, expected, actual)
+    width = len(expected)
+    errors = []
+    for line_no, row in enumerate(rows[1:], 2):
+        if row and any(str(value).strip() for value in row) and len(row) != width:
+            errors.append(f"第 {line_no} 行应有 {width} 列，实际 {len(row)} 列；检查逗号字段是否使用双引号")
+    errors.extend(_row_contract_errors(name, rows, None, ValidationPhase.UPLOAD))
+    if errors:
+        return normalized, UPLOAD_ARTIFACT_ROW_INVALID, errors[:20]
+    return normalized, "", []
 
 
 def validate_modeling_upload_artifact(filename: str, blob: bytes, cwd: str) -> list[str]:
     """Validate the deterministic per-row field contract before upload.
 
-    The upload entry point deliberately does not run R1-R5 evidence,
-    evidence-sufficiency or formal-eligibility semantics (those stay in the
-    semantic finalize gate), but it must reject the same deterministic
-    format/structure defects that finalize blocks: missing required fields,
-    bad Y/N/enum/integer/code values, in-file duplicates and conditional
-    structure violations.
+    The upload entry point is structurally scoped and deliberately does not
+    run R1-R5 evidence, evidence-sufficiency, audit-assignment or
+    formal-eligibility semantics (those stay in the semantic finalize gate).
+    It does not read modeling_state.json: a well-formed CSV with an empty
+    business-object code and an empty name is uploadable even when the audit
+    ledger has no assignment status for that logical entity.  ``cwd`` is kept
+    for caller compatibility and is not consulted by the structural gate.
     """
-    # Conditional business-object fields are judged against the persisted
-    # modeling_state.json audit status; an empty code without an audit status
-    # is a structural error, never silently treated as NOT_APPLICABLE.
-    assignment_statuses = None
-    if cwd:
-        state = load_modeling_state(_workspace_work_dir(cwd))
-        if isinstance(state, dict):
-            assignment_statuses = logical_entity_assignment_statuses(state)
-    return validate_modeling_csv(filename, blob, semantic_checks=False,
-                                 assignment_statuses=assignment_statuses)
+    _normalized, _code, errors = validate_modeling_upload_artifact_detailed(filename, blob)
+    return errors
 
 def parse_element_for_file(filename):
     """将输出文件名映射为 parseElement；未知文件也按规范化文件名推导。"""
@@ -1781,6 +1839,55 @@ def reopen_completed_mission(task, authorization: str = "") -> tuple[bool, str |
     return True, None
 
 
+def completion_ready_for_task(task, gate_error: str | None = None) -> bool:
+    """Single authoritative computation of whether ``task`` may be completed.
+
+    The upload response and ``Task.summary`` must never disagree, so both use
+    this function.  ``gate_error`` is the result of the full completion gate
+    (``build_completed_callback_payload``) when one has just been evaluated;
+    any blocker forces ``False``.  Without a fresh gate result the function is
+    fail-closed and uses the persisted semantic-validation marker for
+    modeling tasks instead of re-running the expensive gate — the final
+    "完成" click always re-runs the full gate.
+    """
+    if gate_error:
+        return False
+    if not task.task_code or not isinstance(task.mission_context, dict):
+        return False
+    expected = normalize_expected_files(task.mission_context.get("expectedFiles"))
+    kind = task_callback_kind(task)
+    if kind == "integration":
+        expected.add("ok.csv")
+    if not expected:
+        return False
+    uploaded = (task.platform_uploaded_files
+                if isinstance(task.platform_uploaded_files, dict) else {})
+    require_preview = kind == "modeling"
+    if not all(
+        name in uploaded
+        and uploaded[name].get("objectKey")
+        and uploaded[name].get("sha256")
+        and (not require_preview
+             or uploaded[name].get("previewUrl")
+             or uploaded[name].get("fileUrl"))
+        for name in expected
+    ):
+        return False
+    status = str(getattr(task, "status", "") or "").lower()
+    if status in {"queued", "working"} or getattr(task, "active_execution_id", ""):
+        return False
+    platform_status = normalize_platform_status(getattr(task, "platform_status", ""))
+    if platform_status in {"COMPLETED", "FAILED", "CANCELLED"}:
+        return False
+    run_result = getattr(task, "run_result", None)
+    if isinstance(run_result, dict) and str(run_result.get("state") or "").upper() in {"BLOCKED", "FAILED"}:
+        return False
+    if kind == "modeling" and semantic_validation_status(
+            _workspace_work_dir(getattr(task, "cwd", ""))) != "PASSED":
+        return False
+    return True
+
+
 def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
     """Validate uploaded artefacts before automatically reporting completion.
 
@@ -1838,13 +1945,29 @@ def build_completed_callback_payload(task) -> tuple[dict | None, str | None]:
             continue
         try:
             with open(local, "rb") as fh:
-                current_sha256 = hashlib.sha256(fh.read()).hexdigest()
+                local_blob = fh.read()
         except OSError:
             changed.append(name)
             continue
-        if current_sha256 != item.get("sha256"):
-            changed.append(name)
-            continue
+        current_sha256 = hashlib.sha256(local_blob).hexdigest()
+        if item.get("normalized"):
+            # The uploaded object was the canonical-header blob produced by
+            # normalize_csv_blob.  Re-normalize the current local file with
+            # the exact same contract version and compare against the uploaded
+            # hash; a data edit, an unknown header or a contract-version
+            # change must fail closed and require a fresh upload.
+            if str(item.get("normalizationVersion") or "") != HEADER_NORMALIZATION_VERSION:
+                changed.append(name)
+                continue
+            normalized_blob, _notes, _changed = normalize_csv_blob(name, local_blob)
+            if hashlib.sha256(normalized_blob).hexdigest() != item.get("sha256"):
+                changed.append(name)
+                continue
+        else:
+            # Non-normalized (or legacy single-hash) record: raw semantics.
+            if current_sha256 != item.get("sha256"):
+                changed.append(name)
+                continue
         if kind == "modeling":
             preview_url = str(item.get("previewUrl") or item.get("fileUrl") or "").strip()
             if not preview_url:
@@ -2029,8 +2152,6 @@ def _cached_task_artifacts_complete(task) -> bool:
     expected = normalize_expected_files(context.get("expectedFiles"))
     if not expected:
         return False
-    state = load_modeling_state(_workspace_work_dir(task.cwd))
-    assignment_statuses = logical_entity_assignment_statuses(state) if isinstance(state, dict) else None
     for name in expected:
         path = _resolve_workspace_path(task.cwd, f"output/{name}")
         if not path or not os.path.isfile(path):
@@ -2039,7 +2160,11 @@ def _cached_task_artifacts_complete(task) -> bool:
             blob = Path(path).read_bytes()
         except OSError:
             return False
-        if validate_modeling_csv(name, blob, assignment_statuses=assignment_statuses):
+        # Legacy artifact readiness is structurally scoped (UPLOAD phase):
+        # it must not depend on modeling_state.json or audit assignment
+        # status.  Semantic sufficiency for modeling tasks is guarded below
+        # by the persisted finalize marker.
+        if validate_modeling_csv(name, blob, phase=ValidationPhase.UPLOAD):
             return False
     if task_callback_kind(task) == "modeling":
         # Legacy recovery may consume the persisted finalize marker, but it
@@ -4058,24 +4183,9 @@ class Task:
         ev.set()
         return True
 
-    def summary(self) -> dict:
-        completion_ready = False
-        if self.task_code and isinstance(self.mission_context, dict):
-            expected = normalize_expected_files(self.mission_context.get("expectedFiles"))
-            if task_callback_kind(self) == "integration":
-                expected.add("ok.csv")
-            uploaded = (self.platform_uploaded_files
-                        if isinstance(self.platform_uploaded_files, dict) else {})
-            require_preview = task_callback_kind(self) == "modeling"
-            completion_ready = bool(expected) and all(
-                name in uploaded
-                and uploaded[name].get("objectKey")
-                and uploaded[name].get("sha256")
-                and (not require_preview
-                     or uploaded[name].get("previewUrl")
-                     or uploaded[name].get("fileUrl"))
-                for name in expected
-            )
+    def summary(self, completion_ready: bool | None = None) -> dict:
+        if completion_ready is None:
+            completion_ready = completion_ready_for_task(self)
         return {"id": self.id, "project": self.project, "title": self.title,
                 "status": self.status, "created": self.created, "updated": self.updated,
                 "repositoryId": self.repository_id, "taskCode": self.task_code,
@@ -4106,6 +4216,9 @@ class Task:
                 "fileUrl": str(result.get("fileUrl") or ""),
                 "previewUrl": str(result.get("previewUrl") or result.get("fileUrl") or ""),
                 "sha256": str(result.get("sha256") or ""),
+                "sourceSha256": str(result.get("sourceSha256") or ""),
+                "normalized": bool(result.get("normalized")),
+                "normalizationVersion": str(result.get("normalizationVersion") or ""),
                 "uploadedAt": time.time(),
             }
         self.platform_updated = time.time()
@@ -6178,40 +6291,68 @@ class Handler(BaseHTTPRequestHandler):
             f = _resolve_workspace_path(base, str(rel))
             name = os.path.basename(f) if f else os.path.basename(str(rel))
             if name not in allowed_files:
-                results.append({"name": name, "ok": False,
-                                "error": "该文件未在当前任务 execution-context.expectedFiles 中，已跳过"})
+                results.append({
+                    "name": name, "ok": False,
+                    "stage": "STRUCTURAL_VALIDATION",
+                    "code": UPLOAD_ARTIFACT_NOT_ALLOWED,
+                    "error": "该文件未在当前任务 execution-context.expectedFiles 中，已跳过",
+                })
                 continue
             if not f or not os.path.isfile(f):
-                results.append({"name": name, "ok": False, "error": "文件不存在"})
+                results.append({
+                    "name": name, "ok": False,
+                    "stage": "CONTEXT", "code": UPLOAD_CONTEXT_UNAVAILABLE,
+                    "error": "文件不存在",
+                })
                 continue
             try:
                 with open(f, "rb") as fh:
                     blob = fh.read()
             except OSError as e:
-                results.append({"name": name, "ok": False, "error": f"读取失败: {e}"})
+                results.append({
+                    "name": name, "ok": False,
+                    "stage": "CONTEXT", "code": UPLOAD_CONTEXT_UNAVAILABLE,
+                    "error": f"读取失败: {e}",
+                })
                 continue
+            source_sha256 = hashlib.sha256(blob).hexdigest()
+            upload_blob = blob
+            normalized = False
+            normalization_version = ""
             if integration_upload and name.lower() in _INTEGRATION_HEADERS:
                 csv_errors = validate_integration_csv(name, blob)
                 if csv_errors:
                     results.append({
                         "name": name, "ok": False,
+                        "stage": "STRUCTURAL_VALIDATION",
+                        "code": UPLOAD_ARTIFACT_HEADER_INVALID
+                                if any("表头" in item for item in csv_errors)
+                                else UPLOAD_ARTIFACT_ROW_INVALID,
                         "error": "整合结果 CSV 协议校验失败: " + "；".join(csv_errors),
                     })
                     continue
             elif not integration_upload and name.lower() in _MODELING_HEADERS:
-                # Upload is deliberately syntax-only.  Semantic decisions,
-                # R1-R5, evidence, and formal-output/decision consistency are
-                # finalized before this handler is reached.  Keep the call
-                # behind the dedicated upload validator so a legacy semantic
-                # validator cannot be reintroduced here by accident.
-                csv_errors = validate_modeling_upload_artifact(name, blob, base)
+                # Upload is deliberately structural-only.  Semantic decisions,
+                # R1-R5, evidence, audit assignment and formal-output/decision
+                # consistency stay in the finalize/completion gate.  The
+                # dedicated upload validator normalizes the header (registered
+                # legacy aliases -> canonical names), so the blob stored in
+                # MinIO uses the formal standard header and its SHA-256
+                # corresponds to that exact normalized content.
+                upload_blob, upload_code, csv_errors =                     validate_modeling_upload_artifact_detailed(name, blob)
                 if csv_errors:
                     results.append({
                         "name": name, "ok": False,
+                        "stage": "STRUCTURAL_VALIDATION",
+                        "code": upload_code or UPLOAD_ARTIFACT_ROW_INVALID,
                         "error": "建模结果 CSV 基础格式校验失败: " + "；".join(csv_errors),
                     })
                     continue
-            prepared.append((name, blob))
+                normalized = upload_blob != blob
+                if normalized:
+                    normalization_version = HEADER_NORMALIZATION_VERSION
+            prepared.append((name, upload_blob, source_sha256,
+                             normalized, normalization_version))
 
         # Invalid selections must not reopen a completed task or delete its
         # published results.  Reopen only after at least one upload snapshot has
@@ -6239,21 +6380,28 @@ class Handler(BaseHTTPRequestHandler):
                 if not reopened:
                     self._send_json({"error": reopen_error}, status=502)
                     return
-            for name, blob in prepared:
+            for name, blob, source_sha256, normalized, normalization_version in prepared:
                 key = prefix + "/" + name
                 ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
                 try:
                     info = fileserver_put_object(cfg, key, blob, name, ctype)
                     results.append({
-                        "name": name, "ok": True, "key": key,
+                        "name": name, "ok": True, "key": key, "stage": "STORAGE",
                         "sha256": hashlib.sha256(blob).hexdigest(),
+                        "sourceSha256": source_sha256,
+                        "normalized": bool(normalized),
+                        "normalizationVersion": normalization_version,
                         "fileUrl": info.get("fileUrl"),
                         "objectKey": info.get("objectKey") or info.get("object_key") or key,
                         "previewUrl": (info.get("preSignedUrl") or info.get("previewUrl")
                                        or info.get("preview_url") or info.get("fileUrl")),
                     })
                 except Exception as e:
-                    results.append({"name": name, "ok": False, "error": str(e)})
+                    results.append({
+                        "name": name, "ok": False,
+                        "stage": "STORAGE", "code": UPLOAD_STORAGE_FAILED,
+                        "error": f"对象存储上传失败: {e}",
+                    })
             ok_n = sum(1 for r in results if r.get("ok"))
             resp = {"ok": ok_n > 0, "uploaded": ok_n, "total": len(results),
                     "prefix": prefix, "bucket": cfg["bucket"], "results": results}
@@ -6273,13 +6421,23 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 if error:
                     resp["callback"] = {"ok": False, "skipped": True, "error": error}
+                    resp["completionCode"] = UPLOAD_COMPLETION_GATE_PENDING
                 else:
                     resp["callback"] = {
                         "ok": False, "skipped": True,
                         "error": "等待用户点击“完成”确认任务",
                     }
-                resp["completionReady"] = not bool(error)
-                resp["task"] = task.summary()
+                completion_ready = completion_ready_for_task(task, gate_error=error)
+                resp["completionReady"] = completion_ready
+                resp["task"] = task.summary(completion_ready=completion_ready)
+            elif prepared:
+                # Every file passed structural validation but the storage
+                # layer rejected them all: keep per-file results and return an
+                # explicit top-level storage failure (never ok=true).
+                resp["error"] = "所有结果文件对象存储上传失败"
+                resp["code"] = UPLOAD_STORAGE_FAILED
+                self._send_json(resp, status=502)
+                return
             self._send_json(resp)
         finally:
             task.platform_lock.release()

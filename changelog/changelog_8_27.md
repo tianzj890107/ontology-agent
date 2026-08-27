@@ -97,3 +97,28 @@
 - 两服务 `/` 与 `/health` 均 200；`activeRuns=0`、`queuedRuns=0`；`providerInUse/databaseInUse=0`；`coordination` 如实报告 backend=file、quotaScope=process、queueScope=process、multiHostSafe=false。
 - 线上 HTML 已加载新 bundle：`frontend/dist/assets/index-Cogll0Y3.js`、`index-D7obonjB.css`、`ui-Bb9cGRad.js`（47313/47314 一致）；懒加载的 `OntologySigmaPreview-BjlhtHl4.js` 两服务均 200，且主 bundle 已包含“关系聚类可视化”“语义环形可视化”及两个布局说明文案。
 - 两服务日志无 traceback/error/exception；部署前备份目录 `backup-pre-2026-08-27-111442/`、run 索引与任务数据均未改动。
+
+### 本体建模 CSV 上传门禁修复：表头规范化与上传/完成门禁分离
+
+修复 47313“上传到 MinIO”对本体建模 CSV 的两类错误拦截：`entity_relations.csv` 历史兼容字段名称被误报“期望16列、实际16列”；`logical_entities.csv` 业务对象编码为空的逻辑实体因缺少内部审计归属状态被上传门禁拒绝。本次只做本地修改与验证，未部署、未 SSH、未重启、未 commit、未 push。
+
+- 表头规范化（集中式）：在 `modeling_csv_contract.py` 新增 `HEADER_ALIASES` 契约配置与 `normalize_header_cell/normalize_csv_header/normalize_csv_blob/header_mismatch_messages` 纯函数。顺序为 UTF-8 BOM（`utf-8-sig`）→ 首尾空白/零宽字符清理 → 已登记兼容别名映射 → 与正式字段比较；未知字段、错误顺序、少列/多列仍拒绝。`entity_relations.csv` 登记历史等价别名 `源关联属性编码→源业务属性编码`、`目标关联属性编码→目标业务属性编码`。
+- 表头错误信息：不再只显示“期望 N 列、实际 N 列”，改为逐列指出 `第 N 列期望“X”，实际为“Y”`、缺失字段、未知字段；字段集合正确但顺序错误时明确报告“字段顺序不符合模板”。
+- 上传对象规范化：`/api/minio/upload` 对建模 CSV 先在内存中规范化为正式表头，MinIO 对象与响应 `sha256` 均对应规范化后的 blob；本地原始文件不被静默覆盖；历史任务原 CSV 不修改。
+- 上传/完成门禁分离：`validate_row_contract` 新增 `ValidationPhase.UPLOAD/FINALIZE/COMPLETION` 阶段；上传阶段（`validate_modeling_upload_artifact_detailed`）只执行文件自身的确定性结构规则，不再读取 `work/modeling_state.json` 或决策审计。`logical_entities.csv` 空业务对象编码 + 空名称 + 主标志 `N` 可独立上传；空编码+非空名称、空编码+主标志 `Y`、编码存在但名称为空、主标志非法、编码重复仍在上传阶段拒绝。完成门禁保留归属审计（`ASSIGNED`/`NOT_APPLICABLE`/`UNRESOLVED`）、跨文件引用、R1–R5、决策审计覆盖率等语义检查；上传成功但完成门禁未通过时 `completionReady=false`、`completionCode=UPLOAD_COMPLETION_GATE_PENDING`，禁止发送 `SUCCESS`。
+- 多行逐行校验修复：`validate_row_contract` 原先 required 循环遍历全部行，但 boolean/enum/整数/编码/中文名/英文标识/JSON/范围等规则在循环外使用泄漏的 `row/line_no`，只检查最后一个数据行。已重构为单一逐行循环执行全部单行规则，跨行规则（唯一性、主逻辑实体数量、页面显示、跨文件引用）独立聚合；空白行与行宽错误行不参与单行校验且不误判后续行。新增第一行/中间行非法值、多行错误行号、空 BO+主标志 `Y` 位于首行等回归测试。
+- 规范化上传双哈希完成校验：上传记录保存 `sha256`（实际上传规范化 blob）、`sourceSha256`（本地原始文件）、`normalized`、`normalizationVersion`；完成门禁对规范化记录以相同契约版本重新规范化当前本地文件后比较 `sha256`，历史兼容表头上传后可正常完成，上传后修改数据或改成未知表头会被发现；旧记录只有 `sha256` 时保持原始哈希语义。`HEADER_NORMALIZATION_VERSION` 记录规范化契约版本，版本不匹配时 fail-closed 要求重新上传。
+- completionReady 单一权威：新增 `completion_ready_for_task(task, gate_error=None)`，同时考虑上传完整性、任务状态（执行中/已完成/失败/阻断）与建模语义校验持久化标记；`Task.summary()` 默认调用该函数，`/api/minio/upload` 在跑完完整完成门禁后用同一结果同时写入外层 `completionReady` 与 `task.summary(completion_ready=...)`，二者永不矛盾。前端合并 `result.task` 时以服务端外层最终值为准，外层 `false` 不会被内层 `true` 覆盖；新上传开始前清理旧明细，全部成功时关闭 Modal，列表 key 使用 name+index。
+- MinIO 逐文件结果：每个 `results` 项含 `name/ok/stage/code/error`，成功项 `stage=STORAGE`；格式失败 `stage=STRUCTURAL_VALIDATION`（表头 `UPLOAD_ARTIFACT_HEADER_INVALID`、行 `UPLOAD_ARTIFACT_ROW_INVALID`、白名单外 `UPLOAD_ARTIFACT_NOT_ALLOWED`），文件缺失/读取失败 `UPLOAD_CONTEXT_UNAVAILABLE`，对象存储异常 `UPLOAD_STORAGE_FAILED`；部分文件失败时其他合法文件继续上传，全部失败才返回顶层 422，不再把格式校验失败描述成 MinIO 网络失败。
+- 存储全失败状态：全部文件通过结构校验但对象存储全部失败时返回顶层 502 且 `code=UPLOAD_STORAGE_FAILED`、`ok=false`，同时保留逐文件 `results`，不再以 200 静默成功。
+- 前端：`uploadToMinio` 无论是否有顶层 `error` 都展示 `results` 逐文件原因；新增“上传结果明细”Modal（`stage`/`code` 标签 + 完整错误 `pre`）用于长错误；明确区分上传前校验失败、对象存储失败、上传成功但完成门禁未通过，并新增 `.upload-issue-*` 样式。
+- 文档：`API/backend-agent-interaction-api.md` 与 `API/本体MAL层API.md` 明确各正式结果文件可独立上传、上传阶段只做结构校验、完成阶段执行跨文件/审计/语义门禁、历史关系字段别名兼容、上传成功不代表可完成、`completionReady` 语义与逐文件 `stage/code` 契约。
+
+主要文件：
+- `open-claude/open_claude/modeling_csv_contract.py`：`HEADER_ALIASES`、表头规范化、`ValidationPhase`、上传阶段 LE 文件内规则。
+- `open-claude/oc_codex_server.py`：`validate_modeling_csv/validate_integration_csv/validate_modeling_upload_artifact(_detailed)`、上传错误码常量、`/api/minio/upload` 逐文件 `stage/code` 与规范化 blob 上传、`_cached_task_artifacts_complete` 改用 UPLOAD 阶段、`completion_ready_for_task` 统一完成可用性、完成门禁双哈希校验、存储全失败 502。
+- `frontend/src/main.jsx` 与 `frontend/src/styles.css`：逐文件错误展示与上传结果明细 Modal。
+- 新增/更新 `tests/test_upload_gate_separation.py`（63 项：表头规范化、多行逐行校验、LE 上传规则、双哈希完成校验、completionReady 一致性、用户两个实际场景、MinIO API 行为、前端契约）；`tests/test_ontology_knowledge.py` 假任务 `summary()` 兼容新签名。
+
+验证结果：
+- 全量 `pytest tests`：639 passed / 13 skipped / 371 subtests；`py_compile` 改动 Python 文件通过；Node 测试 47/47；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。

@@ -1910,6 +1910,7 @@ function App() {
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [minioUploading, setMinioUploading] = useState(false);
+  const [uploadIssues, setUploadIssues] = useState(null);
   const [ontologyDrawing, setOntologyDrawing] = useState(false);
   const [platformActionLoading, setPlatformActionLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -2466,17 +2467,37 @@ function App() {
     const taskMission = missionIdentity(active);
     if (!taskMission || !active || !selectedFiles.length) return;
     setMinioUploading(true);
+    setUploadIssues(null);
     try {
       const result = await api("/api/minio/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: active.project, paths: selectedFiles, taskCode: taskMission.taskCode, repositoryId: taskMission.repositoryId, taskId: active.id, taskType: MISSION?.taskType || active.taskType || "" }) });
-      if (result.error) { messageApi.error(result.error); return; }
       const failed = (result.results || []).filter((item) => !item.ok);
-      if (result.uploaded) messageApi.success(`已上传 ${result.uploaded}/${result.total || selectedFiles.length} 个文件到 MinIO`);
-      if (failed.length) messageApi.warning(failed.map((item) => `${item.name}: ${item.error}`).join("；"));
-      if (result.task) {
-        setActive(result.task);
-        setTasks((previous) => previous.map((task) => task.id === result.task.id ? { ...task, ...result.task } : task));
+      // 顶层 error 存在时也必须展示 results 中的逐文件原因：可能是部分文件
+      // 校验失败（uploaded>0）或全部失败（顶层 422）。先按文件逐条展示，
+      // 顶层 error 只作为补充提示，避免把“格式校验失败”误报成网络/存储错误。
+      if (failed.length) {
+        setUploadIssues(failed.map((item) => ({
+          name: item.name, ok: false, stage: item.stage || "", code: item.code || "",
+          error: item.error || "未知错误",
+        })));
+      } else {
+        setUploadIssues(null);
       }
-      if (result.completionHint) messageApi.info(result.completionHint);
+      if (result.uploaded) messageApi.success(`已上传 ${result.uploaded}/${result.total || selectedFiles.length} 个文件到 MinIO`);
+      else if (failed.length) messageApi.warning(`没有可上传的合法文件（${failed.length} 个文件校验失败，详见明细）`);
+      if (result.error && !failed.length) messageApi.error(result.error);
+      if (result.task) {
+        // 服务端是 completionReady 的单一权威来源：外层结果优先，内层
+        // task.summary 不得用 true 覆盖外层的 false。
+        const finalReady = typeof result.completionReady === "boolean"
+          ? result.completionReady
+          : result.task.completionReady;
+        const mergedTask = { ...result.task, completionReady: finalReady };
+        setActive(mergedTask);
+        setTasks((previous) => previous.map((task) => task.id === mergedTask.id ? { ...task, ...mergedTask } : task));
+      }
+      if (result.completionReady === false) {
+        messageApi.warning(result.completionHint || "结果已上传，但最终语义校验尚未通过；修复后请再点击“完成”。");
+      } else if (result.completionHint) messageApi.info(result.completionHint);
       else if (result.callback?.skipped) messageApi.info(`尚未完成：${result.callback.error}`);
       else if (result.callback) messageApi.warning(`结果已上传，但完成回写失败：${result.callback.error || "未知错误"}`);
       await loadFiles(active);
@@ -2549,6 +2570,16 @@ function App() {
       <input ref={fileInput} type="file" multiple hidden onChange={onFilesSelected} />
       {preview && <Modal open centered={!previewFullscreen} wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""} className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"} title={<PreviewModalTitle title={preview.path} fullscreen={previewFullscreen} onToggle={() => setPreviewFullscreen((value) => !value)} />} footer={null} width={previewFullscreen ? "100vw" : "88vw"} onCancel={() => { closePreview(); setPreviewFullscreen(false); }}>{preview.ontologyGraph ? <OntologyTreePreview data={preview.ontologyGraph} /> : preview.image ? <img className="preview-image" src={preview.image} alt={preview.path} /> : preview.xlsx ? <SpreadsheetPreview sheets={preview.sheets} /> : preview.csv ? <CsvPreview text={preview.text} /> : <pre className="preview-text">{preview.text}</pre>}</Modal>}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} meta={meta} model={model} onModel={onModel} params={params} onParams={onParams} provider={provider} keyValue={keyValue} setKeyValue={setKeyValue} onSaveKey={onSaveKey} />
+      <Modal open={Boolean(uploadIssues)} title="上传结果明细" footer={null} width={720} onCancel={() => setUploadIssues(null)} destroyOnClose>
+        <div className="upload-issue-list">
+          {uploadIssues && uploadIssues.map((issue, index) => (
+            <div className="upload-issue-item" key={`${issue.name}-${index}`}>
+              <div className="upload-issue-head"><strong>{issue.name}</strong>{issue.stage ? <Tag>{issue.stage}</Tag> : null}{issue.code ? <Tag color="red">{issue.code}</Tag> : null}</div>
+              <pre className="upload-issue-error">{issue.error}</pre>
+            </div>
+          ))}
+        </div>
+      </Modal>
       {MISSION && <MissionInfo open={missionInfoOpen} context={missionContext} loading={missionLoading} onClose={() => setMissionInfoOpen(false)} />}
     </div>
   </ConfigProvider>;

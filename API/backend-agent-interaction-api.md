@@ -274,6 +274,17 @@ metricArtifact           （指标分析）
 - 正式结果只写入 `output/`，只生成 `parseElements` 已选择且 `expectedFiles` 允许的文件；不得额外生成未选择类型的 CSV。
 - artifact 的 `dependsOn`、执行顺序和跨任务引用用于描述分析血缘与质量检查，不作为正式结果文件之间的上传阻断条件。
 
+#### 上传门禁与完成门禁分离
+
+`/api/minio/upload` 对每个选中文件单独校验并返回独立结果：
+
+- **上传门禁（结构校验）**：只做文件自身可判断的确定性检查——UTF-8 CSV 编码、可解析、表头可规范化且与正式契约一致（含 BOM/首尾空白/零宽字符清理，以及已登记的历史兼容别名映射）、行列数、模板必填字段、Y/N/枚举/整数/编码格式、文件内编码唯一、文件内条件一致性、上传白名单与路径隔离。上传阶段**不**读取 `work/modeling_state.json`、`logical_entity_decisions.csv`，也不要求逻辑实体在内部审计中有归属状态。
+- **表头兼容别名**：`entity_relations.csv` 的历史字段 `源关联属性编码`→`源业务属性编码`、`目标关联属性编码`→`目标业务属性编码` 在契约中登记为等价别名；上传时会先在内存中把表头规范化为正式标准表头，MinIO 中保存的对象与记录的 SHA-256 都对应规范化后的内容。每条上传记录保存 `sha256`（实际上传 blob）、`sourceSha256`（本地原始文件）、`normalized` 与 `normalizationVersion`；完成门禁对规范化记录会以相同契约版本重新规范化当前本地文件后再比较哈希，因此历史兼容表头上传后仍可完成，而上传后修改数据或改成未知表头会被发现。未知字段、字段顺序错误、少列/多列仍被拒绝，错误信息会指出具体列号、期望字段、实际字段、缺失字段和未知字段。
+- **逻辑实体空业务对象**：`logical_entities.csv` 中业务对象编码为空时，只要业务对象名称也为空且是否主逻辑实体为 `N`，即可独立上传，不要求增加归属状态字段，也不要求审计中必须存在该逻辑实体。空编码但名称非空、空编码但主标志为 `Y`、编码存在但名称为空、主标志非法、逻辑实体编码重复等文件内矛盾仍在上传阶段拒绝。
+- **完成门禁（语义校验）**：跨文件引用、R1–R5 证据、决策审计覆盖率、正式输出与 Decision Layer 一致性、每个空业务对象逻辑实体的可审计归属状态（`ASSIGNED`/`NOT_APPLICABLE`/`UNRESOLVED`）及 `NOT_APPLICABLE` 的分类/原因/证据等，只在用户点击“完成”或最终语义校验时执行。
+- **上传成功 ≠ 可以完成**：上传成功后任务仍保持 `RUNNING`；若完成门禁未通过，响应中 `completionReady=false`、`completionCode=UPLOAD_COMPLETION_GATE_PENDING`，此时不能发送 `SUCCESS`。`completionReady` 与 `task.completionReady` 来自同一个权威计算（上传完整性、任务状态、建模语义校验标记），二者在同一响应中永远一致，前端不得用内层 `true` 覆盖外层 `false`。上传成功的逐文件结果 `stage=STORAGE`；格式校验失败为 `stage=STRUCTURAL_VALIDATION`，对象存储失败为 `stage=STORAGE` + `UPLOAD_STORAGE_FAILED`，上下文/文件缺失为 `UPLOAD_CONTEXT_UNAVAILABLE`，白名单外文件为 `UPLOAD_ARTIFACT_NOT_ALLOWED`，表头错误为 `UPLOAD_ARTIFACT_HEADER_INVALID`，行级错误为 `UPLOAD_ARTIFACT_ROW_INVALID`。部分文件失败时其他合法文件仍继续上传；全部为结构校验失败返回顶层 422；全部通过结构校验但对象存储全部失败时返回顶层 502 且 `code=UPLOAD_STORAGE_FAILED`，同时保留逐文件 `results`。
+- 每个 `results` 项包含 `name`、`ok`、`stage`、`code`、`error`，成功项还包含 `sha256`（对应实际上传的规范化 blob）、`sourceSha256`、`normalized`、`normalizationVersion` 与对象存储 `objectKey`/`previewUrl`。
+
 ## 5. 消歧整合接口
 
 ### 5.1 获取执行上下文

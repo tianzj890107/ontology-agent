@@ -16,9 +16,12 @@ only evaluated when the caller supplies a reference index (finalize).
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Iterable, Mapping, Sequence
 
 # ---------------------------------------------------------------- dictionaries
@@ -59,6 +62,136 @@ ASSIGNMENT_STATUS_MISSING = "FORMAL_CONTRACT_ASSIGNMENT_STATUS_MISSING"
 ASSIGNMENT_CONFLICT = "FORMAL_CONTRACT_ASSIGNMENT_CONFLICT"
 
 ERROR = "ERROR"
+
+# ------------------------------------------------------------------ phases
+class ValidationPhase(Enum):
+    """Where a validation runs; gates deliberately differ in scope.
+
+    UPLOAD runs only deterministic, file-internal structural rules and never
+    depends on modeling_state.json, decision audits or cross-file state.
+    FINALIZE/COMPLETION add audit-aware and semantic judgments.
+    """
+
+    UPLOAD = "UPLOAD"
+    FINALIZE = "FINALIZE"
+    COMPLETION = "COMPLETION"
+
+
+# ------------------------------------------------------------------ headers
+# Header aliases are part of the contract configuration: a legacy field name
+# may map to its canonical formal name only when the historical template or
+# formal output proves the same business meaning.  Everything else (unknown
+# fields, reordered fields) stays a structural error.
+HEADER_ALIASES: dict[str, dict[str, str]] = {
+    "entity_relations.csv": {
+        "源关联属性编码": "源业务属性编码",
+        "目标关联属性编码": "目标业务属性编码",
+    },
+}
+
+# Version of the header-normalization contract.  Uploaded records carry the
+# version used to produce the normalized object; the completion gate only
+# re-normalizes with the exact same version and fails closed on a mismatch
+# (e.g. a future alias/rule change requires a fresh upload).
+HEADER_NORMALIZATION_VERSION = "2026-08-27.1"
+
+# Zero-width and other invisible header characters that must never reach the
+# contract comparison.  BOM is handled separately by utf-8-sig decoding.
+_HEADER_INVISIBLE = "".join([
+    "\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00a0", "\u200e", "\u200f",
+])
+
+
+def normalize_header_cell(value: Any) -> str:
+    """Strip whitespace and invisible header characters from one field name."""
+    text = str(value or "")
+    for char in _HEADER_INVISIBLE:
+        text = text.replace(char, "")
+    return text.strip()
+
+
+def normalize_csv_header(filename: str, header: Sequence[str]) -> tuple[list[str], list[str], bool]:
+    """Return (normalized_header, notes, changed) for one formal CSV.
+
+    Only explicitly registered aliases are applied; unknown headers are left
+    untouched so the caller can report a precise mismatch instead of guessing.
+    """
+    name = canonical_filename(filename)
+    aliases = HEADER_ALIASES.get(name, {})
+    normalized: list[str] = []
+    notes: list[str] = []
+    changed = False
+    for column, cell in enumerate(header, 1):
+        clean = normalize_header_cell(cell)
+        mapped = aliases.get(clean, clean)
+        if mapped != cell:
+            changed = True
+            if clean != cell:
+                notes.append(f"第 {column} 列字段“{cell}”已清理不可见字符/首尾空白")
+            if mapped != clean:
+                notes.append(f"第 {column} 列字段“{clean}”按历史兼容别名规范化为“{mapped}”")
+        normalized.append(mapped)
+    return normalized, notes, changed
+
+
+def normalize_csv_blob(filename: str, blob: bytes) -> tuple[bytes, list[str], bool]:
+    """Deterministically normalize one formal CSV blob's header.
+
+    Returns ``(normalized_blob, findings, changed)``.  BOM is dropped,
+    invisible characters are removed and registered legacy aliases are mapped
+    to canonical field names.  Data field values and row order are preserved,
+    but the CSV serialization format may change (``csv.writer`` re-quotes and
+    normalizes line endings), so hashes must always refer to the exact blob
+    that is uploaded rather than the original file.
+    """
+    name = canonical_filename(filename)
+    if contract_for(name) is None:
+        return bytes(blob), [], False
+    try:
+        text = bytes(blob).decode("utf-8-sig")
+        rows = list(csv.reader(io.StringIO(text, newline="")))
+    except (TypeError, UnicodeDecodeError, csv.Error):
+        return bytes(blob), [], False
+    if not rows:
+        return bytes(blob), [], False
+    normalized, notes, changed = normalize_csv_header(name, rows[0])
+    if not changed:
+        return bytes(blob), [], False
+    rows[0] = normalized
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerows(rows)
+    return buffer.getvalue().encode("utf-8"), notes, True
+
+
+def header_mismatch_messages(name: str, expected: Sequence[str],
+                             actual: Sequence[str]) -> list[str]:
+    """Build precise header-diff messages instead of a bare column count.
+
+    Messages include the file name, column numbers, expected/actual values,
+    missing fields, extra fields, and a dedicated message for reordered
+    fields.  BOM/whitespace/invisible characters are normalized first so only
+    real differences are reported.
+    """
+    expected = list(expected)
+    actual = [normalize_header_cell(cell) for cell in actual]
+    missing = [field for field in expected if field not in actual]
+    extra = [field for field in actual if field not in expected]
+    if set(actual) == set(expected) and len(actual) == len(expected):
+        return [f"{name} 表头字段集合正确，但字段顺序不符合模板；请按模板顺序排列 {len(expected)} 列"]
+    lines = [f"{name} 表头不匹配："]
+    for column, (exp, act) in enumerate(zip(expected, actual), 1):
+        if exp != act:
+            lines.append(f"第 {column} 列期望“{exp}”，实际为“{act}”")
+    if len(actual) < len(expected):
+        lines.append(f"缺少 {len(expected) - len(actual)} 列，共 {len(actual)} 列，期望 {len(expected)} 列")
+    elif len(actual) > len(expected):
+        lines.append(f"多出 {len(actual) - len(expected)} 列，共 {len(actual)} 列，期望 {len(expected)} 列")
+    if missing:
+        lines.append("缺失字段：" + "、".join(missing))
+    if extra:
+        lines.append("未知字段：" + "、".join(extra))
+    return ["\n".join(lines)]
 
 
 @dataclass(frozen=True)
@@ -468,7 +601,8 @@ def build_reference_index(rows_by_file: Mapping[str, Sequence[Mapping[str, Any]]
 
 def validate_row_contract(filename: str, header: Sequence[str], rows: Iterable[Sequence[str]],
                           *, references: Mapping[str, set[str]] | None = None,
-                          assignment_statuses: Mapping[str, str] | None = None) -> list[ContractFinding]:
+                          assignment_statuses: Mapping[str, str] | None = None,
+                          phase: ValidationPhase = ValidationPhase.FINALIZE) -> list[ContractFinding]:
     """Run the deterministic per-row contract for one formal CSV.
 
     Header-aware rules (required fields, booleans, uniqueness, conditional
@@ -499,6 +633,90 @@ def validate_row_contract(filename: str, header: Sequence[str], rows: Iterable[S
                     message=f"第 {line_no} 行 {field} 必填，不能为空", field=field, row=line_no,
                     artifact_id=_nullable(row.get(next((f for f in contract.required
                                                         if f in column_index and f != field), field))) or ""))
+        for field in contract.boolean:
+            if field not in column_index:
+                continue
+            value = _nullable(row.get(field)).upper()
+            if value not in {"Y", "N"}:
+                findings.append(ContractFinding(
+                    code=BOOLEAN, severity=ERROR,
+                    message=f"第 {line_no} 行 {field} 必须为 Y 或 N，不能留空或使用其他值",
+                    field=field, row=line_no, artifact_id=_nullable(row.get(field))))
+        if canonical:
+            for field, allowed in contract.enum.items():
+                if field not in column_index:
+                    continue
+                value = _nullable(row.get(field))
+                if value and value not in allowed:
+                    findings.append(ContractFinding(
+                        code=ENUM, severity=ERROR,
+                        message=f"第 {line_no} 行 {field}“{value}”不在契约字典 {list(allowed)} 中",
+                        field=field, row=line_no, artifact_id=value))
+            for field in contract.non_negative_int:
+                if field not in column_index:
+                    continue
+                value = _nullable(row.get(field))
+                if value and not re.fullmatch(r"\d+", value):
+                    findings.append(ContractFinding(
+                        code=INTEGER, severity=ERROR,
+                        message=f"第 {line_no} 行 {field}“{value}”必须是非负整数",
+                        field=field, row=line_no, artifact_id=value))
+            for field, pattern in contract.code_pattern.items():
+                if field not in column_index:
+                    continue
+                value = _nullable(row.get(field))
+                if value and not re.fullmatch(pattern, value):
+                    findings.append(ContractFinding(
+                        code=CODE_FORMAT, severity=ERROR,
+                        message=f"第 {line_no} 行 {field}“{value}”不符合编码格式 {pattern}",
+                        field=field, row=line_no, artifact_id=value))
+            for field in contract.chinese_name:
+                if field not in column_index:
+                    continue
+                value = _nullable(row.get(field))
+                if value and re.search(r"[A-Za-z]", value):
+                    findings.append(ContractFinding(
+                        code=CHINESE_NAME, severity=ERROR,
+                        message=f"第 {line_no} 行 {field}“{value}”是中文名称，不能混入英文字母；英文内容应放入对应英文名称列",
+                        field=field, row=line_no, artifact_id=value))
+            for field in contract.english_identifier:
+                if field not in column_index:
+                    continue
+                value = _nullable(row.get(field))
+                if value and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", value):
+                    findings.append(ContractFinding(
+                        code=ENGLISH_FORMAT, severity=ERROR,
+                        message=f"第 {line_no} 行 {field}“{value}”不符合英文标识格式",
+                        field=field, row=line_no, artifact_id=value))
+            for field in contract.json_array:
+                if field not in column_index:
+                    continue
+                value = _nullable(row.get(field))
+                if value:
+                    try:
+                        parsed = json.loads(value)
+                    except ValueError:
+                        parsed = None
+                    if not isinstance(parsed, list):
+                        findings.append(ContractFinding(
+                            code=JSON_ARRAY, severity=ERROR,
+                            message=f"第 {line_no} 行 {field}“{value}”必须是合法 JSON 数组",
+                            field=field, row=line_no, artifact_id=value))
+            for field, (low, high) in contract.numeric_range.items():
+                if field not in column_index:
+                    continue
+                value = _nullable(row.get(field))
+                if value:
+                    try:
+                        number = float(value)
+                    except ValueError:
+                        number = None
+                    if number is None or (low is not None and number < low) or (high is not None and number > high):
+                        bounds = f"{low}~{high}" if low is not None and high is not None else "合法范围"
+                        findings.append(ContractFinding(
+                            code=NUMERIC_RANGE, severity=ERROR,
+                            message=f"第 {line_no} 行 {field}“{value}”必须是 {bounds} 之间的数字",
+                            field=field, row=line_no, artifact_id=value))
     # Conditional business-object fields for logical entities.  The formal CSV
     # has no assignment-status column; the audit state maps logical-entity
     # codes to ASSIGNED/NOT_APPLICABLE/UNRESOLVED.  Without an audit status an
@@ -512,10 +730,28 @@ def validate_row_contract(filename: str, header: Sequence[str], rows: Iterable[S
             entity_code = _nullable(row.get("逻辑实体编码"))
             if not entity_code:
                 continue
-            status = _nullable((assignment_statuses or {}).get(entity_code)).upper()
             bo_code = _nullable(row.get("业务对象编码"))
             bo_name = _nullable(row.get("业务对象名称"))
             main_flag = _nullable(row.get("是否主逻辑实体")).upper()
+            if phase is ValidationPhase.UPLOAD:
+                # Upload gate: deterministic file-internal structure only.
+                # An empty business-object code is legal when the name is
+                # also empty and the main flag is N; audit assignment status
+                # (ASSIGNED/NOT_APPLICABLE/UNRESOLVED) is a completion-gate
+                # judgment and is never required by the upload gate.  The
+                # main-flag-without-BO rule below still rejects main=Y.
+                if bo_code and not bo_name and "业务对象名称" in column_index:
+                    findings.append(ContractFinding(
+                        code=REQUIRED_FIELD, severity=ERROR,
+                        message=f"第 {line_no} 行逻辑实体 {entity_code} 业务对象编码存在时业务对象名称必填",
+                        field="业务对象名称", row=line_no, artifact_id=entity_code))
+                elif not bo_code and bo_name and "业务对象编码" in column_index:
+                    findings.append(ContractFinding(
+                        code=ASSIGNMENT_CONFLICT, severity=ERROR,
+                        message=f"第 {line_no} 行逻辑实体 {entity_code} 业务对象编码为空但业务对象名称非空，两者必须同时为空或同时填写",
+                        field="业务对象编码", row=line_no, artifact_id=entity_code))
+                continue
+            status = _nullable((assignment_statuses or {}).get(entity_code)).upper()
             if status == "ASSIGNED":
                 if "业务对象编码" in column_index and not bo_code:
                     findings.append(ContractFinding(
@@ -556,91 +792,6 @@ def validate_row_contract(filename: str, header: Sequence[str], rows: Iterable[S
                     message=f"第 {line_no} 行逻辑实体 {entity_code} 业务对象编码为空，"
                             "但没有可审计的归属状态（ASSIGNED/NOT_APPLICABLE/UNRESOLVED）",
                     field="业务对象编码", row=line_no, artifact_id=entity_code))
-    for field in contract.boolean:
-        if field not in column_index:
-            continue
-        value = _nullable(row.get(field)).upper()
-        if value not in {"Y", "N"}:
-            findings.append(ContractFinding(
-                code=BOOLEAN, severity=ERROR,
-                message=f"第 {line_no} 行 {field} 必须为 Y 或 N，不能留空或使用其他值",
-                field=field, row=line_no, artifact_id=_nullable(row.get(field))))
-    if canonical:
-        for field, allowed in contract.enum.items():
-            if field not in column_index:
-                continue
-            value = _nullable(row.get(field))
-            if value and value not in allowed:
-                findings.append(ContractFinding(
-                    code=ENUM, severity=ERROR,
-                    message=f"第 {line_no} 行 {field}“{value}”不在契约字典 {list(allowed)} 中",
-                    field=field, row=line_no, artifact_id=value))
-        for field in contract.non_negative_int:
-            if field not in column_index:
-                continue
-            value = _nullable(row.get(field))
-            if value and not re.fullmatch(r"\d+", value):
-                findings.append(ContractFinding(
-                    code=INTEGER, severity=ERROR,
-                    message=f"第 {line_no} 行 {field}“{value}”必须是非负整数",
-                    field=field, row=line_no, artifact_id=value))
-        for field, pattern in contract.code_pattern.items():
-            if field not in column_index:
-                continue
-            value = _nullable(row.get(field))
-            if value and not re.fullmatch(pattern, value):
-                findings.append(ContractFinding(
-                    code=CODE_FORMAT, severity=ERROR,
-                    message=f"第 {line_no} 行 {field}“{value}”不符合编码格式 {pattern}",
-                    field=field, row=line_no, artifact_id=value))
-        for field in contract.chinese_name:
-            if field not in column_index:
-                continue
-            value = _nullable(row.get(field))
-            if value and re.search(r"[A-Za-z]", value):
-                findings.append(ContractFinding(
-                    code=CHINESE_NAME, severity=ERROR,
-                    message=f"第 {line_no} 行 {field}“{value}”是中文名称，不能混入英文字母；英文内容应放入对应英文名称列",
-                    field=field, row=line_no, artifact_id=value))
-        for field in contract.english_identifier:
-            if field not in column_index:
-                continue
-            value = _nullable(row.get(field))
-            if value and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", value):
-                findings.append(ContractFinding(
-                    code=ENGLISH_FORMAT, severity=ERROR,
-                    message=f"第 {line_no} 行 {field}“{value}”不符合英文标识格式",
-                    field=field, row=line_no, artifact_id=value))
-        for field in contract.json_array:
-            if field not in column_index:
-                continue
-            value = _nullable(row.get(field))
-            if value:
-                try:
-                    parsed = json.loads(value)
-                except ValueError:
-                    parsed = None
-                if not isinstance(parsed, list):
-                    findings.append(ContractFinding(
-                        code=JSON_ARRAY, severity=ERROR,
-                        message=f"第 {line_no} 行 {field}“{value}”必须是合法 JSON 数组",
-                        field=field, row=line_no, artifact_id=value))
-        for field, (low, high) in contract.numeric_range.items():
-            if field not in column_index:
-                continue
-            value = _nullable(row.get(field))
-            if value:
-                try:
-                    number = float(value)
-                except ValueError:
-                    number = None
-                if number is None or (low is not None and number < low) or (high is not None and number > high):
-                    bounds = f"{low}~{high}" if low is not None and high is not None else "合法范围"
-                    findings.append(ContractFinding(
-                        code=NUMERIC_RANGE, severity=ERROR,
-                        message=f"第 {line_no} 行 {field}“{value}”必须是 {bounds} 之间的数字",
-                        field=field, row=line_no, artifact_id=value))
-
     if contract.main_entity_count and "是否主逻辑实体" in column_index:
         groups: dict[str, list[tuple[int, Mapping[str, str]]]] = {}
         for line_no, row in data:

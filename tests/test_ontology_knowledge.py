@@ -649,7 +649,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     def refresh_modeling_artifacts(self):
                         self.modeling_plan = server.build_modeling_plan(self.mission_context, self.repository_id, self.task_code)
 
-                    def summary(self):
+                    def summary(self, completion_ready=None):
                         return {"id": self.id, "platformStatus": self.platform_status,
                                 "uploadedResultCount": len(self.platform_uploaded_files)}
 
@@ -1140,7 +1140,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                         self.modeling_plan = server.build_modeling_plan(
                             self.mission_context, self.repository_id, self.task_code)
 
-                    def summary(self):
+                    def summary(self, completion_ready=None):
                         return {"id": self.id, "platformStatus": self.platform_status,
                                 "uploadedResultCount": len(self.platform_uploaded_files)}
 
