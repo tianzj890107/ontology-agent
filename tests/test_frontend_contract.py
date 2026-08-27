@@ -287,7 +287,14 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('function hasMissionOutputFiles(files = [])', source)
         self.assertIn('const shouldOpenFiles = hasMissionOutputFiles(loadedFiles);', source)
         self.assertIn('if (shouldOpenFiles) setFilesOpen(true);', source)
-        self.assertIn('startsWith("mission-output/")', source)
+        self.assertIn('startsWith("output/")', source)
+        self.assertIn('GROUP_LABELS', source)
+        self.assertIn('输入', source)
+        self.assertIn('工作', source)
+        self.assertIn('输出', source)
+        self.assertNotIn('mission-output', source)
+        self.assertNotIn('mission-input', source)
+        self.assertNotIn('mission-work', source)
         self.assertIn('!files.length && !mission && !workspaceFolders ? <Empty description="暂无文件" />', source)
         self.assertIn('className="file-group-empty">暂无文件', source)
         self.assertIn('modelingPlan: "分层建模计划"', source)
@@ -463,22 +470,70 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('.ontology-tree-scroll{', styles)
         self.assertIn('.ontology-layer-filter-button{', styles)
         self.assertIn('.preview-modal-title>button{position:absolute;top:12px;right:48px;', styles)
-        # The existing visualization button now opens Sigma/ForceAtlas2 by
-        # Sigma opens first; ECharts remains an explicit fallback and is not initialized yet.
-        self.assertIn('const [viewMode, setViewMode] = useState("sigma");', source)
+        # 打开预览默认优先展示关系聚类可视化（Sigma/ForceAtlas2）；
+        # 语义环形布局（ECharts）不在首次打开时初始化，仅后台预载资源。
+        self.assertIn('const [layoutMode, setLayoutMode] = useState("network");', source)
         self.assertIn('window.requestIdleCallback(preload, { timeout: 1500 })', source)
-        self.assertIn('key={`echarts:${appliedLayers.join("|")}`}', source)
-        self.assertIn('>环形图</button>', source)
-        self.assertIn('>网络图</button>', source)
+        self.assertIn('key={`radial:${layerKey}`}', source)
+        self.assertIn('key={`network:${layerKey}`}', source)
         self.assertNotIn('ForceAtlas2 Beta', sigma_preview)
-        self.assertIn('<OntologyEChartsPreview key={`echarts:${appliedLayers.join("|")}`} data={data} appliedLayers={appliedLayers} />', source)
-        self.assertIn('<OntologySigmaPreview key={`sigma:${appliedLayers.join("|")}`} data={data} appliedLayers={appliedLayers} />', source)
+        self.assertIn('<OntologyEChartsPreview key={`radial:${layerKey}`} data={data} appliedLayers={appliedLayers} onError={handleLayoutError} />', source)
+        self.assertIn('<OntologySigmaPreview data={data} appliedLayers={appliedLayers} />', source)
         self.assertIn('import Sigma from "sigma";', sigma_preview)
         self.assertIn('buildGraphologyGraph(data, appliedLayers)', sigma_preview)
         self.assertIn('layoutOntologyForceAtlas(graph, { targetAspect:', sigma_preview)
         self.assertIn('renderer?.kill();', sigma_preview)
+        self.assertNotIn('ontology-sigma-actions', sigma_preview)
+        self.assertNotIn('重新布局', sigma_preview)
         self.assertIn('export const FORCE_ATLAS_CONFIG = Object.freeze({', force_layout)
         self.assertIn('forceAtlas2.assign(graph, {', force_layout)
+
+    def test_ontology_preview_unified_layout_selector(self):
+        source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
+        styles = (ROOT / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+        sigma_preview = (ROOT / "frontend" / "src" / "OntologySigmaPreview.jsx").read_text(encoding="utf-8")
+        options_module = (ROOT / "frontend" / "src" / "ontologyLayoutOptions.js").read_text(encoding="utf-8")
+        # 左侧环状图/网络图入口已删除，右侧不再有“重新布局”常驻按钮。
+        self.assertNotIn('ontology-view-switch', source)
+        self.assertNotIn('>环形图</button>', source)
+        self.assertNotIn('>网络图</button>', source)
+        self.assertNotIn('重新布局', source)
+        self.assertNotIn('ontology-sigma-actions', sigma_preview)
+        self.assertNotIn('ForceAtlas2', sigma_preview)
+        self.assertNotIn('网络图', sigma_preview)
+        # 统一“布局”下拉框：标签、控件与两个选项。
+        self.assertIn('className="ontology-layout-selector"', source)
+        self.assertIn('className="ontology-layout-label">布局</span>', source)
+        self.assertIn('aria-label="布局"', source)
+        self.assertIn('关系聚类可视化', options_module)
+        self.assertIn('语义环形可视化', options_module)
+        # 两个布局选项的说明提示文案。
+        self.assertIn('ForceAtlas2 是一种先进的力导向图布局', options_module)
+        self.assertIn('按照业务对象、逻辑实体、业务属性等语义层级，由内向外分层排列节点', options_module)
+        # 默认展示关系聚类可视化；语义环形布局在后台准备、选择后真正切换。
+        self.assertIn('const [layoutMode, setLayoutMode] = useState("network");', source)
+        self.assertIn('const radialLayout = layoutMode === "radial";', source)
+        self.assertIn('<OntologySigmaPreview data={data} appliedLayers={appliedLayers} />', source)
+        self.assertIn('void import("echarts")', source)
+        self.assertIn('正在加载语义环形布局…', source)
+        self.assertIn('正在加载关系布局…', source)
+        # 切换布局后自动重新计算并 fit；不依赖独立“重新布局”按钮。
+        self.assertIn('camera.animatedReset({ duration: 300 })', sigma_preview)
+        self.assertNotIn('layoutVersion', sigma_preview)
+        # draftLayers 不参与重算；appliedLayers 确认后才作为缓存 key 重建布局。
+        self.assertNotIn('draftLayers.join', source)
+        self.assertIn('const layerKey = appliedLayers.join("|");', source)
+        self.assertIn('key={`radial:${layerKey}`}', source)
+        self.assertIn('key={`network:${layerKey}`}', source)
+        # 切换失败保留上一成功布局并恢复下拉框。
+        self.assertIn('lastGoodLayoutRef', source)
+        self.assertIn('handleLayoutError', source)
+        self.assertIn('布局加载失败，已恢复上一个可用布局。', source)
+        # 工具栏一行排列：布局选择器、图层筛选、全屏、关闭保持同一行。
+        self.assertIn('.ontology-toolbar{', styles)
+        self.assertIn('.ontology-layout-selector{', styles)
+        self.assertIn('.ontology-layout-error{', styles)
+        self.assertIn('.ontology-tree-loading-overlay{', styles)
 
 
     def test_continue_run_preserves_event_cursor_and_guards_double_submit(self):

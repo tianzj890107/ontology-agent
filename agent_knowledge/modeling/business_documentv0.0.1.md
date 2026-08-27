@@ -43,7 +43,7 @@ PDF文档：业务规范、制度文件、行业标准文档、业务手册
 
 ## 文档建模输入与输出契约
 
-`DOCUMENT_MODELING` 任务会把 DOCX、PPTX、PDF 下载到当前任务的 `mission-input/`，由服务端为每个原文件生成 `manifest.json`、`content.md` 和 `tables/*.csv`。必须先读取 manifest，再完整读取正文、全部章节/页和全部表格；证据引用必须包含文件名以及章节或页码。
+`DOCUMENT_MODELING` 任务会把 DOCX、PPTX、PDF 下载到当前任务的 `input/`，由服务端为每个原文件生成 `manifest.json`、`content.md` 和 `tables/*.csv`。必须先读取 manifest，再完整读取正文、全部章节/页和全部表格；证据引用必须包含文件名以及章节或页码。
 
 文档中的业务语义按 `parseElement` 选择输出，文件名不能自行改名或扩展：
 
@@ -62,4 +62,4 @@ PDF文档：业务规范、制度文件、行业标准文档、业务手册
 | `ACTIVITY` | `activities.csv` | 仅在 execution-context 声明时输出 |
 | `ACTIVITY_FLOW` | `activity_flows.csv`（兼容 `activity_flow.csv`） | 仅在 execution-context 声明时输出 |
 
-只生成并上传 execution-context 的 `expectedFiles` 中列出的文件。各结果文件可以独立导出；共享分析结果统一写入任务目录的 `mission-work/modeling_state.json`，不得把 `mission-output` 中的正式文件当作识别输入。未选择的解析要素不得因文档内容丰富而额外生成文件。
+只生成并上传 execution-context 的 `expectedFiles` 中列出的文件。各结果文件可以独立导出；共享分析结果统一写入任务目录的 `work/modeling_state.json`，不得把 `output` 中的正式文件当作识别输入。未选择的解析要素不得因文档内容丰富而额外生成文件。

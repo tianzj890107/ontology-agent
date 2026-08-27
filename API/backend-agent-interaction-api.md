@@ -140,7 +140,7 @@ X-Ontology-Repository-Id: 1
 - `RUNNING`：重复获取 context 幂等返回。
 - `SUCCESS`：拒绝再次获取 context。为兼容历史平台数据，Agent 读取状态时仍将 `SUCCEED`、`COMPLETED` 等旧成功状态按已完成处理；新回调统一发送 `SUCCESS`。
 
-数据库连接密码兼容平台的 `ConnectionConfigCrypto` 加密格式：`Base64(12 字节 IV || AES-GCM 密文+16 字节 Tag)`，密钥为部署配置 `ontology.crypto.secret` 解码后的 32 字节 AES-256 密钥。服务启动时检查该配置；加密凭据缺少密钥、解密失败或 Tag 校验失败时直接返回 `DATABASE_CREDENTIAL_DECRYPTION_FAILED`，禁止把密文透传给数据库。任务的 `mission-input/.db_connection.json` 保留密文，数据库 helper 只在内存中解密，不把明文写入任务文件或对话上下文。
+数据库连接密码兼容平台的 `ConnectionConfigCrypto` 加密格式：`Base64(12 字节 IV || AES-GCM 密文+16 字节 Tag)`，密钥为部署配置 `ontology.crypto.secret` 解码后的 32 字节 AES-256 密钥。服务启动时检查该配置；加密凭据缺少密钥、解密失败或 Tag 校验失败时直接返回 `DATABASE_CREDENTIAL_DECRYPTION_FAILED`，禁止把密文透传给数据库。任务的 `input/.db_connection.json` 保留密文，数据库 helper 只在内存中解密，不把明文写入任务文件或对话上下文。
 
 `taskType=DOCUMENT_MODELING` 时，`database` 为 `null`，`document` 返回：
 
@@ -166,12 +166,13 @@ X-Ontology-Repository-Id: 1
 | `RULE` | `business_rules.csv` |
 | `TERM` | `business_terms.csv`（兼容 `terms.csv`） |
 | `METRIC` | `metrics.csv`（兼容 `indicator.csv`） |
+| `ACTION` | `actions.csv` |
 | `ACTIVITY` | `activities.csv` |
 | `ACTIVITY_FLOW` | `activity_flows.csv`（兼容 `activity_flow.csv`） |
 
-文档任务还会将 DOCX、PPTX、PDF 原文件下载至当前任务的 `mission-input/`，并生成同目录的文档 bundle：`manifest.json` 记录章节/页和表格，`content.md` 保存完整文本，`tables/*.csv` 保存可识别表格。Agent 必须先读取 manifest，再完整读取全部正文、章节/页和表格；输出文件严格受 `parseElements` 和 `expectedFiles` 约束：`parseElements` 是唯一的识别范围，`expectedFiles` 只指定具体文件名和上传白名单，不能反向增加识别要素。每一种已选择结果都可以独立生成和上传，不因其他类型 CSV 尚未生成而阻塞。
+文档任务还会将 DOCX、PPTX、PDF 原文件下载至当前任务的 `input/`，并生成同目录的文档 bundle：`manifest.json` 记录章节/页和表格，`content.md` 保存完整文本，`tables/*.csv` 保存可识别表格。Agent 必须先读取 manifest，再完整读取全部正文、章节/页和表格；输出文件严格受 `parseElements` 和 `expectedFiles` 约束：`parseElements` 是唯一的识别范围，`expectedFiles` 只指定具体文件名和上传白名单，不能反向增加识别要素。每一种已选择结果都可以独立生成和上传，不因其他类型 CSV 尚未生成而阻塞。
 
-所有本体建模任务会自动在 `mission-input/` 放入四份固定参考文件：`Ontology平台模型编码规范v0.0.1.xlsx`、`本体元模型v0.0.1.xlsx`、`本体元模型模板v0.0.1.xlsx` 和 `本体元模型模板v0.0.1（含样例数据）.xlsx`。未带 `v0.0.1` 的历史文件不再作为新任务固定输入。`business_attributes.csv` 使用十六列表头，新增 `数据长度`、`数据精度`；无法取得或不适用时留空，不得猜测。`logical_entities.csv` 的 `是否主逻辑实体` 和业务属性布尔字段统一使用 `Y/N`；每个业务对象必须且只能有一个 `是否主逻辑实体=Y`。`是否唯一`表示业务上的唯一标识；复合业务唯一标识不得拆成多个单字段唯一。当前未实现维度输出时 `是否层级编码` 和 `是否层级名称` 全部填 `N`。同一逻辑实体同时存在 `XXX编码`（逻辑主键）和 `XXX名称` 时，`XXX名称` 的 `是否页面显示` 填 `Y`，其他业务属性填 `N`。模板的“逻辑实体映射”和“业务属性映射”仅作为参考输入，不进入结果文件清单。业务规则正式表头统一使用 `规则编码,规则名称,规则描述,触发条件,判断或结果,处置动作`；规则编码严格遵守编码规范中的 `R` + 7 位流水码，例如 `R0000001`。状态和事件暂未在编码规范中定义新编码前缀：已有稳定编码时沿用，无来源时标记待确认，不得自定格式。
+所有本体建模任务会自动在 `input/` 放入四份固定参考文件：`Ontology平台模型编码规范v0.0.1.xlsx`、`本体元模型v0.0.1.xlsx`、`本体元模型模板v.0.0.1.xlsx` 和 `本体元模型模板v0.0.1（含样例数据）.xlsx`。未带 `v0.0.1` 的历史文件不再作为新任务固定输入。`business_attributes.csv` 使用十六列表头，新增 `数据长度`、`数据精度`；无法取得或不适用时留空，不得猜测。`logical_entities.csv` 的 `是否主逻辑实体` 和业务属性布尔字段统一使用 `Y/N`；每个业务对象必须且只能有一个 `是否主逻辑实体=Y`。`是否唯一`表示业务上的唯一标识；复合业务唯一标识不得拆成多个单字段唯一。当前未实现维度输出时 `是否层级编码` 和 `是否层级名称` 全部填 `N`。同一逻辑实体同时存在 `XXX编码`（逻辑主键）和 `XXX名称` 时，`XXX名称` 的 `是否页面显示` 填 `Y`，其他业务属性填 `N`。模板的“逻辑实体映射”和“业务属性映射”仅作为参考输入，不进入结果文件清单。业务规则正式表头统一使用 `规则编码,规则名称,规则描述,触发条件,判断或结果,处置动作`；规则编码严格遵守编码规范中的 `R` + 7 位流水码，例如 `R0000001`。状态和事件暂未在编码规范中定义新编码前缀：已有稳定编码时沿用，无来源时标记待确认，不得自定格式。
 
 ### 4.2 状态回调
 
@@ -267,10 +268,10 @@ metricArtifact           （指标分析）
 - `parseElements` 是唯一的识别范围；`expectedFiles` 只约束文件名和上传白名单。
 - execution-context 中两者必须双向一致：`expectedFiles` 不得包含未选择要素的文件，每个可输出的已选择要素也必须有对应文件；契约不一致时在执行和上传前直接返回配置错误，不删除已有结果。
 - 每一种已选择结果文件均可独立导出和上传；例如只请求 `BUSINESS_OBJECT`、`RULE` 或 `METRIC` 时，不要求先上传逻辑模型或业务对象 CSV。
-- 同一任务请求多个类型时，Agent 可以复用任务目录 `mission-work/modeling_state.json` 中的结构化资产盘点、候选结果、证据和校验信息。
-- `mission-work/modeling_state.json` 是任务内部中间态，不上传、不进入完成回调，也不能作为额外正式输出。
+- 同一任务请求多个类型时，Agent 可以复用任务目录 `work/modeling_state.json` 中的结构化资产盘点、候选结果、证据和校验信息。
+- `work/modeling_state.json` 是任务内部中间态，不上传、不进入完成回调，也不能作为额外正式输出。
 - 中间态绑定当前输入指纹；数据库表、文档对象或其他嵌套输入描述发生变化时，旧状态仅归档审计，不再参与本轮生成。
-- 正式结果只写入 `mission-output/`，只生成 `parseElements` 已选择且 `expectedFiles` 允许的文件；不得额外生成未选择类型的 CSV。
+- 正式结果只写入 `output/`，只生成 `parseElements` 已选择且 `expectedFiles` 允许的文件；不得额外生成未选择类型的 CSV。
 - artifact 的 `dependsOn`、执行顺序和跨任务引用用于描述分析血缘与质量检查，不作为正式结果文件之间的上传阻断条件。
 
 ## 5. 消歧整合接口

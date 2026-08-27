@@ -95,14 +95,14 @@ class DocumentParserTests(unittest.TestCase):
     def test_prepare_mission_documents_is_fingerprinted_and_cached(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            mission_input = root / "mission-input"
+            mission_input = root / "input"
             mission_input.mkdir()
             source = mission_input / "requirements.docx"
             self._docx(source)
             manifests, errors = prepare_mission_documents(root)
             self.assertEqual(errors, [])
             self.assertEqual(len(manifests), 1)
-            self.assertEqual(manifests[0]["source"], "mission-input/requirements.docx")
+            self.assertEqual(manifests[0]["source"], "input/requirements.docx")
             bundle = root / manifests[0]["bundle"]
             first_manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
             manifests_again, errors_again = prepare_mission_documents(root)

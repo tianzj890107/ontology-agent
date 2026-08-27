@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import Sigma from "sigma";
 import { buildGraphologyGraph } from "./ontologyGraphModel.js";
 import { layoutOntologyForceAtlas } from "./ontologyForceLayout.js";
@@ -7,8 +7,6 @@ const ATTRIBUTE_LABEL_RATIO = 0.58;
 
 export default function OntologySigmaPreview({ data, appliedLayers }) {
   const containerRef = useRef(null);
-  const [layoutVersion, setLayoutVersion] = useState(0);
-  const [layoutRunning, setLayoutRunning] = useState(true);
 
   useEffect(() => {
     let disposed = false;
@@ -16,7 +14,6 @@ export default function OntologySigmaPreview({ data, appliedLayers }) {
     let observer = null;
     let layoutTimer = null;
     let doubleClickHandler = null;
-    setLayoutRunning(true);
     layoutTimer = window.setTimeout(() => {
       if (disposed || !containerRef.current) return;
       const graph = buildGraphologyGraph(data, appliedLayers);
@@ -99,7 +96,6 @@ export default function OntologySigmaPreview({ data, appliedLayers }) {
       containerRef.current.addEventListener("dblclick", doubleClickHandler, { capture: true });
       observer = new ResizeObserver(() => renderer?.resize());
       observer.observe(containerRef.current);
-      setLayoutRunning(false);
     }, 0);
 
     return () => {
@@ -109,10 +105,7 @@ export default function OntologySigmaPreview({ data, appliedLayers }) {
       if (containerRef.current && doubleClickHandler) containerRef.current.removeEventListener("dblclick", doubleClickHandler, { capture: true });
       renderer?.kill();
     };
-  }, [data, appliedLayers, layoutVersion]);
+  }, [data, appliedLayers]);
 
-  return <div className="ontology-sigma-shell">
-    <div className="ontology-sigma-actions"><span>ForceAtlas2</span><button type="button" disabled={layoutRunning} onClick={() => setLayoutVersion((value) => value + 1)}>{layoutRunning ? "布局中…" : "重新布局"}</button></div>
-    <div className="ontology-sigma-preview" ref={containerRef} aria-label="Sigma ForceAtlas2 本体网络图" />
-  </div>;
+  return <div className="ontology-sigma-shell"><div className="ontology-sigma-preview" ref={containerRef} aria-label="本体关系聚类可视化" /></div>;
 }

@@ -60,7 +60,7 @@ flowchart TD
   - 执行指令优先：`继续/接着…做/执行/跑/生成/处理/修复/修改/建模/完成/导出/识别`、`重新…`、`请/帮我/麻烦你…（继续/重新/直接/生成/修改/…）` 等明确执行语义 → 按建模执行回合处理。
   - 疑问词判定仅在未命中执行指令时生效；`为什么失败、怎么建模、帮我看看、先说说项目` 等纯咨询保持问答。
   - 问答回合不启动建模、不触发 finalize 门禁，完成后恢复到问答前的状态（`INPUT_READY`/`FAILED`/`BLOCKED`），`BLOCKED` 问完问题保留暂停原因。
-- 工作区：每个 run 只有 `input/`、`work/`、`output/` 三个真实目录，建模引擎内部的 `mission-input`/`mission-work`/`mission-output` 是同一工作区的安全别名。
+- 工作区：每个 run 只有 `input/`、`work/`、`output/` 三个真实目录，建模引擎直接读写这三个目录。
 
 ### 第二步：输入资产盘点
 
@@ -70,16 +70,16 @@ flowchart TD
 
 ### 第三步：证据勘察与读取
 
-- 数据库：必须先执行 `mission-input/extract_schema.py`，把选中表结构提取到 `work/schema_extract.json`，并基于该文件建模；缺少表结构证据时禁止使用模板样例数据生成正式输出（服务端报 `DATABASE_SCHEMA_EVIDENCE_MISSING` 结构性阻断）。
+- 数据库：必须先执行 `input/extract_schema.py`，把选中表结构提取到 `work/schema_extract.json`，并基于该文件建模；缺少表结构证据时禁止使用模板样例数据生成正式输出（服务端报 `DATABASE_SCHEMA_EVIDENCE_MISSING` 结构性阻断）。
   - `schema_extract.json` 首部是 `tableNames` 表名清单：先读清单获得全部表名，再按表名/列名用 `grep` 定向查询单表定义，禁止反复整文件读取；模板与规范 CSV 只读取一次理解结构。
   - 只读问题（如表数量）服务端直接回答，不误启动建模。
-- 上传文件：输入只来自当前 run 的 `mission-input/`；含样例数据模板（如 `*含样例数据*/02-*.csv`）仅用于理解字段、编码和页面显示填写示例，不是真实输入，不得把样例行复制到结果或据此新增建模对象。
+- 上传文件：输入只来自当前 run 的 `input/`；含样例数据模板（如 `*含样例数据*/02-*.csv`）仅用于理解字段、编码和页面显示填写示例，不是真实输入，不得把样例行复制到结果或据此新增建模对象。
 - 文档：先读 `manifest.json`，再完整读取 `content.md`、全部章节/页与全部表格 CSV；证据引用必须带文档名与章节或页码，禁止只读摘要、第一页或前几行。
 - 术语/规则/指标专项：按任务解析要素采集显式约束、代码/配置规则、实际 SQL/BI 口径，推导项必须有来源证据并标为待确认，不得覆盖人工语义资产或补造公式。
 
 ### 第四步：候选业务属性识别
 
-- 把本次输入识别到的全部源属性写入 `modeling_state.json` 的 `allAttributes`（服务端落盘为 `mission-work/all_attributes.csv`），必须保留业务字段、技术字段、物理主键、外键、审计字段和派生字段；技术字段不得因不进入正式输出而从分析中删除。
+- 把本次输入识别到的全部源属性写入 `modeling_state.json` 的 `allAttributes`（服务端落盘为 `work/all_attributes.csv`），必须保留业务字段、技术字段、物理主键、外键、审计字段和派生字段；技术字段不得因不进入正式输出而从分析中删除。
 - 每个候选属性记录：来源物理对象/字段、原始名称、数据类型、可空性、主键/唯一/引用约束、样例值、枚举、字段描述、初步业务含义、初步属性角色、证据等级。
 - 属性角色（主角色且只能一个）：`IDENTIFIER` / `DESCRIPTIVE` / `CLASSIFICATION` / `STATUS` / `TEMPORAL` / `MEASURE` / `REFERENCE` / `LOCATION` / `PARTY` / `DOCUMENT` / `AUDIT` / `TECHNICAL` / `DERIVED` / `UNCLASSIFIED`。
 - 默认不识别为业务属性的字段：数据库存储地址、无业务意义的分区键、缓存键、同步游标、消息偏移量、系统运行标志、技术校验值、内部序列号、临时处理状态、纯展示格式字段。若技术字段同时承担稳定业务身份或治理用途，不得仅因其技术实现形式排除。
@@ -178,7 +178,7 @@ CREATED/INPUT_READY → QUEUED → CLAIMED → ANALYZING → VALIDATING → SUCC
 | 证据维度 | 结构 / 语义 / 行为 / 治理 / 血缘与使用 |
 | 门禁动作 | `STRUCTURAL_BLOCKER`（阻断）/ `DETERMINISTIC_NORMALIZATION` / `FORMAL_ELIGIBILITY` / `QUALITY_WARNING` |
 | 非业务对象四类 | 基础数据（分类/标签）、规则数据、参考数据、报告报表数据（例外：规则定义/版本、报告实例、可治理主数据） |
-| 常用正式 CSV | `business_objects.csv`、`logical_entities.csv`、`business_attributes.csv`、`entity_relations.csv`、`business_object_relations.csv`、`statuses.csv`、`events.csv`、`business_rules.csv`、`terms.csv`、`indicators.csv` 等（共 25 个契约文件） |
+| 常用正式 CSV | `business_objects.csv`、`logical_entities.csv`、`business_attributes.csv`、`entity_relations.csv`、`business_object_relations.csv`、`statuses.csv`、`events.csv`、`business_rules.csv`、`actions.csv`、`terms.csv`、`indicators.csv` 等（共 26 个契约文件） |
 
 ---
 

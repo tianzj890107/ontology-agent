@@ -302,6 +302,15 @@ INTEGRATION_OUTPUT_SCHEMA = """# 智能消歧与整合输出文件字段契约
 
 元模型、模板和含样例数据模板统一使用“规则编码”。新增规则必须使用 `R` + 7 位流水码，例如 `R0000001`。
 
+### `actions.csv`：动作
+
+表头：`动作编码,动作名称,动作英文名,动作描述,动作类型,业务对象编码,协议,服务节点,服务名称`
+
+- 动作是独立元模型，与业务规则中的文本型“处置动作”不是同一个概念。
+- 动作类型只能使用 `新增`、`修改`、`删除`；动作编码使用 `ACT` + 6 位流水码，例如 `ACT000001`。
+- `业务对象编码` 必须引用整合结果或已有本体库中的业务对象编码；LE 级动作通过动作名称和描述表达逻辑实体，不新增逻辑实体编码字段。
+- 协议、服务节点、服务名称只有在来源真实存在服务信息时才填写，不得虚构；推断动作在动作描述中注明为演示候选动作。
+
 ## 消歧整合报告文件
 
 这些文件对应《智能消歧与整合模板》的五类工作表，字段名必须按模板保留。
@@ -351,13 +360,13 @@ INTEGRATION_OUTPUT_SCHEMA = """# 智能消歧与整合输出文件字段契约
 BASE_REFERENCE_SOURCES = [
     "Ontology平台模型编码规范v0.0.1.xlsx",
     "本体元模型v0.0.1.xlsx",
-    "本体元模型模板v0.0.1.xlsx",
+    "本体元模型模板v.0.0.1.xlsx",
     "数据模型建模规范v0.0.1.xlsx",
 ]
 MISSION_REFERENCE_SOURCES = [
     "Ontology平台模型编码规范v0.0.1.xlsx",
     "本体元模型v0.0.1.xlsx",
-    "本体元模型模板v0.0.1.xlsx",
+    "本体元模型模板v.0.0.1.xlsx",
     "本体元模型模板v0.0.1（含样例数据）.xlsx",
 ]
 DATA_MODELING_STANDARD_FILENAME = "数据模型建模规范v0.0.1.md"
@@ -374,7 +383,7 @@ SOURCE_DOCS = {
 
 DOCUMENT_OUTPUT_CONTRACT = """## 文档建模输入与输出契约
 
-`DOCUMENT_MODELING` 任务会把 DOCX、PPTX、PDF 下载到当前任务的 `mission-input/`，由服务端为每个原文件生成 `manifest.json`、`content.md` 和 `tables/*.csv`。必须先读取 manifest，再完整读取正文、全部章节/页和全部表格；证据引用必须包含文件名以及章节或页码。
+`DOCUMENT_MODELING` 任务会把 DOCX、PPTX、PDF 下载到当前任务的 `input/`，由服务端为每个原文件生成 `manifest.json`、`content.md` 和 `tables/*.csv`。必须先读取 manifest，再完整读取正文、全部章节/页和全部表格；证据引用必须包含文件名以及章节或页码。
 
 文档中的业务语义按 `parseElement` 选择输出，文件名不能自行改名或扩展：
 
@@ -393,7 +402,7 @@ DOCUMENT_OUTPUT_CONTRACT = """## 文档建模输入与输出契约
 | `ACTIVITY` | `activities.csv` | 仅在 execution-context 声明时输出 |
 | `ACTIVITY_FLOW` | `activity_flows.csv`（兼容 `activity_flow.csv`） | 仅在 execution-context 声明时输出 |
 
-只生成并上传 execution-context 的 `expectedFiles` 中列出的文件。各结果文件可以独立导出；共享分析结果统一写入任务目录的 `mission-work/modeling_state.json`，不得把 `mission-output` 中的正式文件当作识别输入。未选择的解析要素不得因文档内容丰富而额外生成文件。"""
+只生成并上传 execution-context 的 `expectedFiles` 中列出的文件。各结果文件可以独立导出；共享分析结果统一写入任务目录的 `work/modeling_state.json`，不得把 `output` 中的正式文件当作识别输入。未选择的解析要素不得因文档内容丰富而额外生成文件。"""
 
 LAYERED_MODELING_ARTIFACTS = """## 分层建模与任务级中间态
 
@@ -412,7 +421,7 @@ TERM ─────────────────────────
                          RULE        METRIC
 ```
 
-每个 artifact 都可以在单独请求时独立导出。先把当前输入的资产盘点、候选属性、实体、关系、业务对象、术语、规则、指标候选、证据和校验结果写入任务目录的 `mission-work/modeling_state.json`，再从中导出当前 `parseElements` 选择的正式文件。这个中间态不是正式结果，不上传，不放入 `mission-output`，也不记录隐藏思维链。
+每个 artifact 都可以在单独请求时独立导出。先把当前输入的资产盘点、候选属性、实体、关系、业务对象、术语、规则、指标候选、证据和校验结果写入任务目录的 `work/modeling_state.json`，再从中导出当前 `parseElements` 选择的正式文件。这个中间态不是正式结果，不上传，不放入 `output`，也不记录隐藏思维链。
 
 - `parseElements` 是唯一的识别范围；`expectedFiles` 只约束具体文件名和上传白名单，不能反向选择建模要素；
 - 同一任务请求多个类型时可以复用中间态，但不得创建未选择的正式文件；
@@ -433,6 +442,51 @@ PAGE_DISPLAY_RULES = """## 业务属性字段规则
 - 当同一逻辑实体存在 `XXX编码`（且为逻辑主键）和 `XXX名称` 两个业务属性时，将 `XXX名称` 的 `是否页面显示` 设置为 `Y`。
 - 其他所有业务属性的 `是否页面显示` 设置为 `N`，不得留空或使用其他枚举。
 - `XXX编码` 与 `XXX名称` 必须属于同一逻辑实体；仅有编码或仅有名称时，不触发页面显示，全部使用 `N`。
+"""
+
+ACTION_KNOWLEDGE_RULES = """## 动作元模型 v0.0.1（独立元模型，强制）
+
+动作（ACTION）是独立元模型，与业务规则不是同一个概念。业务规则中的文本型“处置动作”只是规则结论，不是本元模型的“动作”。
+
+### 正式输出契约（最高优先级）
+
+正式 `actions.csv` 必须严格使用《本体元模型模板 v.0.0.1》动作 Sheet 的九个字段，字段顺序不能改变：
+
+`动作编码, 动作名称, 动作英文名, 动作描述, 动作类型, 业务对象编码, 协议, 服务节点, 服务名称`
+
+- 不得新增作用对象类型、作用对象编码、逻辑实体编码、执行方式、请求方法、删除语义、置信度、证据来源、输入参数、输出参数等任何字段，也不得创建额外的动作关系表或参数表。
+- 动作类型第一版只使用：`新增`、`修改`、`删除`；内部英文枚举可映射为 CREATE/UPDATE/DELETE，但最终写入 CSV 必须使用中文。
+- 动作编码使用 `ACT` + 6 位流水码，例如 `ACT000001`；当前任务内唯一，按稳定的业务对象、逻辑实体、动作类型顺序分配，不使用随机数，不引用其他任务或 run 的编码。
+- 动作名称必须是“动词 + 业务对象名称”或“动词 + 逻辑实体名称”的自然可读名称，例如：创建采购订单、修改采购订单、删除采购订单、新增采购订单行、修改采购订单行、删除采购订单行；禁止生成“执行操作、数据处理、业务处理、对象操作”等没有实际对象的名称。
+- 动作英文名使用稳定的 lowerCamelCase，例如 `createPurchaseOrder`、`addPurchaseOrderLine`；无法准确翻译时可根据现有英文名称组合，不得输出空值。
+- `业务对象编码` 必须引用当前任务真实存在的业务对象编码；逻辑实体级动作也填写该逻辑实体所属业务对象的编码。无法确定归属的逻辑实体不单独生成动作，不得虚构业务对象编码。
+- 协议、服务节点、服务名称只有在来源中确实存在服务信息时才填写；推断演示动作三个字段必须留空，不得虚构 HTTP、/api/create、ontology-service 等值。
+
+### 识别优先级（明确证据优先，合理推断兜底）
+
+1. API、接口文档、Controller、Route；
+2. 服务、Command Handler、工作流、消息处理器；
+3. 前端按钮、表单和实际请求；
+4. 业务说明、规则和操作文档；
+5. 已识别的业务对象和逻辑实体；
+6. 数据表、字段名称以及常见业务语义。
+
+前四类证据不存在时，必须根据已确认业务对象和代表性逻辑实体生成合理的演示动作，不能返回空动作表。演示动作总量控制在 10～50 条，可按实际 BO/LE 数量调整；不要为每个逻辑实体无条件生成完整三套增删改。
+
+### 生成规则
+
+- 每个业务对象默认生成 3 个 BO 级动作（新增/修改/删除），名称优先使用更自然的业务动词（创建、更新、维护、取消、作废等）。
+- 每个业务对象可补充 0～6 个有代表性的 LE 级动作：优先选择名称明显可独立操作的明细、行、地址、联系人、附件、配置、收款、付款等逻辑实体；纯技术、派生或关系载体实体（日志、流水、快照、映射、中间表、历史、视图等）不默认生成三套动作。
+- LE 级动作不新增逻辑实体编码字段：逻辑实体名称写入动作名称，逻辑实体信息写入动作描述，动作仍引用所属业务对象编码。
+- 推断动作必须在动作描述中用自然语言说明“该动作为根据当前业务对象及逻辑实体结构推断的演示候选动作，具体服务实现需结合实际系统确认”。
+- 动作至少按（业务对象编码、动作类型、动作名称）去重：同一业务对象不能重复生成两个“创建采购订单”；同一逻辑实体因多份文件重复出现不能生成重复动作；明确识别动作与同语义推断动作合并时保留证据更明确的动作。
+
+### 兼容与隔离
+
+- 新版模板必须识别“动作”Sheet；动作 Sheet 只有表头时正常处理；旧模板没有动作 Sheet 时不报错；表头顺序变化不影响读取；空白行、尾部空列和 UTF-8 BOM 安全处理。
+- 动作产物为空时，Agent 可以根据已识别的 BO/LE 补充演示动作。
+- 不同任务、工作区和 run 之间不得串用动作；当前任务没有业务对象时不生成动作。
+- 动作功能不得影响原有建模流程；动作是独立元模型，可与业务对象、逻辑实体、规则、指标等分别导出。
 """
 
 V001_ELEMENT_RULES = """## 元模型 v0.0.1 新增元素规则
@@ -513,7 +567,7 @@ EVIDENCE_GATE_OVERRIDE = """## Evidence Gate 最终优先级（覆盖参考表�
 
 BUSINESS_OBJECT_DECISION_OVERRIDE = """## Business Object 决策审计最终优先级
 
-每一个实际评估的 Business Object candidate 都必须保留 R1、R2、R3、R4、R5 的 PASS/FAIL/UNKNOWN、逐项证据与 provenance，并写入 `mission-work/business_object_decisions.csv`。任一 FAIL → REJECTED；无 FAIL 且有 UNKNOWN → CANDIDATE；全部 PASS → CONFIRMED。confidence 不能改变这个 deterministic decision，且必须在建模时直接输出 0–100 的数值，不得使用 HIGH/MODERATE/LOW 标签或由导出器猜测数值。没有反证不能判 FAIL，没有真实证据不能伪造 PASS；CANDIDATE、REJECTED 不得丢弃，只有 CONFIRMED 才能进入正式 `business_objects.csv`，被 REJECTED 的候选对应逻辑实体仍须保留。
+每一个实际评估的 Business Object candidate 都必须保留 R1、R2、R3、R4、R5 的 PASS/FAIL/UNKNOWN、逐项证据与 provenance，并写入 `work/business_object_decisions.csv`。任一 FAIL → REJECTED；无 FAIL 且有 UNKNOWN → CANDIDATE；全部 PASS → CONFIRMED。confidence 不能改变这个 deterministic decision，且必须在建模时直接输出 0–100 的数值，不得使用 HIGH/MODERATE/LOW 标签或由导出器猜测数值。没有反证不能判 FAIL，没有真实证据不能伪造 PASS；CANDIDATE、REJECTED 不得丢弃，只有 CONFIRMED 才能进入正式 `business_objects.csv`，被 REJECTED 的候选对应逻辑实体仍须保留。
 """
 
 BUSINESS_RULE_VALIDATION_OVERRIDE = """## Business Rule 类型化验证最终优先级
@@ -525,7 +579,7 @@ DECISION_AUDIT_OVERRIDE = """## Decision Audit 与不确定性最终优先级
 
 Schema 必填字段、CSV 模板完整性、Validator ERROR/WARNING、孤岛检查和结果完整性都不是业务事实证据；不能为了填空、补齐关系或满足模板创造 Owner、生命周期、member-of、lineage、处置动作或业务对象归属。逻辑实体允许 `ASSIGNED`、`UNASSIGNED`、`UNRESOLVED`；后两者必须保存原因和缺失证据，不得硬填正式 Business Object。
 
-所有语义判定必须先进入结构化 Decision Layer，再由确定性 Validator 和 Generator 消费。每个候选、关系、规则、指标和逻辑实体的 CONFIRMED、CANDIDATE、UNRESOLVED、REJECTED/UNKNOWN 都必须落盘到当前任务 `mission-work/` 的五个固定决策审计 CSV：`business_object_decisions.csv`、`relation_decisions.csv`、`rule_decisions.csv`、`indicator_decisions.csv`、`logical_entity_decisions.csv`，以及 `validation_report.json` 与 `modeling_state.json`。五个 CSV 强制使用决策审计模板 `v0.0.1` 的中文表头；不再生成 `pending_confirmations.csv`，待确认信息保留在各决策记录和 `modeling_state.json` 中。审计覆盖率必须为 100%，审计文件缺失或表头不匹配时任务失败。
+所有语义判定必须先进入结构化 Decision Layer，再由确定性 Validator 和 Generator 消费。每个候选、关系、规则、指标和逻辑实体的 CONFIRMED、CANDIDATE、UNRESOLVED、REJECTED/UNKNOWN 都必须落盘到当前任务 `work/` 的五个固定决策审计 CSV：`business_object_decisions.csv`、`relation_decisions.csv`、`rule_decisions.csv`、`indicator_decisions.csv`、`logical_entity_decisions.csv`，以及 `validation_report.json` 与 `modeling_state.json`。五个 CSV 强制使用决策审计模板 `v0.0.1` 的中文表头；不再生成 `pending_confirmations.csv`，待确认信息保留在各决策记录和 `modeling_state.json` 中。审计覆盖率必须为 100%，审计文件缺失或表头不匹配时任务失败。
 
 VIEW JOIN 只证明查询关联，不证明派生血缘；使用 `VIEW_JOIN_EVIDENCE`、`VIEW_DERIVATION_LINEAGE`、`VIEW_CALCULATION_LOGIC`、`VIEW_FILTER_LOGIC` 区分语义。显式 FK 通常只能确认 REFERENCE，不能单独确认 COMPOSITION 或 TRANSFORMATION；声明 FK 与运行时 enforced 必须分开记录。关系用稳定的 `relation_decision_id` 唯一标识，同一端点可存在多种关系。
 
@@ -551,8 +605,8 @@ def build() -> None:
 - `modeling/通用业务对象与逻辑实体识别规范v0.0.1.md` 是所有建模任务唯一的核心判定规范。
 - `modeling/Ontology平台模型编码规范v0.0.1.md` 是建模和消歧整合共同使用的编码规范。
 - `modeling/数据模型建模规范v0.0.1.md` 已编入公共知识，不能覆盖核心判定规范。
-- 根目录的 `业务术语v0.0.1.md`、`业务规则v0.0.1.md`、`指标v0.0.1.md` 按 `parseElements` 动态加载。
-- 服务端会为每个建模任务生成 `modelingPlan`，并在任务目录的 `mission-work/modeling_state.json` 保存可复用的结构化中间态；正式输出只写入 `mission-output`，各选中类型可独立导出。
+- 根目录的 `业务术语v0.0.1.md`、`业务规则v0.0.1.md`、`指标v0.0.1.md`、`动作v0.0.1.md` 按 `parseElements` 动态加载。
+- 服务端会为每个建模任务生成 `modelingPlan`，并在任务目录的 `work/modeling_state.json` 保存可复用的结构化中间态；正式输出只写入 `output`，各选中类型可独立导出。
 - 未带 `v0.0.1` 的生成文件和旧版源文件只作为历史参考，不作为当前运行时入口。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 
@@ -571,6 +625,7 @@ def build() -> None:
             "不得改变或覆盖 V6 的结论、枚举和判定流程。\n\n"
             + LAYERED_MODELING_ARTIFACTS.rstrip() + "\n\n" + PAGE_DISPLAY_RULES.rstrip() + "\n\n"
             + V001_ELEMENT_RULES.rstrip() + "\n\n"
+            + ACTION_KNOWLEDGE_RULES.rstrip() + "\n\n"
             + CODE_STANDARD_RULES.rstrip() + "\n\n" + NUMBER_DISPLAY_RULES.rstrip() + "\n\n" + v6
             + "\n\n## 本体元模型与结果模板参考\n\n" + references
             + "\n\n" + EVIDENCE_GATE_OVERRIDE.rstrip()
@@ -583,7 +638,7 @@ def build() -> None:
     write(OUTPUT_DIR / "modeling" / ENCODING_STANDARD_FILENAME,
           "# Ontology 平台模型编码规范 v0.0.1：静态 Markdown\n\n" + block("Ontology平台模型编码规范v0.0.1.xlsx"))
     write(OUTPUT_DIR / "modeling" / "本体元模型模板v0.0.1.md",
-          "# 本体元模型模板 v0.0.1：静态 Markdown\n\n" + block("本体元模型模板v0.0.1.xlsx"))
+          "# 本体元模型模板 v0.0.1：静态 Markdown\n\n" + block("本体元模型模板v.0.0.1.xlsx"))
     write(OUTPUT_DIR / "modeling" / "本体元模型模板v0.0.1（含样例数据）.md",
           "# 本体元模型模板 v0.0.1（含样例数据）：静态 Markdown\n\n" + block("本体元模型模板v0.0.1（含样例数据）.xlsx"))
     write(OUTPUT_DIR / "modeling" / DATA_MODELING_STANDARD_FILENAME,
@@ -612,6 +667,7 @@ def build() -> None:
     integration_base = "# 智能消歧与整合：目标与规则\n\n" + "\n\n".join(
         block(x) for x in ("智能消歧与整合v0.0.1.docx", "智能消歧与整合规则v0.0.1.docx"))
     integration_base += ("\n\n" + V001_ELEMENT_RULES.rstrip() + "\n\n"
+                         + ACTION_KNOWLEDGE_RULES.rstrip() + "\n\n"
                          + CODE_STANDARD_RULES.rstrip() + "\n\n"
                          + block("Ontology平台模型编码规范v0.0.1.xlsx"))
     integration_template = "# 智能消歧与整合模板 v0.0.1：静态 Markdown\n\n" + block("智能消歧与整合模板v0.0.1.xlsx")
@@ -620,6 +676,9 @@ def build() -> None:
     write(OUTPUT_DIR / "integration" / "templatev0.0.1.md", integration_template)
     write(OUTPUT_DIR / "integration" / "output_schemav0.0.1.md",
           INTEGRATION_OUTPUT_SCHEMA)
+    write(OUTPUT_DIR / "动作v0.0.1.md",
+          "# 动作专项规则 v0.0.1\n\n" + ACTION_KNOWLEDGE_RULES.rstrip())
+
     write(OUTPUT_DIR / "integration" / "all_sourcesv0.0.1.md",
           "# 智能消歧与整合：全部静态私有知识\n\n" + integration_base
           + "\n\n---\n\n" + integration_template)

@@ -13,8 +13,8 @@
 - `modeling/通用业务对象与逻辑实体识别规范v0.0.1.md` 是所有建模任务唯一的核心判定规范。
 - `modeling/Ontology平台模型编码规范v0.0.1.md` 是建模和消歧整合共同使用的编码规范。
 - `modeling/数据模型建模规范v0.0.1.md` 已编入公共知识，不能覆盖核心判定规范。
-- 根目录的 `业务术语v0.0.1.md`、`业务规则v0.0.1.md`、`指标v0.0.1.md` 按 `parseElements` 动态加载。
-- 服务端会为每个建模任务生成 `modelingPlan`，并在任务目录的 `mission-work/modeling_state.json` 保存可复用的结构化中间态；正式输出只写入 `mission-output`，各选中类型可独立导出。
+- 根目录的 `业务术语v0.0.1.md`、`业务规则v0.0.1.md`、`指标v0.0.1.md`、`动作v0.0.1.md` 按 `parseElements` 动态加载。
+- 服务端会为每个建模任务生成 `modelingPlan`，并在任务目录的 `work/modeling_state.json` 保存可复用的结构化中间态；正式输出只写入 `output`，各选中类型可独立导出。
 - 未带 `v0.0.1` 的生成文件和旧版源文件只作为历史参考，不作为当前运行时入口。
 - 规则源文件变更后，在本地执行 `python scripts/build_agent_knowledge.py`，检查 Markdown 差异，再提交并部署。
 

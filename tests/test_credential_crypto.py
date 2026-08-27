@@ -126,7 +126,7 @@ class MissionDatabaseConfigTests(unittest.TestCase):
                     tmp,
                 )
             self.assertEqual(caught.exception.code, "DATABASE_CREDENTIAL_DECRYPTION_FAILED")
-            self.assertFalse((Path(tmp) / "mission-input" / ".db_connection.json").exists())
+            self.assertFalse((Path(tmp) / "input" / ".db_connection.json").exists())
 
     def test_task_file_keeps_ciphertext_and_helper_decrypts_in_memory(self):
         key = bytes(range(32))
@@ -143,11 +143,11 @@ class MissionDatabaseConfigTests(unittest.TestCase):
                                  "sourceSchema": "ontology_dev"}},
                 tmp,
             )
-            self.assertEqual(path, "mission-input/.db_connection.json")
+            self.assertEqual(path, "input/.db_connection.json")
             saved = json.loads((Path(tmp) / path).read_text(encoding="utf-8"))
             self.assertEqual(saved["password"], ciphertext)
             self.assertNotIn("db-password", (Path(tmp) / path).read_text(encoding="utf-8"))
-            helper = (Path(tmp) / "mission-input" / "db_connection.py")
+            helper = (Path(tmp) / "input" / "db_connection.py")
             server.ensure_database_helpers(tmp, path)
             helper_text = helper.read_text(encoding="utf-8")
             self.assertIn("decrypt_connection_credential", helper_text)

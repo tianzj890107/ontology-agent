@@ -51,10 +51,10 @@ class SandboxPathSecurityTests(unittest.TestCase):
 
     def test_relative_and_normalized_paths_stay_in_current_task(self):
         boundary = self.boundary()
-        expected = os.path.realpath(self.task / "mission-output" / "test.csv")
-        self.assertEqual(boundary.resolve("mission-output/test.csv"), expected)
-        self.assertEqual(boundary.resolve("./mission-output/a/../test.csv"), expected)
-        self.assertEqual(boundary.resolve("mission-output//test.csv"), expected)
+        expected = os.path.realpath(self.task / "output" / "test.csv")
+        self.assertEqual(boundary.resolve("output/test.csv"), expected)
+        self.assertEqual(boundary.resolve("./output/a/../test.csv"), expected)
+        self.assertEqual(boundary.resolve("output//test.csv"), expected)
         self.assertEqual(boundary.resolve(expected), expected)
 
     def test_relative_absolute_and_prefix_escape_are_rejected(self):
@@ -62,10 +62,10 @@ class SandboxPathSecurityTests(unittest.TestCase):
         attempts = (
             "../test",
             "../../test",
-            "mission-output/../../test",
+            "output/../../test",
             str(self.outside / "test"),
             str(self.sibling / "test"),
-            str(self.tasks / "mission-output" / "test"),
+            str(self.tasks / "output" / "test"),
         )
         for path in attempts:
             with self.subTest(path=path), self.assertRaises(SandboxViolation):
@@ -79,7 +79,7 @@ class SandboxPathSecurityTests(unittest.TestCase):
         with self.assertRaises(SandboxViolation):
             self.boundary().resolve("outside-link/secret.txt")
 
-        inside_dir = self.task / "mission-output"
+        inside_dir = self.task / "output"
         inside_dir.mkdir()
         inside_file = inside_dir / "safe.txt"
         inside_file.write_text("safe", encoding="utf-8")
@@ -100,16 +100,16 @@ class SandboxPathSecurityTests(unittest.TestCase):
             "Edit", {"file_path": str(self.sibling / "x.txt"),
                       "old_string": "x", "new_string": "y"}, str(self.task)
         ))
-        safe = self.task / "mission-output" / "safe.txt"
+        safe = self.task / "output" / "safe.txt"
         self.assertIn("Created file", execute_tool(
-            "Write", {"file_path": "mission-output/safe.txt", "content": "before"}, str(self.task)
+            "Write", {"file_path": "output/safe.txt", "content": "before"}, str(self.task)
         ))
         self.assertIn("Edited", execute_tool(
             "Edit", {"file_path": str(safe), "old_string": "before", "new_string": "after"},
             str(self.task),
         ))
         self.assertIn("after", execute_tool(
-            "Read", {"file_path": "./mission-output//safe.txt"}, str(self.task)
+            "Read", {"file_path": "./output//safe.txt"}, str(self.task)
         ))
 
     @unittest.skipUnless(
@@ -117,7 +117,7 @@ class SandboxPathSecurityTests(unittest.TestCase):
         "Linux bubblewrap is required for shell isolation tests",
     )
     def test_shell_cannot_reach_sibling_or_parent_output(self):
-        protected_dir = self.tasks / "mission-output"
+        protected_dir = self.tasks / "output"
         protected_dir.mkdir()
         protected = protected_dir / "protected.txt"
         protected.write_text("PROTECTED_CONTENT", encoding="utf-8")
@@ -132,12 +132,12 @@ class SandboxPathSecurityTests(unittest.TestCase):
         "Linux bubblewrap is required for shell isolation tests",
     )
     def test_shell_allows_task_relative_and_absolute_paths(self):
-        output = self.task / "mission-output"
+        output = self.task / "output"
         output.mkdir()
         absolute_file = output / "absolute.txt"
         result = execute_tool(
             "Bash",
-            {"command": f"mkdir -p mission-output && echo ok > \"{absolute_file}\" && cat mission-output/absolute.txt"},
+            {"command": f"mkdir -p output && echo ok > \"{absolute_file}\" && cat output/absolute.txt"},
             str(self.task),
         )
         self.assertIn("ok", result)

@@ -25,6 +25,8 @@ import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from .workspace_paths import input_dir as _workspace_input_dir
+
 
 DOCUMENT_EXTENSIONS = {".docx", ".pptx", ".pdf"}
 _W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -285,8 +287,8 @@ def extract_document(source_path: str | Path, output_dir: str | Path) -> tuple[d
 
 
 def prepare_mission_documents(cwd: str | Path) -> tuple[list[dict], list[dict]]:
-    """Prepare all DOCX/PPTX/PDF inputs under ``mission-input``."""
-    input_dir = Path(cwd) / "mission-input"
+    """Prepare all DOCX/PPTX/PDF inputs under ``input``."""
+    input_dir = Path(_workspace_input_dir(str(cwd)))
     if not input_dir.is_dir():
         return [], []
     manifests: list[dict] = []

@@ -34,6 +34,10 @@ from .modeling_rule_registry import (
     validate_formal_rows,
     validate_v0001_state,
 )
+from .workspace_paths import (
+    input_dir as _workspace_input_dir,
+    output_dir as _workspace_output_dir,
+)
 
 
 CONFIRMED = "CONFIRMED"
@@ -2352,7 +2356,7 @@ def validate_business_object_evidence_consistency(state: Mapping[str, Any] | Non
 
 def write_business_object_decisions_csv(work_dir: str | os.PathLike[str],
                                         state: Mapping[str, Any] | None = None) -> str:
-    """Atomically persist all evaluated candidates to mission-work."""
+    """Atomically persist all evaluated candidates to work/."""
     target_dir = Path(work_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / "business_object_decisions.csv"
@@ -4209,7 +4213,7 @@ def validate_decision_audits(work_dir: str | os.PathLike[str],
             code = "MISSING_WORK_ATTRIBUTE_INVENTORY" if name in WORK_REQUIRED_FILES else "MISSING_DECISION_AUDIT"
             artifact_type = "ATTRIBUTE_INVENTORY" if name in WORK_REQUIRED_FILES else "DECISION_AUDIT"
             issues.append(_issue(code, "ERROR",
-                                 f"缺少必须的 mission-work 文件 {name}",
+                                 f"缺少必须的 work/ 文件 {name}",
                                  artifact_type=artifact_type, artifact_id=name))
     expected = {
         "business_object_decisions.csv": len(business_object_decision_records(state)),
@@ -4722,7 +4726,7 @@ def _formal_reference_index(output_dir: Path) -> dict[str, set[str]]:
 
 def _template_sample_business_object_names(work_dir: Path) -> set[str]:
     """Read the system-provided sample template's business-object names."""
-    input_dir = work_dir.parent / "mission-input"
+    input_dir = Path(_workspace_input_dir(str(work_dir.parent)))
     if not input_dir.is_dir():
         return set()
     sample_dir = next((p for p in input_dir.glob("*含样例数据*") if p.is_dir()), None)
@@ -4784,13 +4788,13 @@ def validate_database_modeling_evidence(work_dir: Path,
                                         output_dir: Path) -> list[ValidationIssue]:
     """Database-sourced runs must carry an extracted schema before final output."""
     work = Path(work_dir)
-    input_dir = work.parent / "mission-input"
+    input_dir = Path(_workspace_input_dir(str(work.parent)))
     if not (input_dir / ".db_connection.json").is_file():
         return []
     if not (work / "schema_extract.json").is_file():
         return [_issue(
             "DATABASE_SCHEMA_EVIDENCE_MISSING", "ERROR",
-            "数据库建模必须先执行 mission-input/extract_schema.py 生成 work/schema_extract.json，"
+            "数据库建模必须先执行 input/extract_schema.py 生成 work/schema_extract.json，"
             "再基于该表结构建模并导出正式输出",
             artifact_type="WORK", artifact_id="schema_extract.json",
             details={"requiredFile": "work/schema_extract.json"})]
@@ -4899,6 +4903,7 @@ _REFERENCE_KEYS_BY_FILE = {
     "statuses.csv": frozenset({"businessObjectCodes"}),
     "status.csv": frozenset({"businessObjectCodes"}),
     "business_object_statuses.csv": frozenset({"businessObjectCodes"}),
+    "actions.csv": frozenset({"businessObjectCodes"}),
 }
 
 
@@ -4974,7 +4979,8 @@ def finalize_semantic_model(work_dir: str | os.PathLike[str],
     # Apply the same auto-resolutions before the staged/legacy validators run
     # so the persisted modeling_state.json and audit CSVs carry them.
     normalize_modeling_state(state)
-    output_path = Path(output_dir) if output_dir is not None else target_dir.parent / "mission-output"
+    output_path = (Path(output_dir) if output_dir is not None
+                   else Path(_workspace_output_dir(str(target_dir.parent))))
 
     # Validate the current stage only.  Passed stages are content-addressed;
     # generating a downstream file must not send logical entities or

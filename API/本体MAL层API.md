@@ -718,10 +718,11 @@ GET /intelligent/modeling/tasks/RM123456789/execution-context
 | rule | business\_rules.csv |
 | term | business\_terms.csv（兼容 terms.csv） |
 | metric | metrics.csv（兼容 indicator.csv） |
+| action | actions.csv |
 | activity | activities.csv |
 | activity\_flow | activity\_flows.csv（兼容 activity\_flow.csv） |
 
-`parseElements` 是唯一的识别范围，`expectedFiles` 只指定具体文件名和上传白名单，不能反向增加识别要素。每一种已选择结果均可独立生成和上传，不因其他类型 CSV 尚未生成而阻塞。任务内可复用的结构化分析写入 `mission-work/modeling_state.json`；该文件不上传，也不进入成功回调。
+`parseElements` 是唯一的识别范围，`expectedFiles` 只指定具体文件名和上传白名单，不能反向增加识别要素。每一种已选择结果均可独立生成和上传，不因其他类型 CSV 尚未生成而阻塞。任务内可复用的结构化分析写入 `work/modeling_state.json`；该文件不上传，也不进入成功回调。
 
 **返回示例**
 

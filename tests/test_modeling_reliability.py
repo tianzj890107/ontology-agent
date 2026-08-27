@@ -66,7 +66,7 @@ def composition(relation_id: str, source: str, target: str,
         "status": status,
         "evidenceTypes": evidence_types or ["EXPLICIT_CONFIG"],
         "evidenceLevel": "STRONG",
-        "provenance": ["mission-input/ownership.yaml"],
+        "provenance": ["input/ownership.yaml"],
         **extra,
     }
 
@@ -80,7 +80,7 @@ def extension(relation_id: str, source: str, target: str):
         "status": CONFIRMED,
         "evidenceTypes": ["EXPLICIT_CONFIG"],
         "evidenceLevel": "STRONG",
-        "provenance": ["mission-input/ownership.yaml"],
+        "provenance": ["input/ownership.yaml"],
     }
 
 
@@ -125,9 +125,9 @@ class ModelingEvidenceGateTests(unittest.TestCase):
             "targetEntity": "LE_TARGET",
             "relationType": "TRANSFORMATION",
             "status": CONFIRMED,
-            "evidence": [{"type": "VIEW_SQL_LINEAGE", "source": "mission-input/view.sql"}],
+            "evidence": [{"type": "VIEW_SQL_LINEAGE", "source": "input/view.sql"}],
             "evidenceLevel": "STRONG",
-            "provenance": ["mission-input/view.sql"],
+            "provenance": ["input/view.sql"],
         }]}
         self.assertEqual(validate_formal_relation_csv(relation_csv("REL000001"), state), [])
 
@@ -148,7 +148,7 @@ class ModelingEvidenceGateTests(unittest.TestCase):
             "status": CONFIRMED,
             "evidenceTypes": ["JOINABILITY", "DOCUMENTATION"],
             "evidenceLevel": "MODERATE",
-            "provenance": ["mission-input/sample.csv", "mission-input/design.md"],
+            "provenance": ["input/sample.csv", "input/design.md"],
         }]}
         self.assertEqual(validate_formal_relation_csv(relation_csv("REL000003"), state), [])
 
@@ -162,7 +162,7 @@ class ModelingEvidenceGateTests(unittest.TestCase):
             "evidenceTypes": ["FOREIGN_KEY"],
             "evidenceLevel": "MODERATE",
             "evidence": [{"type": "FOREIGN_KEY", "evidenceId": "FK_1",
-                          "source": "mission-input/schema.sql"}],
+                          "source": "input/schema.sql"}],
         }]}
         self.assertEqual(validate_formal_relation_csv(relation_csv("REL000003A"), state), [])
 
@@ -174,7 +174,7 @@ class ModelingEvidenceGateTests(unittest.TestCase):
             "relationType": "REFERENCE",
             "status": CONFIRMED,
             "evidence": [{"type": "FOREIGN_KEY", "evidenceId": "FK_2",
-                          "path": "mission-input/schema.sql"}],
+                          "path": "input/schema.sql"}],
         }]}
         self.assertEqual(validate_formal_relation_csv(relation_csv("REL000003B"), state), [])
 
@@ -189,7 +189,7 @@ class ModelingEvidenceGateTests(unittest.TestCase):
             "status": CONFIRMED,
             "evidenceTypes": ["FOREIGN_KEY"],
             "evidenceLevel": "STRONG",
-            "provenance": ["mission-input/schema.sql"],
+            "provenance": ["input/schema.sql"],
         })
         self.assertEqual(validate_formal_relation_csv(relation_csv("REL000004"), state), [])
 
@@ -315,7 +315,7 @@ class CompositionAggregationTests(unittest.TestCase):
                     "sourceEntity": "LE_ORDER", "targetEntity": "LE_CUSTOMER",
                     "relationType": "REFERENCE", "status": CONFIRMED,
                     "evidenceTypes": ["FOREIGN_KEY"], "evidenceLevel": "STRONG",
-                    "provenance": ["mission-input/schema.sql"],
+                    "provenance": ["input/schema.sql"],
                 },
             ],
         }
@@ -408,7 +408,7 @@ class CompositionAggregationTests(unittest.TestCase):
                     "relationId": "REL_A_B_REF", "sourceEntity": "LE_A",
                     "targetEntity": "LE_B", "relationType": "REFERENCE",
                     "status": CONFIRMED, "evidenceTypes": ["FOREIGN_KEY"],
-                    "evidenceLevel": "STRONG", "provenance": ["mission-input/schema.sql"],
+                    "evidenceLevel": "STRONG", "provenance": ["input/schema.sql"],
                 },
             ],
         }
@@ -446,9 +446,9 @@ class CompositionAggregationTests(unittest.TestCase):
                 "REL_FK_ONLY", "LE_D", "LE_A", evidence_types=["FOREIGN_KEY"])],
         }
         with tempfile.TemporaryDirectory() as root:
-            work = Path(root) / "mission-work"
+            work = Path(root) / "work"
             work.mkdir()
-            output = Path(root) / "mission-output"
+            output = Path(root) / "output"
             output.mkdir()
             (output / "entity_relations.csv").write_text(
                 "关系编码,源逻辑实体编码,目标逻辑实体编码,关系分类,关系基数\n"
@@ -828,8 +828,8 @@ class V0001DuplicateNameGateTests(unittest.TestCase):
     def _run_stage(self, csv_text):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            work = root / "mission-work"
-            output = root / "mission-output"
+            work = root / "work"
+            output = root / "output"
             work.mkdir()
             output.mkdir()
             (output / "business_attributes.csv").write_text(csv_text, encoding="utf-8")
@@ -877,8 +877,8 @@ class V0001DuplicateNameGateTests(unittest.TestCase):
                  "logicalEntities": [{"code": "LE001"}]}
         with tempfile.TemporaryDirectory() as root,                 patch.object(reliability, "_stage_specific_issues", return_value=[]) as validate:
             root = Path(root)
-            work = root / "mission-work"
-            output = root / "mission-output"
+            work = root / "work"
+            output = root / "output"
             work.mkdir()
             output.mkdir()
             first = validate_modeling_stages(work, output, state, ["logical_entities.csv"])
@@ -1051,7 +1051,7 @@ class BusinessObjectEvidenceConsistencyTests(unittest.TestCase):
             "CO_FIXED", "采购需求类型",
             r5_evidence="该表是固定码表，码值数量有限且可预置，仅分类标签，无业务行为")
         with tempfile.TemporaryDirectory() as root:
-            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            result = finalize_semantic_model(Path(root) / "work", state)
         self.assertEqual(result["status"], "FAILED")
         blockers = [issue for issue in result["issues"]
                     if issue.code == "R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE"]
@@ -1073,7 +1073,7 @@ class BusinessObjectEvidenceConsistencyTests(unittest.TestCase):
                       {issue.code for issue in web_issues})
         with tempfile.TemporaryDirectory() as root:
             standalone_result = oc_codex_server.finalize_semantic_model(
-                Path(root) / "mission-work", state)
+                Path(root) / "work", state)
         self.assertEqual(standalone_result["status"], "FAILED")
         self.assertIn("R5_PASS_WITH_EXPLICIT_COUNTER_EVIDENCE",
                       {issue.code for issue in standalone_result["issues"]})
@@ -1122,8 +1122,8 @@ class NotApplicableAssignmentTests(unittest.TestCase):
     def _finalize_with_outputs(state, outputs):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            work = root / "mission-work"
-            output = root / "mission-output"
+            work = root / "work"
+            output = root / "output"
             output.mkdir()
             for name, header, rows in outputs:
                 with (output / name).open("w", encoding="utf-8", newline="") as handle:

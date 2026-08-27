@@ -12,7 +12,7 @@
 <run>/output/
 ```
 
-现有建模引擎内部使用的 `mission-input`、`mission-work`、`mission-output` 是同一 workspace 内的安全别名，不是第二份数据。
+每个 run 只有 `input/`、`work/`、`output/` 三个真实目录；历史 run 的 `mission-*` 旧路径只在服务端集中式兼容层解析，不对外暴露，也不是第二份数据。
 
 客户端的 `inputs` 接口只能写入 `input/`；`work/`、`output/`、审计文件和状态文件由建模执行器/校验器独占写入。
 

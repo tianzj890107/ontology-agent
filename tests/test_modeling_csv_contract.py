@@ -75,6 +75,10 @@ VALID_ROWS = {
                    ["EV0001", "OrderApproved", "订单审批通过", "订单完成审批", "订单进入生效状态"]),
     "business_rules.csv": (["规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"],
                            ["R0000001", "订单校验", "订单必须有效", "订单提交", "校验通过", "允许提交"]),
+    "actions.csv": (["动作编码", "动作名称", "动作英文名", "动作描述", "动作类型", "业务对象编码",
+                     "协议", "服务节点", "服务名称"],
+                    ["ACT000001", "创建采购订单", "createPurchaseOrder", "创建采购订单业务对象",
+                     "新增", "BO0001", "", "", ""]),
     "terms.csv": (["术语编码", "术语名称", "别名", "英文名", "缩略语", "术语定义"],
                   ["T0001", "订单", "", "Order", "", "订单是采购行为的业务载体"]),
     "metrics.csv": (["指标编码", "指标名称", "指标别名", "指标英文名", "指标定义", "计算公式", "统计口径",
@@ -110,6 +114,7 @@ REQUIRED_BY_FILE = {
                      "触发条件", "是否终态", "是否主终态"],
     "events.csv": ["事件编码", "事件名称", "事件中文名称", "事件含义", "触发结果"],
     "business_rules.csv": ["规则编码", "规则名称", "触发条件", "判断或结果", "处置动作"],
+    "actions.csv": ["动作编码", "动作名称", "动作英文名", "动作描述", "动作类型", "业务对象编码"],
     "terms.csv": ["术语编码", "术语名称", "术语定义"],
     "metrics.csv": ["指标编码", "指标名称"],
     "integration_report.csv": ["检核项", "问题类型", "处理结果", "说明"],
@@ -190,6 +195,9 @@ class NameAndFormatContractTests(unittest.TestCase):
             ("business_attributes.csv", "数据长度", "-5"),
             ("business_attributes.csv", "业务属性英文名称", "order code"),
             ("business_rules.csv", "规则编码", "R000001"),
+            ("actions.csv", "动作类型", "执行"),
+            ("actions.csv", "动作编码", "ACT1"),
+            ("actions.csv", "动作英文名", "create order"),
             ("merged_elements.csv", "相似度", "1.5"),
             ("merged_elements.csv", "元素类型", "NOPE"),
             ("merged_elements.csv", "原名称集合", "RM001"),
@@ -246,6 +254,15 @@ class CrossFileReferenceTests(unittest.TestCase):
             references={"businessObjectCodes": {"BO0001"}})
         self.assertIn("FORMAL_REFERENCE_NOT_FOUND", {item.code for item in findings})
 
+    def test_action_business_object_reference_fails(self):
+        header, valid_row = VALID_ROWS["actions.csv"]
+        row = list(valid_row)
+        row[header.index("业务对象编码")] = "BO_MISSING"
+        findings = validate_formal_rows(
+            "actions.csv", header, [row],
+            references={"businessObjectCodes": {"BO0001"}})
+        self.assertIn("FORMAL_REFERENCE_NOT_FOUND", {item.code for item in findings})
+
     def test_relation_entity_and_attribute_references_fail(self):
         header, valid_row = VALID_ROWS["entity_relations.csv"]
         row = list(valid_row)
@@ -284,7 +301,7 @@ class CrossFileReferenceTests(unittest.TestCase):
 
 class FormalEligibilityGateTests(unittest.TestCase):
     def write_output(self, root, filename, header, rows):
-        output = Path(root) / "mission-output"
+        output = Path(root) / "output"
         output.mkdir(parents=True, exist_ok=True)
         (output / filename).write_bytes(to_csv(header, rows))
         return output
@@ -297,7 +314,7 @@ class FormalEligibilityGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             output = self.write_output(root, "business_attributes.csv", header, [valid_row])
             result = finalize_semantic_model(
-                Path(root) / "mission-work", state, output_dir=output,
+                Path(root) / "work", state, output_dir=output,
                 required_outputs=["business_attributes.csv"],
                 context={"expectedFiles": ["business_attributes.csv"], "taskType": "modeling"})
             self.assertEqual(result["status"], "FAILED")
@@ -314,7 +331,7 @@ class FormalEligibilityGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             output = self.write_output(root, "entity_relations.csv", header, [valid_row])
             result = finalize_semantic_model(
-                Path(root) / "mission-work", state, output_dir=output,
+                Path(root) / "work", state, output_dir=output,
                 required_outputs=["entity_relations.csv"],
                 context={"expectedFiles": ["entity_relations.csv"], "taskType": "modeling"})
             self.assertEqual(result["status"], "FAILED")
@@ -337,12 +354,12 @@ class FormalEligibilityGateTests(unittest.TestCase):
         rule_header, rule_row = VALID_ROWS["business_rules.csv"]
         metric_header, metric_row = VALID_ROWS["metrics.csv"]
         with tempfile.TemporaryDirectory() as root:
-            output = Path(root) / "mission-output"
+            output = Path(root) / "output"
             output.mkdir(parents=True, exist_ok=True)
             (output / "business_rules.csv").write_bytes(to_csv(rule_header, [rule_row]))
             (output / "metrics.csv").write_bytes(to_csv(metric_header, [metric_row]))
             result = finalize_semantic_model(
-                Path(root) / "mission-work", state, output_dir=output,
+                Path(root) / "work", state, output_dir=output,
                 required_outputs=["business_rules.csv", "metrics.csv"],
                 context={"expectedFiles": ["business_rules.csv", "metrics.csv"],
                          "taskType": "modeling"})
@@ -369,7 +386,7 @@ class FormalEligibilityGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             output = self.write_output(root, "business_objects.csv", header, [weak])
             result = finalize_semantic_model(
-                Path(root) / "mission-work", state, output_dir=output,
+                Path(root) / "work", state, output_dir=output,
                 required_outputs=["business_objects.csv"],
                 context={"expectedFiles": ["business_objects.csv"], "taskType": "modeling"})
             self.assertEqual(result["status"], "PASSED")
@@ -426,11 +443,11 @@ class UploadFinalizeConsistencyTests(unittest.TestCase):
                 "r5": {"status": "PASS", "evidence": "[R5_SOURCE] 证据"},
             }]}
             with tempfile.TemporaryDirectory() as root:
-                output = Path(root) / "mission-output"
+                output = Path(root) / "output"
                 output.mkdir(parents=True, exist_ok=True)
                 (output / "business_objects.csv").write_bytes(to_csv(header, [valid_row]))
                 finalize_semantic_model(
-                    Path(root) / "mission-work", state, output_dir=output,
+                    Path(root) / "work", state, output_dir=output,
                     required_outputs=["business_objects.csv"],
                     context={"expectedFiles": ["business_objects.csv"], "taskType": "modeling"})
                 self.assertTrue(finalize_mock.called)

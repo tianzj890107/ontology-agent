@@ -6,13 +6,14 @@ has its own run store and workspace root.  The existing 47313 workbench is not
 imported by this process until after the standalone root is selected and does
 not share its task registry or HTTP routes.
 
-Public workspace names are generic::
+Public workspace names are generic and canonical::
 
     <run>/input, <run>/work, <run>/output
 
-The legacy modeling engine sees safe aliases named ``mission-input``,
-``mission-work`` and ``mission-output``.  All aliases resolve inside the same
-run root, so runtime, validator and file APIs operate on one workspace.
+New runs only create the canonical directories.  Historical runs created
+before the rename may still contain ``mission-*`` symlink aliases; those are
+resolved read-only through ``LEGACY_ALIASES`` (the centralized compatibility
+mapping) and never appear in user-facing API responses or Agent prompts.
 """
 
 from __future__ import annotations
@@ -123,7 +124,7 @@ DEFAULT_ARTIFACTS = (
     "indicators.csv",
 )
 DEFAULT_MODELING_PROMPT = (
-    "请直接读取当前任务 mission-input 中自动提供的四份 v0.0.1 规范/模板文件，"
+    "请直接读取当前任务 input/ 中自动提供的四份 v0.0.1 规范/模板文件，"
     "结合已选择的数据表或上传文件完成本体建模，并生成所选正式输出和审计文件；"
     "无需等待用户补充建模要求。"
 )
@@ -935,6 +936,10 @@ class RunStore:
 
     @staticmethod
     def _ensure_alias(root: Path, alias: str, target: str) -> None:
+        """Deprecated: only used to repair/read historical run aliases.
+
+        New runs never create ``mission-*`` aliases.
+        """
         link = root / alias
         if link.is_symlink():
             if link.resolve() == (root / target).resolve():
@@ -982,8 +987,6 @@ class RunStore:
             root.mkdir(parents=True, exist_ok=False)
             for name in PUBLIC_DIRS:
                 (root / name).mkdir()
-            for alias, target in LEGACY_ALIASES.items():
-                self._ensure_alias(root, alias, target)
             normalized_prompt = str(prompt or "").strip() or DEFAULT_MODELING_PROMPT
             normalized_title = str(title or "").strip()
             run = ModelingRun(run_id=run_id, root=str(root),
@@ -1814,14 +1817,14 @@ class ModelingRunManager:
                 task.conv.system_prompt += (
                     "\n\n[独立通用建模运行]\n"
                     "本次运行没有平台 taskCode、回调或业务任务绑定。只处理当前 ModelingRun。"
-                    "对外工作区使用 input/、work/、output/；内部 mission-* 目录只是安全别名。"
-                    "所有审计和中间态写入 work/，正式交付文件写入 output/。"
+                    "对外工作区使用 input/、work/、output/；所有审计和中间态写入 work/，"
+                    "正式交付文件写入 output/。"
                     "含样例数据模板（含样例数据-sheets/*.csv）仅用于理解字段、编码和页面显示等填写示例，"
                     "不是当前任务真实输入，不得把样例行复制到结果或据此新增建模对象;"
                     "数据库连接必须执行 input/verify_database.py 或导入 input/db_connection.py 的 create_db_engine；"
                     "禁止直接读取 input/.db_connection.json 的加密 password，也禁止手工拼接连接 URL；"
                     "数据库查询必须使用连接 helper 配置的 sourceSchema/search_path，不得默认查询 public；"
-                    "数据库模式必须先执行 mission-input/extract_schema.py 提取表结构到 work/schema_extract.json，"
+                    "数据库模式必须先执行 input/extract_schema.py 提取表结构到 work/schema_extract.json，"
                     "并基于该文件建模;缺少表结构证据时禁止导出正式 CSV;"
                     "schema_extract.json 的 tableNames 位于文件首部，先读取它获取全部表名清单，"
                     "再按需用 grep 按表名或列名定向查询单表定义，禁止反复整文件读取;"

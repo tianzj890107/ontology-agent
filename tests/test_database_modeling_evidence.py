@@ -31,7 +31,7 @@ class DatabaseModelingEvidenceTests(unittest.TestCase):
         root = Path(tempfile.mkdtemp())
         work = root / "work"
         output = root / "output"
-        input_dir = root / "mission-input"
+        input_dir = root / "input"
         work.mkdir()
         output.mkdir()
         input_dir.mkdir()
@@ -87,9 +87,9 @@ class DatabaseModelingEvidenceTests(unittest.TestCase):
     def test_ensure_database_helpers_generates_extract_schema(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            (root / "mission-input").mkdir(parents=True)
+            (root / "input").mkdir(parents=True)
             server.ensure_database_helpers(str(root), "db_config_path")
-            extract = root / "mission-input" / "extract_schema.py"
+            extract = root / "input" / "extract_schema.py"
             self.assertTrue(extract.is_file())
             content = extract.read_text(encoding="utf-8")
             self.assertIn("create_db_engine", content)

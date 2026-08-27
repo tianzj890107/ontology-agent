@@ -54,8 +54,8 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, \
                 patch.object(reliability, "_stage_specific_issues", return_value=[]) as validate:
             root = Path(root)
-            work = root / "mission-work"
-            output = root / "mission-output"
+            work = root / "work"
+            output = root / "output"
             work.mkdir()
             output.mkdir()
             first = validate_modeling_stages(work, output, state, ["logical_entities.csv"])
@@ -78,8 +78,8 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root, \
                 patch.object(reliability, "_stage_specific_issues", side_effect=validate_stage) as validate:
             root = Path(root)
-            work = root / "mission-work"
-            output = root / "mission-output"
+            work = root / "work"
+            output = root / "output"
             work.mkdir()
             output.mkdir()
             first = validate_modeling_stages(work, output, state, ["logical_entities.csv"])
@@ -96,8 +96,8 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
         state = {"businessObjectDecisions": [confirmed_bo()]}
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            work = root / "mission-work"
-            output = root / "mission-output"
+            work = root / "work"
+            output = root / "output"
             output.mkdir()
             with (output / "business_objects.csv").open("w", encoding="utf-8", newline="") as handle:
                 csv.writer(handle, lineterminator="\n").writerows([
@@ -138,10 +138,10 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
         state = {"businessObjectDecisions": [confirmed_bo("CO_NESTED")]}
         work = tempfile.TemporaryDirectory()
         try:
-            result = finalize_semantic_model(Path(work.name) / "mission-work", state)
+            result = finalize_semantic_model(Path(work.name) / "work", state)
             self.assertEqual(result["status"], "PASSED")
             state_file = json.loads(
-                (Path(work.name) / "mission-work" / "modeling_state.json").read_text(encoding="utf-8"))
+                (Path(work.name) / "work" / "modeling_state.json").read_text(encoding="utf-8"))
             self.assertEqual(state_file["businessObjectDecisions"][0]["r1"]["status"], "PASS")
         finally:
             work.cleanup()
@@ -152,12 +152,12 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
             "relationDecisions": [],
         }
         with tempfile.TemporaryDirectory() as root:
-            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            result = finalize_semantic_model(Path(root) / "work", state)
             self.assertEqual(result["status"], "PASSED")
             warning_codes = {issue.code for issue in result["issues"]
                              if issue.severity == "WARNING"}
             self.assertIn("MISSING_COMPOSITION_OWNER", warning_codes)
-            report = load_validation_report(Path(root) / "mission-work")
+            report = load_validation_report(Path(root) / "work")
             self.assertEqual(report["semantic_validation_status"], "PASSED")
             self.assertTrue(report["warnings"])
 
@@ -173,11 +173,11 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
             "evidenceTypes": [],
         }]}
         with tempfile.TemporaryDirectory() as root:
-            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            result = finalize_semantic_model(Path(root) / "work", state)
             self.assertEqual(result["status"], "PASSED")
             self.assertNotIn("UNSUPPORTED_CONFIRMED_RELATION",
                              {issue.code for issue in result["issues"]})
-            persisted = json.loads((Path(root) / "mission-work" / "modeling_state.json")
+            persisted = json.loads((Path(root) / "work" / "modeling_state.json")
                                    .read_text(encoding="utf-8"))
             record = persisted["relationDecisions"][0]
             self.assertEqual(record["status"], CANDIDATE)
@@ -188,10 +188,10 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
         # fail the final gate and enter the repair loop.
         state = {}
         with tempfile.TemporaryDirectory() as root:
-            output = Path(root) / "mission-output"
+            output = Path(root) / "output"
             output.mkdir(parents=True, exist_ok=True)
             (output / "business_objects.csv").write_bytes(b"")
-            result = finalize_semantic_model(Path(root) / "mission-work", state,
+            result = finalize_semantic_model(Path(root) / "work", state,
                                              output_dir=output,
                                              required_outputs=["business_objects.csv"],
                                              context={"expectedFiles": ["business_objects.csv"],
@@ -206,13 +206,13 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
             "assetDecisions": [{"tableName": "orders", "decision": "MODELED"}],
         }
         with tempfile.TemporaryDirectory() as root:
-            result = finalize_semantic_model(Path(root) / "mission-work", state)
+            result = finalize_semantic_model(Path(root) / "work", state)
             self.assertEqual(result["status"], "PASSED")
             issue = next(item for item in result["issues"]
                          if item.code == "ASSET_PROCESSING_COVERAGE_MISSING")
             self.assertEqual(issue.severity, "WARNING")
             self.assertEqual(issue.details["missing"], ["reference_codes"])
-            persisted = json.loads((Path(root) / "mission-work" / "modeling_state.json")
+            persisted = json.loads((Path(root) / "work" / "modeling_state.json")
                                    .read_text(encoding="utf-8"))
             decisions = {row["tableName"]: row for row in persisted["assetDecisions"]}
             self.assertEqual(decisions["orders"]["decision"], "MODELED")
@@ -222,11 +222,11 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
     def test_upload_checks_marker_without_running_semantic_gate(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            work = root / "mission-work"
+            work = root / "work"
             write_decision_audits(work, {})
             # The marker is produced by finalize in production; this fixture
             # represents a successful semantic finalize.
-            server.finalize_semantic_model(work, {}, output_dir=root / "mission-output")
+            server.finalize_semantic_model(work, {}, output_dir=root / "output")
             blob = "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n".encode()
             with patch.object(server, "validate_modeling_evidence",
                               side_effect=AssertionError("upload must not run semantic gate")):
@@ -248,7 +248,7 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
             root = Path(root)
             # Deliberately malformed semantic state.  This belongs to the
             # modeling-finalize path, not to the artifact upload path.
-            work = root / "mission-work"
+            work = root / "work"
             work.mkdir()
             (work / "modeling_state.json").write_text(json.dumps({
                 "businessObjectDecisions": [{
@@ -269,12 +269,12 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
     def test_completion_callback_consumes_marker_without_recomputing_semantics(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            output = root / "mission-output"
+            output = root / "output"
             output.mkdir()
             artifact = output / "logical_entities.csv"
             artifact.write_text("本地结果\n", encoding="utf-8")
             finalize_semantic_model(
-                root / "mission-work", {}, output_dir=output,
+                root / "work", {}, output_dir=output,
                 required_outputs=["logical_entities.csv"],
             )
             task = types.SimpleNamespace(
@@ -297,8 +297,8 @@ class SemanticFinalizeUploadBoundaryTests(unittest.TestCase):
 
     def test_two_missions_use_separate_decision_ledgers(self):
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
-            first_work = Path(first) / "mission-work"
-            second_work = Path(second) / "mission-work"
+            first_work = Path(first) / "work"
+            second_work = Path(second) / "work"
             finalize_semantic_model(first_work, {"businessObjectDecisions": [confirmed_bo("CO_A")]})
             finalize_semantic_model(second_work, {"businessObjectDecisions": [confirmed_bo("CO_B")]})
             first_csv = (first_work / "business_object_decisions.csv").read_text(encoding="utf-8")

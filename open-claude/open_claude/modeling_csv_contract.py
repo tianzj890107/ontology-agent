@@ -34,7 +34,7 @@ OBJECT_RELATION_TYPES = (
 )
 ELEMENT_TYPES = (
     "BUSINESS_OBJECT", "LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "ENTITY_RELATION",
-    "RULE", "BUSINESS_OBJECT_RELATION", "STATUS", "EVENT",
+    "RULE", "BUSINESS_OBJECT_RELATION", "STATUS", "EVENT", "ACTION",
 )
 INTEGRATION_RESULT_TYPES = ("已合并", "已修正", "待确认", "冲突", "缺失", "无需处理")
 
@@ -309,6 +309,19 @@ CONTRACTS: dict[str, CSVContract] = {
         unique=(("规则编码",),),
         chinese_name=("规则名称",),
         code_pattern={"规则编码": r"^R\d{7}$"},
+    ),
+    "actions.csv": CSVContract(
+        filename="actions.csv",
+        headers=("动作编码", "动作名称", "动作英文名", "动作描述", "动作类型",
+                 "业务对象编码", "协议", "服务节点", "服务名称"),
+        required=("动作编码", "动作名称", "动作英文名", "动作描述", "动作类型", "业务对象编码"),
+        enum={"动作类型": ("新增", "修改", "删除")},
+        unique=(("动作编码",),),
+        chinese_name=("动作名称",),
+        english_identifier=("动作英文名",),
+        code_pattern={"动作编码": r"^ACT\d{6}$",
+                      "业务对象编码": r"^[A-Za-z][A-Za-z0-9_]*$"},
+        references=(("业务对象编码", "businessObjectCodes"),),
     ),
     "terms.csv": CSVContract(
         filename="terms.csv",

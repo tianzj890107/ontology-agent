@@ -87,7 +87,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("COMPOSITION 和 EXTENSION", modeling)
         self.assertNotIn("自底向上业务对象识别规范_v3.md", modeling)
         self.assertIn("本体元模型v0.0.1.xlsx", modeling)
-        self.assertIn("本体元模型模板v0.0.1.xlsx", modeling)
+        self.assertIn("本体元模型模板v.0.0.1.xlsx", modeling)
         self.assertIn("Ontology平台模型编码规范v0.0.1.xlsx", modeling)
         self.assertIn("BO0005", modeling)
         self.assertIn("业务属性 | `AT` + 7 位流水码", modeling)
@@ -100,6 +100,11 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertIn("普通数据行、静态属性、状态值本身不是事件", modeling)
         self.assertIn("数据长度", modeling)
         self.assertIn("规则编码,规则名称,规则描述,触发条件,判断或结果,处置动作", modeling)
+        self.assertIn("动作元模型 v0.0.1", modeling)
+        self.assertIn("动作编码, 动作名称, 动作英文名, 动作描述, 动作类型, 业务对象编码, 协议, 服务节点, 服务名称", modeling)
+        self.assertIn("6 位流水码", modeling)
+        self.assertIn("ACT000001", modeling)
+        self.assertIn("明确证据优先，合理推断兜底", modeling)
         self.assertNotIn("本体元模型.xlsx", modeling)
         self.assertNotIn("本体元模型模板.xlsx", modeling)
         self.assertNotIn("本体建模步骤拆解.xlsx", modeling)
@@ -112,11 +117,23 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             modeling_skill_modules({"parseElements": "BUSINESS_OBJECTTERMRULEMETRIC"}),
             (("TERM", "业务术语v0.0.1.md"), ("RULE", "业务规则v0.0.1.md"), ("METRIC", "指标v0.0.1.md")),
         )
+        self.assertEqual(
+            modeling_skill_modules({"parseElements": "BUSINESS_OBJECTACTION"}),
+            (("ACTION", "动作v0.0.1.md"),),
+        )
         specialized = load_static_knowledge(
             ROOT / "agent_knowledge", "modeling",
             {"sourceMode": "DATABASE", "parseElements": ["TERM", "RULE", "METRIC"],
              "expectedFiles": "terms.csvbusiness_rules.csvmetrics.csv"},
         )
+        specialized_action = load_static_knowledge(
+            ROOT / "agent_knowledge", "modeling",
+            {"sourceMode": "DATABASE", "parseElements": ["ACTION"],
+             "expectedFiles": "actions.csv"},
+        )
+        self.assertIn("建模专项技能：动作v0.0.1.md", specialized_action)
+        self.assertIn("动作元模型 v0.0.1", specialized_action)
+        self.assertIn("动作编码, 动作名称, 动作英文名, 动作描述, 动作类型, 业务对象编码, 协议, 服务节点, 服务名称", specialized_action)
         self.assertIn("建模专项技能：业务术语v0.0.1.md", specialized)
         self.assertIn("优先发现已有的人工语义资产", specialized)
         self.assertIn("建模专项技能：业务规则v0.0.1.md", specialized)
@@ -127,7 +144,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         self.assertFalse(metric_rules.startswith("````"))
         self.assertIn("产出下限约束", metric_rules)
         self.assertIn("本体元模型v0.0.1.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型v0.0.1.md").read_text(encoding="utf-8"))
-        self.assertIn("本体元模型模板v0.0.1.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板v0.0.1.md").read_text(encoding="utf-8"))
+        self.assertIn("本体元模型模板v.0.0.1.xlsx", (ROOT / "agent_knowledge" / "modeling" / "本体元模型模板v0.0.1.md").read_text(encoding="utf-8"))
         data_model_rules = (ROOT / "agent_knowledge" / "modeling" / "数据模型建模规范v0.0.1.md").read_text(encoding="utf-8")
         self.assertIn("数据模型建模规范v0.0.1.xlsx", data_model_rules)
         self.assertIn("主题域分类", data_model_rules)
@@ -172,7 +189,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
         schema = (ROOT / "agent_knowledge" / "integration" / "output_schemav0.0.1.md").read_text(encoding="utf-8")
         for name in (
             "business_attributes.csv", "business_objects.csv", "business_rules.csv",
-            "business_object_relations.csv", "statuses.csv", "events.csv",
+            "actions.csv", "business_object_relations.csv", "statuses.csv", "events.csv",
             "conflict_elements.csv", "entity_relations.csv", "integration_report.csv",
             "logical_entities.csv", "merged_elements.csv", "missing_elements.csv",
             "pending_elements.csv",
@@ -358,7 +375,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertIn("source=component/dependent/child", server.build_modeling_instructions({}))
             self.assertIn("实体出现在 COMPOSITION 任意一端不等于合法", server.build_modeling_instructions({}))
             with tempfile.TemporaryDirectory() as modeling_tmp:
-                work = Path(modeling_tmp) / "mission-work"
+                work = Path(modeling_tmp) / "work"
                 work.mkdir()
                 (work / "modeling_state.json").write_text(json.dumps({
                     "entities": [
@@ -371,7 +388,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                         "relationType": "COMPOSITION", "status": "CONFIRMED",
                         "evidenceTypes": ["EXPLICIT_CONFIG"],
                         "evidenceLevel": "STRONG",
-                        "provenance": ["mission-input/ownership.yaml"],
+                        "provenance": ["input/ownership.yaml"],
                     }],
                 }), encoding="utf-8")
                 evidence_issues = server.validate_modeling_evidence(
@@ -417,26 +434,26 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 binary.write_bytes(b"PK\x03\x04" + b"\x00" * 32)
                 self.assertIn("不能使用 Read", execute_read({"file_path": str(binary)}, tmp))
             with tempfile.TemporaryDirectory() as reference_tmp:
-                legacy_reference = Path(reference_tmp) / "mission-input" / "本体元模型3.xlsx"
-                legacy_reference.parent.mkdir()
-                legacy_reference.write_bytes(b"legacy-system-reference")
+                reference_file = Path(reference_tmp) / "input" / "本体元模型3.xlsx"
+                reference_file.parent.mkdir()
+                reference_file.write_bytes(b"legacy-system-reference")
                 references = server.ensure_mission_reference_files(reference_tmp)
                 self.assertEqual(
                     references,
                     [
-                        "mission-input/Ontology平台模型编码规范v0.0.1.xlsx",
-                        "mission-input/本体元模型v0.0.1.xlsx",
-                        "mission-input/本体元模型模板v0.0.1.xlsx",
-                        "mission-input/本体元模型模板v0.0.1（含样例数据）.xlsx",
+                        "input/Ontology平台模型编码规范v0.0.1.xlsx",
+                        "input/本体元模型v0.0.1.xlsx",
+                        "input/本体元模型模板v.0.0.1.xlsx",
+                        "input/本体元模型模板v0.0.1（含样例数据）.xlsx",
                     ],
                 )
                 self.assertTrue((Path(reference_tmp) / references[0]).is_file())
                 self.assertTrue((Path(reference_tmp) / references[1]).is_file())
                 self.assertTrue((Path(reference_tmp) / references[2]).is_file())
                 self.assertTrue((Path(reference_tmp) / references[3]).is_file())
-                self.assertFalse(legacy_reference.exists())
-                source_template = ROOT / "rules" / "本体元模型模板v0.0.1.xlsx"
-                copied_template = Path(reference_tmp) / "mission-input" / source_template.name
+                self.assertFalse(reference_file.exists())
+                source_template = ROOT / "rules" / "本体元模型模板v.0.0.1.xlsx"
+                copied_template = Path(reference_tmp) / "input" / source_template.name
                 copied_template.write_bytes(b"0" * source_template.stat().st_size)
                 server.ensure_mission_reference_files(reference_tmp)
                 self.assertEqual(copied_template.read_bytes(), source_template.read_bytes())
@@ -480,6 +497,15 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             self.assertEqual(server._MODELING_HEADERS["business_terms.csv"], ["术语编码", "术语名称", "别名", "英文名", "缩略语", "术语定义"])
             self.assertEqual(server._MODELING_HEADERS["metrics.csv"][0], "指标编码")
             self.assertEqual(server._MODELING_HEADERS["business_rules.csv"], ["规则编码", "规则名称", "规则描述", "触发条件", "判断或结果", "处置动作"])
+            self.assertEqual(server._MODELING_HEADERS["actions.csv"], ["动作编码", "动作名称", "动作英文名", "动作描述", "动作类型", "业务对象编码", "协议", "服务节点", "服务名称"])
+            valid_action_csv = "动作编码,动作名称,动作英文名,动作描述,动作类型,业务对象编码,协议,服务节点,服务名称\nACT000001,创建采购订单,createPurchaseOrder,创建采购订单,新增,BO0001,,,\n"
+            self.assertEqual(server.validate_modeling_csv("actions.csv", valid_action_csv.encode()), [])
+            self.assertTrue(server.validate_modeling_csv(
+                "actions.csv", valid_action_csv.replace("新增", "执行").encode()
+            ))
+            self.assertTrue(server.validate_modeling_csv(
+                "actions.csv", valid_action_csv.replace("ACT000001", "ACT1").encode()
+            ))
             valid_term_csv = "术语编码,术语名称,别名,英文名,缩略语,术语定义\nT001,订单,,Order,,业务术语\n"
             self.assertEqual(server.validate_modeling_csv("business_terms.csv", valid_term_csv.encode()), [])
             self.assertTrue(server.validate_modeling_csv("business_terms.csv", b"id,name,description\n1,x,y\n"))
@@ -550,7 +576,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
             # -> model output -> MinIO upload and COMPLETED callback.
             with tempfile.TemporaryDirectory() as document_tmp:
                 document_root = Path(document_tmp)
-                document_input = document_root / "mission-input"
+                document_input = document_root / "input"
                 document_input.mkdir()
                 from io import BytesIO
                 package = BytesIO()
@@ -584,7 +610,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 self.assertEqual(parse_errors, [])
                 self.assertEqual(manifests[0]["format"], "docx")
                 self.assertIn("订单章节", (document_root / manifests[0]["bundle"] / "content.md").read_text(encoding="utf-8"))
-                output = document_root / "mission-output"
+                output = document_root / "output"
                 output.mkdir()
                 (output / "logical_entities.csv").write_text(
                     "业务对象编码,业务对象名称,逻辑实体编码,逻辑实体名称,逻辑实体英文名,逻辑实体定义,是否主逻辑实体,数据类别\n"
@@ -656,14 +682,14 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     document_handler._read_body = lambda: {
                         "project": "project", "prefix": "ontology/1/modeling-tasks/RMDOC001/agent-output",
                         "taskCode": "RMDOC001", "repositoryId": "1", "taskId": document_task.id,
-                        "taskType": "modeling", "paths": ["mission-output/logical_entities.csv"],
+                        "taskType": "modeling", "paths": ["output/logical_entities.csv"],
                     }
                     # Modeling semantic validation is completed before upload;
                     # this fixture represents that persisted finalize marker.
-                    server.write_decision_audits(Path(document_tmp) / "mission-work", {})
+                    server.write_decision_audits(Path(document_tmp) / "work", {})
                     server.finalize_semantic_model(
-                        Path(document_tmp) / "mission-work", {},
-                        output_dir=Path(document_tmp) / "mission-output",
+                        Path(document_tmp) / "work", {},
+                        output_dir=Path(document_tmp) / "output",
                         required_outputs=[],
                     )
                     document_handler._handle_minio_upload()
@@ -716,7 +742,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 self.assertFalse(current_state["generatedByAgent"])
                 self.assertNotEqual(
                     current_state["inputFingerprint"], populated_state["inputFingerprint"])
-                archives = list((Path(state_tmp) / "mission-work").glob("modeling_state.*.json"))
+                archives = list((Path(state_tmp) / "work").glob("modeling_state.*.json"))
                 self.assertTrue(archives)
             alias_status_task = types.SimpleNamespace(
                 repository_id="1", task_code="RMTERM001", task_type="modeling",
@@ -790,7 +816,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 upload_gate_task,
                 {"taskType": "modeling", "parseElements": ["LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "ENTITY_RELATION", "BUSINESS_OBJECT"],
                  "expectedFiles": ["logical_entities.csv", "business_attributes.csv", "entity_relations.csv", "business_objects.csv"]},
-                ["mission-output/business_objects.csv"],
+                ["output/business_objects.csv"],
             )
             self.assertEqual(upload_gate_errors, [])
             partial_contract_task = types.SimpleNamespace(
@@ -806,7 +832,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     {"taskType": "DOCUMENT_MODELING",
                      "parseElements": ["LOGICAL_ENTITY", "BUSINESS_ATTRIBUTE", "BUSINESS_OBJECT"],
                      "expectedFiles": ["logical_entities.csv", "business_attributes.csv", "business_objects.csv"]},
-                    ["mission-output/business_objects.csv"],
+                    ["output/business_objects.csv"],
                 ),
                 [],
             )
@@ -969,8 +995,8 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     migrated = server.migrate_legacy_mission_inputs(
                         {"source": {"filename": "source.xlsx", "objectKey": object_key}},
                         str(task_dir), "ontology-workspace-1")
-                    self.assertEqual(migrated, [f"mission-input/{legacy_name}"])
-                    self.assertTrue((task_dir / "mission-input" / legacy_name).is_file())
+                    self.assertEqual(migrated, [f"input/{legacy_name}"])
+                    self.assertTrue((task_dir / "input" / legacy_name).is_file())
                 finally:
                     server.SANDBOX_DIR, server.TASKS, server.SCRIPT_DIR = old_sandbox, old_tasks, old_script_dir
             with tempfile.TemporaryDirectory() as auth_tmp:
@@ -1021,7 +1047,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 {"logical_entities.csv", "entity_relations.csv"},
             )
             with tempfile.TemporaryDirectory() as task_tmp:
-                output = Path(task_tmp) / "mission-output"
+                output = Path(task_tmp) / "output"
                 output.mkdir()
                 result_file = output / "logical_entities.csv"
                 result_file.write_text("逻辑实体编码,逻辑实体名称\nLE1,采购订单\n", encoding="utf-8")
@@ -1040,7 +1066,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                     }},
                 )
                 server.finalize_semantic_model(
-                    Path(task_tmp) / "mission-work", {},
+                    Path(task_tmp) / "work", {},
                     output_dir=output, required_outputs=["logical_entities.csv"],
                 )
                 partial_task = types.SimpleNamespace(
@@ -1067,7 +1093,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                 _, changed_error = server.build_completed_callback_payload(completion_task)
                 self.assertIn("上传后已变更", changed_error)
             with tempfile.TemporaryDirectory() as upload_tmp:
-                output = Path(upload_tmp) / "mission-output"
+                output = Path(upload_tmp) / "output"
                 output.mkdir()
                 logical = output / "logical_entities.csv"
                 logical.write_text(
@@ -1120,7 +1146,7 @@ class StaticKnowledgeContractTests(unittest.TestCase):
 
                 upload_task = UploadTask()
                 server.finalize_semantic_model(
-                    Path(upload_tmp) / "mission-work", {},
+                    Path(upload_tmp) / "work", {},
                     output_dir=output,
                     required_outputs=upload_task.mission_context["expectedFiles"],
                 )
@@ -1159,11 +1185,11 @@ class StaticKnowledgeContractTests(unittest.TestCase):
                         "project": "project", "prefix": "ontology/1/modeling-tasks/RM123456789/agent-output",
                         "taskCode": "RM123456789", "repositoryId": "1", "taskId": "upload-task", "taskType": "modeling",
                     }
-                    handler._read_body = lambda: {**common, "paths": ["mission-output/logical_entities.csv"]}
+                    handler._read_body = lambda: {**common, "paths": ["output/logical_entities.csv"]}
                     handler._handle_minio_upload()
                     self.assertTrue(responses[-1][1]["callback"]["skipped"])
                     self.assertEqual(callback_statuses, [])
-                    handler._read_body = lambda: {**common, "paths": ["mission-output/business_attributes.csv"]}
+                    handler._read_body = lambda: {**common, "paths": ["output/business_attributes.csv"]}
                     handler._handle_minio_upload()
                     self.assertEqual(callback_statuses, [])
                     self.assertEqual(upload_task.platform_status, "RUNNING")

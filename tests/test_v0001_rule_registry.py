@@ -308,9 +308,9 @@ class V0001RuleRegistryTests(unittest.TestCase):
             "assetDecisions": [{"tableName": "orders", "decision": "MODELED"}],
         }
         with tempfile.TemporaryDirectory() as root:
-            work = Path(root) / "mission-work"
+            work = Path(root) / "work"
             work.mkdir()
-            output = Path(root) / "mission-output"
+            output = Path(root) / "output"
             output.mkdir()
             (output / "logical_entities.csv").write_text(
                 "业务对象编码,逻辑实体编码,逻辑实体名称,逻辑实体定义,是否主逻辑实体\n"

@@ -189,7 +189,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertEqual(paths, {"input/schema.json", "work/modeling_state.json",
                                  "work/all_attributes.csv", "output/business_objects.csv"})
         self.assertEqual(self.store.read_file(run, "work/modeling_state.json"), b'{"status":"UNKNOWN"}')
-        self.assertEqual(self.store.read_file(run, "mission-output/business_objects.csv"), b"code\nBO1\n")
+        self.assertEqual(self.store.read_file(run, "output/business_objects.csv"), b"code\nBO1\n")
 
     def test_base64_input_and_path_traversal_are_handled(self):
         run = self.store.create("DOCUMENT", "parse")
@@ -704,7 +704,7 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         run = self.store.create("DATABASE", "input boundary")
         bad_paths = [
             "work/modeling_state.json", "output/business_objects.csv",
-            "mission-work/a.json", "../output/a.csv", "/tmp/a.csv",
+            "work/a.json", "../output/a.csv", "/tmp/a.csv",
             "input/../../output/a.csv", "modeling_state.json",
         ]
         for name in bad_paths:

@@ -26,6 +26,7 @@ import { formatDisplayValue, isNumericDisplayValue } from "./numberFormat.js";
 import { appendStreamEvent, eventKey, mergeEvents, nextCursor } from "./eventSync.js";
 import { computeFitScale, layoutOntologyRadial, ONTOLOGY_LAYER_DEFINITIONS, scaledTypography } from "./ontologyRadialLayout.js";
 import { buildOntologyGraph } from "./ontologyGraphModel.js";
+import { ONTOLOGY_LAYOUT_OPTIONS, ontologyLayoutOption } from "./ontologyLayoutOptions.js";
 
 const OntologySigmaPreview = React.lazy(() => import("./OntologySigmaPreview.jsx"));
 
@@ -35,7 +36,7 @@ const $json = (value) => JSON.stringify(value, null, 2);
 const esc = (value) => String(value ?? "");
 
 function hasMissionOutputFiles(files = []) {
-  return files.some((file) => String(file?.path || "").replaceAll("\\", "/").startsWith("mission-output/"));
+  return files.some((file) => String(file?.path || "").replaceAll("\\", "/").startsWith("output/"));
 }
 
 async function api(path, options = {}) {
@@ -95,6 +96,7 @@ const STANDALONE_ARTIFACTS = [
   "business_attributes.csv",
   "entity_relations.csv",
   "business_rules.csv",
+  "actions.csv",
   "terms.csv",
   "indicators.csv",
 ];
@@ -104,6 +106,7 @@ const STANDALONE_ARTIFACT_LABELS = {
   "business_attributes.csv": "业务属性",
   "entity_relations.csv": "实体关系",
   "business_rules.csv": "业务规则",
+  "actions.csv": "动作",
   "terms.csv": "术语",
   "indicators.csv": "指标",
 };
@@ -141,7 +144,7 @@ function standaloneRunTitle(run) {
   // Empty-prompt runs receive the built-in instruction, which is execution
   // input rather than a human-facing title. Keep the same short title from
   // creation through every later status instead of falling back to the prompt.
-  if (!prompt || prompt.length > 48 || prompt.startsWith("请直接读取当前任务 mission-input")) return "本体建模";
+  if (!prompt || prompt.length > 48 || prompt.startsWith("请直接读取当前任务 input/")) return "本体建模";
   return prompt;
 }
 
@@ -1464,15 +1467,17 @@ function defaultOntologyLayers(availability) {
   return ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => availability[layer]);
 }
 
-function OntologyEChartsPreview({ data, appliedLayers }) {
+function OntologyEChartsPreview({ data, appliedLayers, onError }) {
   const scrollRef = useRef(null);
   const containerRef = useRef(null);
+  const [ready, setReady] = useState(false);
   useEffect(() => {
     let disposed = false;
     let chart = null;
     let observer = null;
     let wheelTarget = null;
     let wheelHandler = null;
+    setReady(false);
     void import("echarts").then((echarts) => {
       if (disposed || !containerRef.current || !scrollRef.current) return;
       chart = echarts.init(containerRef.current);
@@ -1546,6 +1551,10 @@ function OntologyEChartsPreview({ data, appliedLayers }) {
       wheelTarget.addEventListener("wheel", wheelHandler, { passive: false, capture: true });
       observer = new ResizeObserver(() => renderGraph());
       observer.observe(scrollRef.current);
+      setReady(true);
+    }).catch((error) => {
+      console.error("语义环形布局加载失败", error);
+      onError?.(error);
     });
     return () => {
       disposed = true;
@@ -1554,7 +1563,40 @@ function OntologyEChartsPreview({ data, appliedLayers }) {
       chart?.dispose();
     };
   }, [data, appliedLayers]);
-  return <div className="ontology-tree-scroll" ref={scrollRef}><div className="ontology-tree-preview" ref={containerRef} /></div>;
+  return <div className="ontology-tree-scroll" ref={scrollRef}><div className="ontology-tree-preview" ref={containerRef} />{!ready && <div className="ontology-tree-loading-overlay"><Spin tip="正在加载语义环形布局…" /></div>}</div>;
+}
+
+class OntologyPreviewErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error) {
+    this.props.onError?.(error);
+  }
+  componentDidUpdate(prevProps) {
+    if (this.props.resetKey !== prevProps.resetKey && this.state.failed) {
+      this.setState({ failed: false });
+    }
+  }
+  render() {
+    if (this.state.failed) {
+      return <div className="ontology-sigma-loading"><Empty description="关系布局加载失败，请稍后重试" /></div>;
+    }
+    return this.props.children;
+  }
+}
+
+function OntologyLayoutSelector({ value, onChange }) {
+  const selected = ontologyLayoutOption(value) || ONTOLOGY_LAYOUT_OPTIONS[0];
+  const options = ONTOLOGY_LAYOUT_OPTIONS.map((option) => ({
+    ...option,
+    label: <Tooltip title={option.hint} placement="left" mouseEnterDelay={0}><span>{option.label}</span></Tooltip>,
+  }));
+  return <div className="ontology-layout-selector"><span className="ontology-layout-label">布局</span><Select aria-label="布局" size="small" value={value} popupMatchSelectWidth={false} style={{ width: 148 }} options={options} onChange={onChange} /><Tooltip title={selected.hint} placement="bottom"><span className="ontology-layout-hint-icon" role="img" aria-label={`${selected.label}说明`}>?</span></Tooltip></div>;
 }
 
 function OntologyTreePreview({ data }) {
@@ -1562,7 +1604,9 @@ function OntologyTreePreview({ data }) {
   const [appliedLayers, setAppliedLayers] = useState(() => defaultOntologyLayers(availability));
   const [draftLayers, setDraftLayers] = useState(() => defaultOntologyLayers(availability));
   const [filterOpen, setFilterOpen] = useState(false);
-  const [viewMode, setViewMode] = useState("sigma");
+  const [layoutMode, setLayoutMode] = useState("network");
+  const [layoutError, setLayoutError] = useState(null);
+  const lastGoodLayoutRef = useRef("network");
   useEffect(() => {
     let cancelled = false;
     const preload = () => { if (!cancelled) void import("echarts"); };
@@ -1575,14 +1619,26 @@ function OntologyTreePreview({ data }) {
       else window.clearTimeout(idleId);
     };
   }, []);
+  const switchLayout = (next) => {
+    if (next === layoutMode || !ontologyLayoutOption(next)) return;
+    lastGoodLayoutRef.current = layoutMode;
+    setLayoutError(null);
+    setLayoutMode(next);
+  };
+  const handleLayoutError = () => {
+    setLayoutError("布局加载失败，已恢复上一个可用布局。");
+    setLayoutMode(lastGoodLayoutRef.current);
+  };
   const filterContent = <div className="ontology-layer-menu">
     <div className="ontology-layer-options">{ONTOLOGY_LAYER_DEFINITIONS.map((layer) => <Checkbox key={layer.key} disabled={!availability[layer.key]} checked={draftLayers.includes(layer.key)} onChange={(event) => setDraftLayers((current) => event.target.checked ? [...current, layer.key] : current.filter((item) => item !== layer.key))}>{layer.label}</Checkbox>)}</div>
     <div className="ontology-layer-actions"><Button size="small" onClick={() => { setDraftLayers(appliedLayers); setFilterOpen(false); }}>取消</Button><Button size="small" type="primary" disabled={!draftLayers.length} onClick={() => { setAppliedLayers(ONTOLOGY_LAYER_DEFINITIONS.map((layer) => layer.key).filter((layer) => draftLayers.includes(layer))); setFilterOpen(false); }}>确认</Button></div>
   </div>;
+  const layerKey = appliedLayers.join("|");
+  const radialLayout = layoutMode === "radial";
   return <div className="ontology-tree-shell">
-    <div className="ontology-view-switch" role="group" aria-label="本体可视化视图"><button type="button" className={viewMode === "echarts" ? "active" : ""} onClick={() => setViewMode("echarts")}>环形图</button><button type="button" className={viewMode === "sigma" ? "active" : ""} onClick={() => setViewMode("sigma")}>网络图</button></div>
-    <Popover open={filterOpen} placement="leftTop" trigger="click" content={filterContent} onOpenChange={(open) => { if (open) setDraftLayers(appliedLayers); setFilterOpen(open); }}><button type="button" className="ontology-layer-filter-button" aria-label="筛选可视化层级" title="筛选可视化层级"><OntologyFilterIcon /></button></Popover>
-    {viewMode === "echarts" ? <OntologyEChartsPreview key={`echarts:${appliedLayers.join("|")}`} data={data} appliedLayers={appliedLayers} /> : <React.Suspense fallback={<div className="ontology-sigma-loading"><Spin tip="正在加载网络图…" /></div>}><OntologySigmaPreview key={`sigma:${appliedLayers.join("|")}`} data={data} appliedLayers={appliedLayers} /></React.Suspense>}
+    <div className="ontology-toolbar"><OntologyLayoutSelector value={layoutMode} onChange={switchLayout} /><Popover open={filterOpen} placement="leftTop" trigger="click" content={filterContent} onOpenChange={(open) => { if (open) setDraftLayers(appliedLayers); setFilterOpen(open); }}><button type="button" className="ontology-layer-filter-button" aria-label="筛选可视化层级" title="筛选可视化层级"><OntologyFilterIcon /></button></Popover></div>
+    {layoutError && <div className="ontology-layout-error" role="alert">{layoutError}</div>}
+    {radialLayout ? <OntologyEChartsPreview key={`radial:${layerKey}`} data={data} appliedLayers={appliedLayers} onError={handleLayoutError} /> : <React.Suspense fallback={<div className="ontology-sigma-loading"><Spin tip="正在加载关系布局…" /></div>}><OntologyPreviewErrorBoundary key={`network:${layerKey}`} resetKey={`network:${layerKey}`} onError={handleLayoutError}><OntologySigmaPreview data={data} appliedLayers={appliedLayers} /></OntologyPreviewErrorBoundary></React.Suspense>}
   </div>;
 }
 
@@ -1731,7 +1787,8 @@ function FilePanel({ open, files, loading, selected, onSelect, onSelectGroup, on
     if (next.has(dir)) next.delete(dir); else next.add(dir);
     return next;
   });
-  const groupLabel = (dir) => <><FolderPanelIcon /> {dir ? `${dir}/` : "root/"}</>;
+  const GROUP_LABELS = { root: "项目公共区", input: "输入", work: "工作", output: "输出" };
+  const groupLabel = (dir) => <><FolderPanelIcon /> {dir ? `${GROUP_LABELS[dir] || dir}/` : "项目公共区/"}</>;
   const renderFiles = (items) => items.map((file) => <div className={`file-row ${focusPath === file.path ? "file-row-focused" : ""}`} key={file.path}><input type="checkbox" checked={selected.includes(file.path)} onChange={() => onSelect(file.path)} /><button onClick={() => onOpen(file.path)}>{displayPath(file).split("/").pop()}</button><small>{formatFileSize(file.size)}</small></div>);
   const renderSubgroup = (dir, subdir, items) => {
     const key = `${dir}/${subdir}`;
@@ -2280,7 +2337,7 @@ function App() {
   const onSaveKey = async () => { const result = await api("/api/apikey", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: keyValue }) }); if (result.error) messageApi.error(result.error); else messageApi.success("模型密钥已保存"); };
 
   const fileUrl = (path, task = active) => { const project = task?.project || ""; return `/p/${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}${missionSearch({ taskId: task?.id || "" }, task)}`; };
-  const ontologyFiles = useMemo(() => filesTaskId === active?.id ? selectOntologyArtifacts(files, "mission-output/") : null, [files, filesTaskId, active?.id]);
+  const ontologyFiles = useMemo(() => filesTaskId === active?.id ? selectOntologyArtifacts(files, "output/") : null, [files, filesTaskId, active?.id]);
   const showPreview = (next) => {
     if (previewImageUrlRef.current) URL.revokeObjectURL(previewImageUrlRef.current);
     previewImageUrlRef.current = next?.image || "";

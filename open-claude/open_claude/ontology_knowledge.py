@@ -35,6 +35,9 @@ MODELING_SKILL_MODULES = (
       "COMPOSITE_INDICATOR", "指标"),
      ("metrics.csv", "indicator.csv", "atomic_indicators.csv",
       "composite_indicators.csv", "indicator_lineage.csv")),
+    ("ACTION", "动作v0.0.1.md",
+     ("ACTION", "ACTIONS", "动作"),
+     ("actions.csv",)),
 )
 
 
