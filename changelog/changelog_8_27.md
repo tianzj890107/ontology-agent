@@ -191,6 +191,13 @@
 
 验证结果：第一阶段 `pytest tests/test_tasks.py -q` 94 passed；全局 parseElement 边界修复后 `pytest tests/test_tasks.py tests/test_upload_gate_separation.py -q` 182 passed / 54 subtests，`py_compile open-claude/oc_codex_server.py` 与 `git diff --check` 通过。提交 `b0fcec5`（结构化失败响应）与 `ff0851d`（全局采用 execution-context 原始 parseElement）已推送并部署 47313，部署测试 22/22 通过。使用任务绑定身份经正式 `/api/tasks/9e1646511938/platform-status` 路径复测 `SUCCESS`：平台返回 HTTP 200、`{"success":true,"code":200,"msg":"success"}`，任务 `RM2092866461941178368` 已为 `platformStatus=COMPLETED`，8 个产物全部记录为 generatedArtifacts。
 
+### 文件面板操作区移除完成态旁注
+
+- 移除“下载所选 / 上传到 MinIO / 本体可视化”三个按钮旁边的常驻文字“上传新结果将恢复执行”，操作区只保留三个按钮，不再额外占用横向空间。
+- 上传按钮的悬停说明与“完成后上传会恢复任务为执行中”的实际行为保持不变，避免删除必要的操作反馈。
+
+主要文件：`frontend/src/main.jsx`、`tests/test_frontend_contract.py`、`frontend/dist`。
+
 ### 业务对象编码契约收紧：BO + 4 位流水码
 
 完成此前只改了一半的业务对象编码收紧：正式建模产物中的 `业务对象编码` 统一为 `BO` + 4 位流水码（`^BO\d{4}$`，如 `BO0001`），不再接受任意字母开头的旧格式（如 `CO001`、`BO1`）。

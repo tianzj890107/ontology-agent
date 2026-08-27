@@ -311,6 +311,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('showAutoApprove={isMissionTask}', source)
         self.assertIn('上传文件</span></Button>', source)
         self.assertIn('上传新结果将恢复任务为执行中', source)
+        self.assertNotIn('<span className="panel-note">上传新结果将恢复执行</span>', source)
         self.assertNotIn('"当前任务范围"', source)
         self.assertIn('<Button className="new-task" onClick={handleNewSession}>+ 新会话</Button>', source)
         self.assertIn('const reuseMissionTask = async () =>', source)
