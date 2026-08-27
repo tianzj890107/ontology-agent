@@ -190,7 +190,7 @@
 
 主要文件：`open-claude/oc_codex_server.py`、`tests/test_tasks.py`、`API/backend-agent-interaction-api.md`、`changelog/changelog_8_27.md`。
 
-验证结果：`pytest tests/test_tasks.py -q` 94 passed；`py_compile open-claude/oc_codex_server.py` 与 `git diff --check` 通过。发布与真实任务回调结果待完成后补充。
+验证结果：第一阶段 `pytest tests/test_tasks.py -q` 94 passed；全局 parseElement 边界修复后 `pytest tests/test_tasks.py tests/test_upload_gate_separation.py -q` 182 passed / 54 subtests，`py_compile open-claude/oc_codex_server.py` 与 `git diff --check` 通过。提交 `b0fcec5`（结构化失败响应）与 `ff0851d`（全局采用 execution-context 原始 parseElement）已推送并部署 47313，部署测试 22/22 通过。使用任务绑定身份经正式 `/api/tasks/9e1646511938/platform-status` 路径复测 `SUCCESS`：平台返回 HTTP 200、`{"success":true,"code":200,"msg":"success"}`，任务 `RM2092866461941178368` 已为 `platformStatus=COMPLETED`，8 个产物全部记录为 generatedArtifacts。
 
 ### 业务对象编码契约收紧：BO + 4 位流水码
 
