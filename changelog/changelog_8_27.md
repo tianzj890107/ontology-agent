@@ -100,7 +100,7 @@
 
 ### 本体建模 CSV 上传门禁修复：表头规范化与上传/完成门禁分离
 
-修复 47313“上传到 MinIO”对本体建模 CSV 的两类错误拦截：`entity_relations.csv` 历史兼容字段名称被误报“期望16列、实际16列”；`logical_entities.csv` 业务对象编码为空的逻辑实体因缺少内部审计归属状态被上传门禁拒绝。本次只做本地修改与验证，未部署、未 SSH、未重启、未 commit、未 push。
+修复 47313“上传到 MinIO”对本体建模 CSV 的两类错误拦截：`entity_relations.csv` 历史兼容字段名称被误报“期望16列、实际16列”；`logical_entities.csv` 业务对象编码为空的逻辑实体因缺少内部审计归属状态被上传门禁拒绝。
 
 - 表头规范化（集中式）：在 `modeling_csv_contract.py` 新增 `HEADER_ALIASES` 契约配置与 `normalize_header_cell/normalize_csv_header/normalize_csv_blob/header_mismatch_messages` 纯函数。顺序为 UTF-8 BOM（`utf-8-sig`）→ 首尾空白/零宽字符清理 → 已登记兼容别名映射 → 与正式字段比较；未知字段、错误顺序、少列/多列仍拒绝。`entity_relations.csv` 登记历史等价别名 `源关联属性编码→源业务属性编码`、`目标关联属性编码→目标业务属性编码`。
 - 表头错误信息：不再只显示“期望 N 列、实际 N 列”，改为逐列指出 `第 N 列期望“X”，实际为“Y”`、缺失字段、未知字段；字段集合正确但顺序错误时明确报告“字段顺序不符合模板”。
@@ -122,3 +122,4 @@
 
 验证结果：
 - 全量 `pytest tests`：639 passed / 13 skipped / 371 subtests；`py_compile` 改动 Python 文件通过；Node 测试 47/47；`npm run build` 成功（仅既有大 chunk 提示）；`git diff --check` 通过。
+- 发布：改动以 commit `0776364` 提交并推送 `20260727`，服务器快进到同一提交；发布前 47313/47314 均无活动或排队任务。47313 经 `scripts/deploy_server.sh` 重启为 pid `2639630`，47314 重启为 pid `2639894`；两服务部署后健康检查均通过，任务、run、数据库与历史用户产物未修改。
