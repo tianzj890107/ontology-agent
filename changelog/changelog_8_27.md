@@ -185,10 +185,9 @@
 - 根因：平台 `SUCCESS` 回调失败时，47313 的失败记录分支把回调 `files` 字典列表直接传给 `set_task_run_result`；函数对列表执行 `set()` 时触发 `TypeError: unhashable type: 'dict'`，HTTP 请求线程在返回 JSON 前异常退出，前端因此只显示“网络连接错误”，掩盖了真实平台响应。
 - 修复：`set_task_run_result` 统一接受文件名或回调文件对象，从 `filename/name` 提取并去重生成 `generatedArtifacts`；回调失败固定返回 HTTP 502、`code=PLATFORM_SUCCESS_CALLBACK_FAILED`、上游错误、callback 详情与最新 task 摘要，不再断开连接。成功路径继续使用正式 `SUCCESS` + 8 个文件的 `parseElement/filename/objectKey/previewUrl` 回调契约。
 - 真实回调复测进一步定位平台拒绝原因：任务声明的小写 `action` 被 Agent 内部规范化后以大写 `ACTION` 回传，平台按 execution-context 原始值做严格校验并返回“parseElement 未在任务解析要素中声明”。新增统一回调边界映射：内部继续使用大写枚举做白名单、依赖和门禁，所有出站 `files[].parseElement` 则按语义匹配后原样采用当前任务 execution-context 的声明值；该任务的 8 类文件统一回传 `business_object/logical_entity/business_attribute/entity_relation/rule/term/indicator/action`，不再逐类型硬编码或只修 ACTION。
-- API 文档的解析要素表与 SUCCESS 示例改为平台小写协议，并明确“内部可规范化、出站必须原样采用任务声明值”的边界契约。
 - 回归测试覆盖回调文件对象规范化，以及上游拒绝时结构化 502 响应、错误信息和产物列表持久化。
 
-主要文件：`open-claude/oc_codex_server.py`、`tests/test_tasks.py`、`API/backend-agent-interaction-api.md`、`changelog/changelog_8_27.md`。
+主要文件：`open-claude/oc_codex_server.py`、`tests/test_tasks.py`、`changelog/changelog_8_27.md`。外部提供的 `API/backend-agent-interaction-api.md` 保持原文，不随线上兼容处理修改。
 
 验证结果：第一阶段 `pytest tests/test_tasks.py -q` 94 passed；全局 parseElement 边界修复后 `pytest tests/test_tasks.py tests/test_upload_gate_separation.py -q` 182 passed / 54 subtests，`py_compile open-claude/oc_codex_server.py` 与 `git diff --check` 通过。提交 `b0fcec5`（结构化失败响应）与 `ff0851d`（全局采用 execution-context 原始 parseElement）已推送并部署 47313，部署测试 22/22 通过。使用任务绑定身份经正式 `/api/tasks/9e1646511938/platform-status` 路径复测 `SUCCESS`：平台返回 HTTP 200、`{"success":true,"code":200,"msg":"success"}`，任务 `RM2092866461941178368` 已为 `platformStatus=COMPLETED`，8 个产物全部记录为 generatedArtifacts。
 
