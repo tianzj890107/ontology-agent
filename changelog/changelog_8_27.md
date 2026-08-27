@@ -72,3 +72,13 @@
 - 建模引擎与前端：`modeling_reliability.py`、`document_parser.py` 改用 workspace_paths；前端文件树分组显示“输入/工作/输出”，`main.jsx` 的 `mission-output/` 产物匹配改为 `output/`；API 文档、SOP、`agent_knowledge/**` 活动规范与 `scripts/build_agent_knowledge.py` 提示词全部去除 `mission-*`（历史 changelog 不改）。
 - 新增 `tests/test_workspace_paths.py`（15 项：仓库根/源码目录/HOME/空路径/相对与符号链接逃逸拒绝、合法任务目录可用、canonical 优先与 legacy 只读回退、新写入只进 canonical、47313/47314 新任务只创建 input/work/output）；重写 `tests/test_task_workspace_files.py`（canonical 列表、legacy 逻辑路径映射、双布局共存 canonical 优先）；更新 `test_sandbox_security.py`、`test_semantic_finalize_upload_boundary.py`、`test_modeling_csv_contract.py`、`test_modeling_reliability.py`、`test_database_modeling_evidence.py`、`test_document_parser.py`、`test_credential_crypto.py`、`test_ontology_knowledge.py`、`test_standalone_modeling_server.py`、`test_frontend_contract.py`、`test_v0001_rule_registry.py` 至 canonical 契约。
 - 验证结果：全量 `pytest tests` 558 passed / 13 skipped / 371 subtests；`py_compile` 全部改动 Python 文件通过；`npm run build` 成功（仅既有大 chunk 警告，新 hash bundle 已生成）；`git diff --check` 通过。
+
+### 部署与线上验证（工作区统一命名）
+
+- 已提交并推送 `20260727`（commit `4813811`）；服务器 `git pull --ff-only` 到同一 commit，部署前备份服务器配置/索引至 `backup-pre-2026-08-27-111442/`（`.env`、`.standalone-modeling-api-key`、`.standalone-modeling-data-sources.json`、`open-claude/sandbox/.web_tasks.json`）。
+- 47313 经 `scripts/deploy_server.sh` 重启，pid `1470949`；47314 经 `scripts/run_standalone_modeling.sh` 重启，pid `1472427`。
+- 两服务 `/` 与 `/health` 均 200；`activeRuns=0`、`queuedRuns=0`；`coordination` 如实报告 backend=file、quotaScope=process、queueScope=process、multiHostSafe=false；`providerInUse/databaseInUse=0`。
+- 线上 HTML 已加载新 bundle：`frontend/dist/assets/index-BcoJeGei.js` 与 `index-D7obonjB.css`（47313/47314 一致）。
+- 新 47314 run 验证：通过 API 创建测试 run，磁盘只生成 `input/work/output`，无 `mission-*` 符号链接；验证后已完整清理（SQLite 索引行、`.runs.json` 条目与 run 工作目录），未影响既有 5 个 run。
+- 历史 run 兼容验证：既有 run 文件列表返回 53 项且全部为 canonical 逻辑路径（`input/...`、`work/...`、`output/...`），无 `mission-*` 命名条目；`work/modeling_state.json` 经 canonical 路径可正常读取。
+- 两服务日志无 traceback/路径/符号链接错误；本体可视化仍读取任务 `output/` 产物。
