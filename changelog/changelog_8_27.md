@@ -174,11 +174,11 @@
 - 建模任务遇到模型传输或协议类错误时仍在本地事件日志记录完整 `error` 供排查，但不再向平台回写 `FAILED`；本地任务保留可续跑的 `error` 状态，平台任务状态维持 `RUNNING`，`runResult` 记录为 `PAUSED` 与 `RECOVERABLE_PROVIDER_ERROR`，用户可在同一任务直接重试。
 - DeepSeek thinking 模式的 `reasoning_content must be passed back`、工具消息链不完整、无合法 assistant content/tool_calls，以及连接中断、连接/读写/网关超时均纳入可恢复范围；余额不足、鉴权失败和普通业务 400 不纳入，仍按真实失败处理。
 - 完成门禁不再仅因历史 `FAILED/CANCELLED` 平台状态阻断已经齐备且哈希一致的正式产物；活动 execution、文件缺失、上传不完整、哈希不一致等确定性问题仍然阻断。
-- 服务器最新任务 `RM2092866461941178368` 的 8 个真实输出文件均已上传至 `ontology/1/modeling-tasks/RM2092866461941178368/agent-output/`；会话尾部 DeepSeek 协议 error 将在精确备份后替换为基于真实产物统计的成功输出摘要，任务本地平台状态恢复为 `RUNNING`，不修改 CSV、MinIO 对象或数据库数据。
+- 服务器最新任务 `RM2092866461941178368` 的 8 个真实输出文件均已上传至 `ontology/1/modeling-tasks/RM2092866461941178368/agent-output/`；会话尾部 seq `72071` 的 DeepSeek 协议 error 已在完整备份后替换为基于真实产物统计的成功输出摘要（BO 3、LE 17、属性 626、关系 18、规则 12、术语 30、指标 8、动作 16），任务本地平台状态恢复为 `RUNNING`、`runResult=PAUSED`，CSV、MinIO 对象与数据库数据均未修改。备份位于服务器 `backup-task-9e1646511938-pre-success-message-20260827-1815/`，可恢复。
 
 主要文件：`open-claude/oc_codex_server.py`、`tests/test_tasks.py`、`changelog/changelog_8_27.md`。
 
-验证结果：`pytest tests/test_tasks.py -q` 92 passed；`py_compile open-claude/oc_codex_server.py` 与 `git diff --check` 通过。部署与服务器会话修复结果见文末最终发布记录。
+验证结果：`pytest tests/test_tasks.py tests/test_openai_compat.py -q` 128 passed；`py_compile open-claude/oc_codex_server.py` 与 `git diff --check` 通过。功能提交 `4298426` 与配套契约提交 `31db5ce` 已推送并部署；47313/47314 均无活动任务后重启，健康检查均为 HTTP 200，线上版本为 `31db5ce`。47313 首次部署因配套知识测试尚未随功能提交入库而在重启前停止，补齐同批文件后部署测试 22/22 通过，旧服务未因此中断。
 
 ### 业务对象编码契约收紧：BO + 4 位流水码
 
