@@ -24,7 +24,7 @@
 - `AGENTS.md` 新增“提交与禁止部署（最高优先级）”：修改并验证后必须 commit 并 push 到当前分支；push 不代表部署；除非用户逐次单独授权，否则永远不得部署、SSH、SCP/rsync、服务器 git pull、执行部署/重启脚本、`systemctl`、kill 线上进程、重启或停止线上服务；禁 force push。
 - 同步修订 `debug.md`、`agent_knowledge/README.md`、`DEPLOYMENT.md`、`README (1).md`、`open-claude/README.md`、`日报.md`；历史运维部署说明仅供人工参考，保留不删。
 - 新增防回归测试 `tests/test_repository_workflow_contract.py`（7 项断言）。
-- 状态：今日所有修改均已 commit 并 push 到 `20260727`（含本 changelog 提交）；未部署、未连接服务器、未重启任何服务。
+- 状态：今日所有修改均已 commit 并 push 到 `20260727`（含本 changelog 提交）；当日后续已获用户明确授权部署 `v0.1.1`，部署记录见文末“v0.1.1 正式定版与部署”。
 
 ### 品牌统一与全屏预览（47313/47314 共用前端）
 
@@ -82,7 +82,7 @@
 - mission 请求竞态隔离（定版前最后修复）：`loadMission` 纳入与 task open 相同的 generation/AbortController 保护，新增 `createMissionCoordinator` 纯控制器与 `missionRequestRef`；`openTask` 在 mission await 后、任何可见 state commit 前重新校验当前请求，`setMeta` 移入最终守卫之后，后台 `scheduleIdle` 在关键 await 后校验 generation；旧 mission 的 catch/finally 不能覆盖新 mission 上下文或清除新 loading，A → B → A 只接受最新一代结果。
 - 测试：`frontend/tests/sessionCache.test.mjs` 新增 7 项真实异步竞态行为测试（A mission 迟到不能覆盖 B、旧 finally 不能清除新 loading、A → B → A 只接受最新一代、旧失败不覆盖、abort 静默结束、身份 key 隔离）；`frontend/tests/ontologyPreviewRuntime.test.mjs` 新增 3 项接线契约（mission await 后重新校验、setMeta 位于最终守卫之后、scheduleIdle 受 generation 限制）；`tests/test_frontend_contract.py` 的旧历史回放契约更新为带 generation 守卫的形式。
 - 验证：前端 Node 测试 117/117 通过、Python 全量 739 passed / 13 skipped / 452 subtests、`npm run build` 成功、`git diff --check` 通过。
-- 状态：v0.1.1 尚未定版、未创建 tag、未创建 GitHub Release；commit/push 状态见最终报告；未部署。
+- 状态：本条目为 v0.1.1 开发与验证的最终实现状态；定版、tag、双仓库 Release 与部署结果见文末“v0.1.1 正式定版与部署”。
 
 ### GitHub Release 双仓库发布规范
 
@@ -96,11 +96,13 @@
 - tag 核验：两端 `v0.1.0` tag object 均为 `38eae0402176e2e801ba92bcd00ee304b83eacf0`、peeled commit 均为 `188057d8a81b7d83f0aeb858e40c3ef14fddf539`，未移动；未创建 `v0.1.1` tag 或 Release。
 - 验证：全量 Python 测试通过、`git diff --check` 通过；未部署、未连接服务器。
 
-### v0.1.1 正式定版（未部署）
+### v0.1.1 正式定版与部署
 
 - 产品 UI 版本常量 `PRODUCT_VERSION` 更新为 `v0.1.1`，47313 与 47314 继续共用同一常量；重新构建 `frontend/dist`；知识规范/元模型/模板/CSV 契约的 `v0.0.1` 未修改。
-- `docs/versions/v0.1.1.md` 状态更新为“已定版、未部署”，Git Tag 记录为 `v0.1.1`；`docs/versions/README.md` 将 `v0.1.1` 标为“已定版、未部署、仓库最新正式版本”，`v0.1.0` 保持“已定版、当前线上版本”；根 `README.md` 明确仓库最新正式版本为 `v0.1.1` 且当前服务器线上仍为 `v0.1.0`。
+- `docs/versions/v0.1.1.md` 状态更新为“已定版、已部署”，Git Tag 记录为 `v0.1.1`；`docs/versions/README.md` 将 `v0.1.1` 标为“已定版、已部署、仓库最新正式版本”，`v0.1.0` 标为“已定版、历史版本”；根 `README.md` 明确仓库最新正式版本为 `v0.1.1` 且已部署至当前服务器线上。
 - 发布契约：定版 commit 之后随即创建 annotated tag `v0.1.1`（message `Release v0.1.1`）并精确双推 `origin` 与 `personal`（禁止 `git push --tags` 与 force push）；随后按双仓库规则在 `tianzj890107/ontology-agent` 与 `zhenzhang0408/ontology-agent` 创建标题为“硕磐智能建模 v0.1.1”、非 draft、非 prerelease、正文一致的 GitHub Release；已存在则验收复用，不重复创建。
 - `v0.1.0` tag（object `38eae0402176e2e801ba92bcd00ee304b83eacf0`、peeled `188057d8a81b7d83f0aeb858e40c3ef14fddf539`）保持未移动。
-- 实际 tag object hash 与两个 Release URL 以本次定版最终报告为准。
-- 验证：定版前完整验证通过（前端 Node、Python 全量、production build、`git diff --check`）；未部署、未连接服务器、未启动/停止/重启任何服务；当前线上仍为 `v0.1.0`。
+- 实际结果：`v0.1.1` annotated tag object `1b5a129b7a8026234469c352f3b5bccadb62a997`、peeled commit `e5cc67e464f65bdfa1df3d50955853b197c407ab`，origin 与 personal 两端一致；双仓库 Release 均已创建：origin `https://github.com/tianzj890107/ontology-agent/releases/tag/v0.1.1`、personal `https://github.com/zhenzhang0408/ontology-agent/releases/tag/v0.1.1`，标题均为“硕磐智能建模 v0.1.1”、非 draft、非 prerelease、正文一致。
+- 部署：2026-08-28 用户明确授权部署后，服务器（company-server，`/home/data/zhangzhen_home/zhangzhen/ontology/ontology-agent`）先绕开 `https_proxy` 直连 `git fetch origin 20260727` 并 `git merge --ff-only` 快进到定版 commit `e5cc67e464f65bdfa1df3d50955853b197c407ab`；47313 经 `scripts/deploy_server.sh` 部署（25 项部署门禁测试通过，新 pid `678197`），47314 经 `scripts/run_standalone_modeling.sh` 重启（新 pid `679841`）；部署前确认 47313 无活跃/排队任务、47314 仅 1 个 FAILED run，无 QUEUED/ANALYZING。
+- 部署验证：47313 与 47314 的 `/`、`/health` 均返回 200，两服务启动日志均含 `provider transport timeouts: connect=5s read=600s write=600s pool=600s` 部署基线；线上 HTML 均引用新 bundle `index-Q74jSlUt.js`，其 sha256 与本地 `frontend/dist` 构建产物一致，界面产品版本为 `v0.1.1`。
+- 验证：定版前完整验证通过（前端 Node 117/117、Python 全量 739 passed / 13 skipped / 452 subtests、production build、`git diff --check`）；`v0.1.0` tag（object `38eae0402176e2e801ba92bcd00ee304b83eacf0`、peeled `188057d8a81b7d83f0aeb858e40c3ef14fddf539`）保持未移动；未创建额外 tag 或 Release。

@@ -78,10 +78,11 @@ class DocumentationLayoutTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("当前版本：`v0.1.1`", readme)
         # 文档必须区分“仓库最新正式版本”和“当前线上已部署版本”：v0.1.1
-        # 已定版但未部署，服务器仍运行 v0.1.0。
+        # 已定版并部署，当前线上版本与仓库最新正式版本一致。
         self.assertIn("v0.1.1", readme)
         self.assertIn("v0.1.0", readme)
-        self.assertIn("尚未部署", readme)
+        self.assertIn("已部署", readme)
+        self.assertNotIn("尚未部署", readme)
         version_doc = (ROOT / "docs" / "versions" / "v0.1.0.md").read_text(encoding="utf-8")
         self.assertIn("产品 UI 版本 `v0.1.0`", version_doc)
 
