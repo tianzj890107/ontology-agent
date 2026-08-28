@@ -34,3 +34,13 @@
 - 全屏预览样式：`frontend/src/styles.css` 全屏 Modal 从左上角开始并占满 `100vw × 100dvh`（`top:0`、`margin:0`、`padding:0`、`height:100dvh`）；全屏下 `ant-modal-content`、header、body、`ontology-tree-scroll`/`ontology-sigma-shell`/`ontology-sigma-loading` 及文本/CSV/图片预览容器全部 `border-radius:0!important`；普通模式圆角（如 `.ontology-tree-scroll` 的 `border-radius:8px`）保持不变；设置、任务信息、上传结果等普通 Modal 不受影响。
 - 新增测试：`tests/test_frontend_contract.py`（品牌/版本契约、全屏样式契约、禁止全局取消圆角）、`frontend/tests/ontologyPreviewRuntime.test.mjs`（`PreviewModalTitle` 全屏按钮真实切换、两个入口 class 契约一致，`PreviewModalTitle` 导出供测试）。
 - 验证：全量 pytest 695 passed、Node 76/76、production build 成功、`git diff --check` 通过。
+
+### 项目 README、正式版本文档与工程记录目录整理
+
+- 原根目录 `README (1).md` 是 Eimosp Foundation File Service 文档，已归档到 `docs/eimosp-foundation-fileserver.md`（`git mv` 保留原文与历史），根目录不再保留该文件。
+- 新建根 `README.md`，介绍“硕磐智能建模”，当前版本 `v0.1.0`，包含项目简介、核心能力、服务组成、技术架构、项目结构、本地开发、配置说明、测试与构建、API 文档、版本历史、工程记录、安全说明和许可证；未复制 Eimosp 的 Java/Spring Boot 架构内容。
+- 正式版本说明统一使用 `docs/versions/`：新增 `docs/versions/README.md` 版本索引和 `docs/versions/v0.1.0.md` 正式版本说明；不创建根目录 `CHANGELOG.md`。
+- 原 `changelog/` 整体迁移到 `docs/changelog/`（`git mv` 保留全部历史记录），新增 `docs/changelog/README.md` 记录索引与使用规则。
+- `AGENTS.md` 活动路径全部同步为 `docs/changelog/changelog_M_D.md`，新增“正式版本文档工作流”章节；历史 changelog 正文保留旧路径与历史事实不变。
+- 新增 `tests/test_documentation_layout.py`（10 项布局契约断言）。
+- 验证：全量 pytest 705 passed、`git diff --check` 通过；commit/push 状态见最终报告；未部署。

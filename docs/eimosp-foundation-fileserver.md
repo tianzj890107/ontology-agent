@@ -1,3 +1,5 @@
+> 本文为 Eimosp Foundation File Service 的归档参考文档，不是 ontology-agent 项目说明。
+
 # Eimosp Foundation File Service
 
 统一文件存储服务，支持多存储后端（MinIO、本地文件系统），提供简洁易用的SDK。项目采用模块化设计，包含公共模块、核心业务模块、SDK模块、启动模块和演示应用等6个核心模块，提供完整的文件存储、管理、预览、分享等功能。
