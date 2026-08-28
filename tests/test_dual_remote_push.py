@@ -184,6 +184,16 @@ class DualRemotePushTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("存在本地没有的提交", proc.stderr)
 
+    def test_unreachable_personal_reports_partial_success_after_origin_push(self):
+        head = init_local_repo(self.repo)
+        git(self.repo, "remote", "add", "origin", str(self.origin))
+        git(self.repo, "remote", "add", "personal", str(self.personal) + ".missing")
+        proc = run_script(self.repo)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("部分成功", proc.stderr)
+        self.assertIn("origin 已推送", proc.stderr)
+        self.assertEqual(bare_sha(self.origin, "refs/heads/20260727"), head)
+
     def test_no_force_push_flag(self):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("--force", source)

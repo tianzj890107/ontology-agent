@@ -50,6 +50,6 @@
 - 新增 `personal` 私有远端：`git@github.com:zhenzhan0408/ontology-agent.git`，目标分支 `main`；`origin` 保持 `tianzj890107/ontology-agent` 的 `20260727` 分支。
 - 同一 commit 双 push：`HEAD == origin/20260727 == personal/main`；`personal` 仅作为镜像与个人版本归档，禁止个人仓库独立提交。
 - 新增 `scripts/push_dual_remotes.py`：校验远端映射、工作区干净、祖先关系与推送后三个 hash，支持 `--check` 只读检查，禁止 force push，origin 成功但 personal 失败时报告部分成功。
-- 新增本地 bare remote 测试 `tests/test_dual_remote_push.py`（12 项），更新 `tests/test_repository_workflow_contract.py` 与 `tests/test_documentation_layout.py`。
+- 新增本地 bare remote 测试 `tests/test_dual_remote_push.py`（13 项），更新 `tests/test_repository_workflow_contract.py`（11 项）与 `tests/test_documentation_layout.py`。
 - `AGENTS.md`、`debug.md`、`README.md`、`docs/git-dual-remote-workflow.md`、`docs/versions/v0.1.0.md` 同步双远端工作流说明。
-- 本次个人仓库创建状态、两个远端最终 hash、实际测试结果与 commit/push 状态见最终报告；push 不代表部署；未部署。
+- 实际结果：`personal` 远端已添加但 GitHub 仓库尚未创建（本机未安装 `gh`，无法创建私有仓库）；双远端脚本已推送 `origin/20260727` 至 `63fc86f`，`personal/main` 因仓库不存在暂不可达，属于部分成功，待创建个人私有仓库后以相同 HEAD 重试；未 force push；push 不代表部署；未部署。
