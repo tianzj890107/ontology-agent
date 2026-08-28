@@ -89,5 +89,7 @@
 - 任一仓库失败时报告部分成功：保留已成功 Release，不删除、不重建，修复权限或网络后只重试缺失仓库；禁止只发布一个仓库后宣称双发布完成。
 - 禁止为了补齐 Release 移动 tag、重新打 tag、`git push --tags` 或 force push；`v0.1.0` tag 永远不得移动；`v0.1.1` 未定版前不得创建 tag 或 Release。
 - Release 不等于部署；创建 Release 后如无额外部署授权，任务结束。
-- 同步修改 `AGENTS.md`、`docs/versions/versioning-policy.md`、`docs/git-dual-remote-workflow.md`、`README.md`；新增 `tests/test_repository_workflow_contract.py` 双仓库 Release 策略测试（7 项）。
-- 验证：全量 Python 测试通过、`git diff --check` 通过；Release 补齐结果见最终报告；未部署。
+- 同步修改 `AGENTS.md`、`docs/versions/versioning-policy.md`、`docs/git-dual-remote-workflow.md`、`README.md`；新增 `tests/test_repository_workflow_contract.py` 双仓库 Release 策略测试（7 项）；`docs/versions/v0.1.0.md` 补充双仓库 Release 链接（创建并回查成功后写入）。
+- 实际 Release 状态：personal 仓库已存在 `v0.1.0` Release（id 378309186），验收并复用，正文统一为最终文案；origin 仓库缺失，已创建（id 378324865）。两个 Release 均绑定 `v0.1.0` tag、标题“硕磐智能建模 v0.1.0”、非 draft、非 prerelease、正文一致。
+- tag 核验：两端 `v0.1.0` tag object 均为 `38eae0402176e2e801ba92bcd00ee304b83eacf0`、peeled commit 均为 `188057d8a81b7d83f0aeb858e40c3ef14fddf539`，未移动；未创建 `v0.1.1` tag 或 Release。
+- 验证：全量 Python 测试通过、`git diff --check` 通过；未部署、未连接服务器。
