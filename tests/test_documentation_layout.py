@@ -21,6 +21,7 @@ class DocumentationLayoutTests(unittest.TestCase):
         self.assertIn("./docs/versions/README.md", text)
         self.assertIn("./docs/versions/v0.1.0.md", text)
         self.assertIn("./docs/changelog/README.md", text)
+        self.assertIn("./docs/git-dual-remote-workflow.md", text)
 
     def test_eimosp_readme_archived(self):
         self.assertFalse((ROOT / "README (1).md").exists())

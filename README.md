@@ -124,6 +124,15 @@ python scripts/build_agent_knowledge.py
 
 - [查看全部正式版本](./docs/versions/README.md)
 
+## Git 协作
+
+本项目使用双远端镜像工作流：
+
+- 主协作分支：`origin/20260727`
+- 个人私有镜像：`personal/main`
+
+详细说明见：[Git 双远端镜像工作流](./docs/git-dual-remote-workflow.md)
+
 ## 工程记录
 
 - [每日开发记录](./docs/changelog/README.md)

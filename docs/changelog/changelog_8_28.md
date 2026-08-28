@@ -44,3 +44,12 @@
 - `AGENTS.md` 活动路径全部同步为 `docs/changelog/changelog_M_D.md`，新增“正式版本文档工作流”章节；历史 changelog 正文保留旧路径与历史事实不变。
 - 新增 `tests/test_documentation_layout.py`（10 项布局契约断言）。
 - 验证：全量 pytest 705 passed、`git diff --check` 通过；commit/push 状态见最终报告；未部署。
+
+### Git 双远端私有镜像工作流
+
+- 新增 `personal` 私有远端：`git@github.com:zhenzhan0408/ontology-agent.git`，目标分支 `main`；`origin` 保持 `tianzj890107/ontology-agent` 的 `20260727` 分支。
+- 同一 commit 双 push：`HEAD == origin/20260727 == personal/main`；`personal` 仅作为镜像与个人版本归档，禁止个人仓库独立提交。
+- 新增 `scripts/push_dual_remotes.py`：校验远端映射、工作区干净、祖先关系与推送后三个 hash，支持 `--check` 只读检查，禁止 force push，origin 成功但 personal 失败时报告部分成功。
+- 新增本地 bare remote 测试 `tests/test_dual_remote_push.py`（12 项），更新 `tests/test_repository_workflow_contract.py` 与 `tests/test_documentation_layout.py`。
+- `AGENTS.md`、`debug.md`、`README.md`、`docs/git-dual-remote-workflow.md`、`docs/versions/v0.1.0.md` 同步双远端工作流说明。
+- 本次个人仓库创建状态、两个远端最终 hash、实际测试结果与 commit/push 状态见最终报告；push 不代表部署；未部署。
