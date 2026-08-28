@@ -264,3 +264,186 @@ test("createInFlightRegistry 去重与清理", async () => {
   assert.equal(registry.has("k"), false);
   assert.deepEqual(registry.keys(), []);
 });
+
+// ---------------------------------------------------------------------------
+// Task-session open/restore flow (mirrors the 47313 workbench openTask
+// ordering with the pure helpers from sessionCache.js).
+// ---------------------------------------------------------------------------
+
+import {
+  commitSessionSnapshot,
+  createOpenGate,
+  mergeLogWindow,
+  restoreTaskPlan,
+  sessionSnapshotFor,
+  taskCacheKey,
+} from "../src/sessionCache.js";
+import { mergeEvents } from "../src/eventSync.js";
+
+const MISSION = { repositoryId: "repo-a", taskCode: "task-code-a" };
+const OTHER_MISSION = { repositoryId: "repo-b", taskCode: "task-code-b" };
+
+const missionTask = (id) => ({ id, repositoryId: "repo-a", taskCode: "task-code-a", project: "p" });
+const plainTask = (id) => ({ id, project: "p" });
+
+function openTaskStep({ cache, gate, task, fallbackMission = MISSION }) {
+  // Exactly the ordering the app's openTask uses: compute the namespaced key,
+  // read the cached snapshot, then begin a new request generation. The
+  // snapshot is available before any detail fetch happens.
+  const taskKey = taskCacheKey(task, fallbackMission);
+  const snapshot = restoreTaskPlan(sessionSnapshotFor(cache, taskKey));
+  const generation = gate.begin();
+  return {
+    taskKey,
+    snapshot,
+    generation,
+    isCurrent: () => gate.isCurrent(generation),
+  };
+}
+
+function seqEvent(seq, text) {
+  return { type: "assistant", seq, text };
+}
+
+test("taskCacheKey 对 mission 会话生成 namespaced key 且不等于裸 taskId", () => {
+  const task = missionTask("t-1");
+  const key = taskCacheKey(task, MISSION);
+  assert.equal(key, "mission:repo-a:task-code-a:t-1");
+  assert.notEqual(key, "t-1");
+  assert.notEqual(key, "task:t-1");
+});
+
+test("taskCacheKey 对非 mission 会话使用稳定 task key", () => {
+  assert.equal(taskCacheKey(plainTask("t-9"), null), "task:t-9");
+  // Under a running mission, a task without its own identity inherits the
+  // mission namespace (the same fallback missionIdentity() applies in the
+  // workbench), while an explicit identity always wins.
+  assert.equal(taskCacheKey(plainTask("t-9"), MISSION), "mission:repo-a:task-code-a:t-9");
+  assert.equal(
+    taskCacheKey({ id: "t-9", repositoryId: "repo-z", taskCode: "task-code-z" }, MISSION),
+    "mission:repo-z:task-code-z:t-9",
+  );
+});
+
+test("不同 mission 但相同 taskId 的会话 key 不同，不能共享缓存", () => {
+  const keyA = taskCacheKey({ id: "t-7", repositoryId: "repo-a", taskCode: "task-code-a" }, MISSION);
+  const keyB = taskCacheKey({ id: "t-7", repositoryId: "repo-b", taskCode: "task-code-b" }, OTHER_MISSION);
+  assert.notEqual(keyA, keyB);
+  const cache = createSessionCache({ maxEntries: 10 });
+  cache.set(keyA, { events: [{ type: "user", text: "A 会话" }] });
+  cache.set(keyB, { events: [{ type: "user", text: "B 会话" }] });
+  assert.equal(restoreTaskPlan(sessionSnapshotFor(cache, keyA)).events[0].text, "A 会话");
+  assert.equal(restoreTaskPlan(sessionSnapshotFor(cache, keyB)).events[0].text, "B 会话");
+});
+
+test("A 缓存存在时点击 A 可在详情请求完成前立即得到缓存快照", () => {
+  const cache = createSessionCache({ maxEntries: 10 });
+  const taskKey = taskCacheKey(missionTask("t-a"), MISSION);
+  cache.set(taskKey, {
+    detail: { id: "t-a", status: "completed", repositoryId: "repo-a", taskCode: "task-code-a" },
+    events: [seqEvent(0, "旧事件")],
+    files: [{ path: "output/business_objects.csv" }],
+    filesTaskId: "t-a",
+    logWindow: { start: 0, total: 5, cursor: 5 },
+  });
+  const gate = createOpenGate();
+  // No fetch has happened yet: the step below is the point openTask switches
+  // the visible session before awaiting the detail endpoint.
+  const step = openTaskStep({ cache, gate, task: missionTask("t-a") });
+  assert.equal(step.snapshot.detail.id, "t-a");
+  assert.deepEqual(step.snapshot.events, [seqEvent(0, "旧事件")]);
+  assert.deepEqual(step.snapshot.files, [{ path: "output/business_objects.csv" }]);
+  assert.equal(step.snapshot.filesTaskId, "t-a");
+  assert.deepEqual(step.snapshot.logWindow, { start: 0, total: 5, cursor: 5 });
+  assert.equal(step.isCurrent(), true);
+});
+
+test("A → B → A 立即恢复 A 的 events/files/window，且只认最新 generation", () => {
+  const cache = createSessionCache({ maxEntries: 10 });
+  const keyA = taskCacheKey(missionTask("t-a"), MISSION);
+  cache.set(keyA, {
+    detail: { id: "t-a", status: "completed" },
+    events: [seqEvent(0, "A 事件")],
+    files: [{ path: "output/logical_entities.csv" }],
+    filesTaskId: "t-a",
+    logWindow: { start: 2, total: 8, cursor: 8 },
+  });
+  const gate = createOpenGate();
+  const openA = openTaskStep({ cache, gate, task: missionTask("t-a") });
+  assert.ok(openA.snapshot, "A 缓存存在时必须立即恢复");
+  const openB = openTaskStep({ cache, gate, task: missionTask("t-b") });
+  assert.equal(openB.snapshot, null, "B 没有缓存时走首次加载");
+  const reopenA = openTaskStep({ cache, gate, task: missionTask("t-a") });
+  assert.ok(reopenA.snapshot, "再次打开 A 仍立即恢复");
+  assert.deepEqual(reopenA.snapshot.events, [seqEvent(0, "A 事件")]);
+  assert.equal(reopenA.snapshot.logWindow.start, 2);
+  assert.equal(openA.isCurrent(), false, "A 第一次打开的旧 generation 已失效");
+  assert.equal(openB.isCurrent(), false);
+  assert.equal(reopenA.isCurrent(), true);
+});
+
+test("A 的迟到详情响应不能覆盖 B", () => {
+  const cache = createSessionCache({ maxEntries: 10 });
+  const gate = createOpenGate();
+  const openA = openTaskStep({ cache, gate, task: missionTask("t-a") });
+  const openB = openTaskStep({ cache, gate, task: missionTask("t-b") });
+  assert.equal(openA.isCurrent(), false, "A 的响应到达时 B 已激活");
+  assert.equal(openB.isCurrent(), true);
+});
+
+test("B 的迟到响应不能覆盖重新激活的 A", () => {
+  const cache = createSessionCache({ maxEntries: 10 });
+  const gate = createOpenGate();
+  const openA = openTaskStep({ cache, gate, task: missionTask("t-a") });
+  const openB = openTaskStep({ cache, gate, task: missionTask("t-b") });
+  const reopenA = openTaskStep({ cache, gate, task: missionTask("t-a") });
+  assert.equal(openB.isCurrent(), false, "B 的迟到响应不能覆盖重新激活的 A");
+  assert.equal(reopenA.isCurrent(), true);
+});
+
+test("缓存 events 与新 tail 合并后不重复且 cursor 不倒退", () => {
+  const cached = [seqEvent(0, "a"), seqEvent(1, "b"), seqEvent(2, "c")];
+  const tail = [seqEvent(2, "c"), seqEvent(3, "d")];
+  const merged = mergeEvents(cached, tail, "task:t-1");
+  assert.deepEqual(merged.map((event) => event.seq), [0, 1, 2, 3]);
+  assert.equal(merged.filter((event) => event.seq === 2).length, 1);
+  // The server window is authoritative for total/cursor; an older cached
+  // start (already replayed history) is preserved so it is not re-downloaded.
+  const window = mergeLogWindow({ start: 2, total: 4, cursor: 4 }, { start: 4, total: 6, cursor: 6 });
+  assert.equal(window.start, 2);
+  assert.equal(window.total, 6);
+  assert.equal(window.cursor, 6);
+});
+
+test("LRU 淘汰保护 namespaced active key，不使用裸 taskId", () => {
+  const cache = createSessionCache({ maxEntries: 2 });
+  const keyA = taskCacheKey(missionTask("t-a"), MISSION);
+  const keyB = taskCacheKey(missionTask("t-b"), MISSION);
+  const keyC = taskCacheKey(missionTask("t-c"), MISSION);
+  commitSessionSnapshot(cache, keyA, { events: [seqEvent(0, "a")] }, keyC);
+  commitSessionSnapshot(cache, keyB, { events: [seqEvent(0, "b")] }, keyC);
+  commitSessionSnapshot(cache, keyC, { events: [seqEvent(0, "c")] }, keyC);
+  assert.equal(cache.has(keyC), true, "当前活动 namespaced key 不得被淘汰");
+  assert.equal(cache.has(keyA), false);
+  assert.equal(cache.has(keyB), true);
+});
+
+test("同一 task graph 预加载与点击共享同一个 namespaced key 的在途 Promise", async () => {
+  let calls = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const cache = createOntologyGraphCache({
+    loadText: async (entry) => { calls += 1; await gate; return `csv:${entry.path}`; },
+    buildGraph: fakeGraph,
+  });
+  const taskKey = taskCacheKey(missionTask("t-g"), MISSION);
+  const preload = cache.ensure(taskKey, artifactsA(), { task: missionTask("t-g") });
+  const click = cache.ensure(taskKey, artifactsA(), { task: missionTask("t-g") });
+  assert.equal(cache.getStatus(taskKey, artifactsA()).status, "loading");
+  assert.equal(cache.getStatus("t-g", artifactsA()).status, "empty", "裸 taskId 查不到预加载结果");
+  release();
+  const [preloaded, clicked] = await Promise.all([preload, click]);
+  assert.equal(preloaded, clicked);
+  assert.equal(calls, 2, "同一批 CSV 只下载一次");
+  assert.equal(cache.getStatus(taskKey, artifactsA()).status, "ready");
+});

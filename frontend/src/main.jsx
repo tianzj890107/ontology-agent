@@ -43,7 +43,15 @@ import {
   readViewport,
 } from "./ontologyRadialPrecompute.js";
 import { buildOntologyGraph } from "./ontologyGraphModel.js";
-import { createOntologyGraphCache, createSessionCache } from "./sessionCache.js";
+import {
+  commitSessionSnapshot,
+  createOntologyGraphCache,
+  createSessionCache,
+  mergeLogWindow,
+  restoreTaskPlan,
+  sessionSnapshotFor,
+  taskCacheKey,
+} from "./sessionCache.js";
 import { ONTOLOGY_LAYOUT_OPTIONS, ontologyLayoutOption } from "./ontologyLayoutOptions.js";
 
 const OntologySigmaPreview = React.lazy(() => import("./OntologySigmaPreview.jsx"));
@@ -2050,6 +2058,15 @@ function App() {
   const autoApproveRef = useRef(autoApprove);
   const approvalInFlightRef = useRef(new Set());
   const activeTaskIdRef = useRef("");
+  // Namespaced cache key of the currently visible task (mission identity +
+  // task id). The session cache, graph cache and LRU eviction all protect
+  // this key; a bare task id is never enough because the same id can exist in
+  // different mission identity spaces.
+  const activeTaskCacheKeyRef = useRef("");
+  // Open-request generation + abort: switching sessions bumps the generation
+  // and cancels the previous detail request so a late response can never
+  // overwrite the newly visible session.
+  const openTaskRequestRef = useRef({ generation: 0, controller: null, taskId: "", taskKey: "" });
   // Busy is request-scoped: an old request's `finally` must not clear the
   // busy flag of a newer request started after a session switch/retry.
   const busyRequestRef = useRef(0);
@@ -2151,11 +2168,12 @@ function App() {
   useEffect(() => { if (active && filesOpen) loadFiles(); }, [active, filesOpen]);
   useEffect(() => {
     activeTaskIdRef.current = active?.id || "";
+    activeTaskCacheKeyRef.current = active?.id ? taskCacheKey(active, MISSION) : "";
     // Restore a previously cached file list immediately so switching back to
     // a session does not briefly show another session's files or wait for a
     // fresh listing; loadFiles() still refreshes it in the background.
     const cachedFiles = active?.id
-      ? (taskSessionCacheRef.current.get(taskCacheKey(active))?.files || [])
+      ? (taskSessionCacheRef.current.get(taskCacheKey(active, MISSION))?.files || [])
       : [];
     setFiles(cachedFiles);
     setFilesTaskId(cachedFiles.length ? active?.id || "" : "");
@@ -2220,8 +2238,8 @@ function App() {
             : current);
           // Absorb older history into the session cache even if the user has
           // already switched away; reopening the task restores it instantly.
-          const cachedEntry = taskSessionCacheRef.current.get(taskCacheKey(task)) || {};
-          syncTaskSessionCache(taskCacheKey(task), {
+          const cachedEntry = taskSessionCacheRef.current.get(taskCacheKey(task, MISSION)) || {};
+          syncTaskSessionCache(taskCacheKey(task, MISSION), {
             events: mergeEvents(cachedEntry.events || [], older, `task:${task.id}`),
             logWindow: logWindowRef.current.get(task.id),
           });
@@ -2302,7 +2320,7 @@ function App() {
         total: Number(result.eventTotal ?? window.total ?? next),
         cursor: next,
       });
-      syncTaskSessionCache(taskCacheKey(active), {
+      syncTaskSessionCache(taskCacheKey(active, MISSION), {
         events: mergedEvents,
         logWindow: logWindowRef.current.get(taskId),
       });
@@ -2311,21 +2329,9 @@ function App() {
     }
   };
 
-  // Cache keys are namespaced by mission identity (repositoryId + taskCode)
-  // so the same local task id can never leak across identity spaces, then by
-  // the server-unique task id. The graph cache uses the same key per session.
-  const taskCacheKey = (task) => {
-    const identity = missionIdentity(task);
-    return identity
-      ? `mission:${identity.repositoryId}:${identity.taskCode}:${task?.id}`
-      : `task:${task?.id || ""}`;
-  };
   const syncTaskSessionCache = (taskKey, patch) => {
     if (!taskKey) return;
-    const cache = taskSessionCacheRef.current;
-    const current = cache.get(taskKey) || {};
-    cache.set(taskKey, { ...current, ...patch });
-    cache.evictToFit(activeTaskIdRef.current);
+    commitSessionSnapshot(taskSessionCacheRef.current, taskKey, patch, activeTaskCacheKeyRef.current);
   };
   const preloadTaskOntologyGraph = (taskKey, fileList, task = active) => {
     if (!taskKey) return;
@@ -2335,14 +2341,65 @@ function App() {
     // Fire-and-forget: a background failure is recorded in the per-task cache
     // entry and only surfaces if the user actually opens the visualization.
     void graphCache.ensure(taskKey, [...artifacts.entries()], { task }).catch(() => {});
-    graphCache.evictToFit(activeTaskIdRef.current);
+    graphCache.evictToFit(activeTaskCacheKeyRef.current);
   };
   const openTask = async (task) => {
+    const taskId = task?.id || "";
+    if (!taskId) return;
     const taskMission = missionIdentity(task);
     const identityQuery = taskMission ? `&repositoryId=${encodeURIComponent(taskMission.repositoryId)}&taskCode=${encodeURIComponent(taskMission.taskCode)}` : "";
     const detailQuery = `?tail=1&limit=80${identityQuery}`;
-    const result = await api(`/api/tasks/${task.id}${detailQuery}`);
-    if (result.error) { messageApi.error(`打开历史会话失败：${result.error}`); return; }
+    // One namespaced key for the session cache, the graph cache, LRU
+    // protection and request gating. Never fall back to a bare task id.
+    const taskKey = taskCacheKey(task, MISSION);
+    const sessionCache = taskSessionCacheRef.current;
+    const restored = restoreTaskPlan(sessionSnapshotFor(sessionCache, taskKey));
+    // Every open of a session starts a new generation and cancels the previous
+    // detail request. A late response from an earlier switch can still write
+    // its own session cache below, but can never overwrite the visible state.
+    openTaskRequestRef.current.controller?.abort();
+    const openRequest = {
+      generation: openTaskRequestRef.current.generation + 1,
+      controller: new AbortController(),
+      taskId,
+      taskKey,
+    };
+    openTaskRequestRef.current = openRequest;
+    const isCurrentOpen = () => (
+      openTaskRequestRef.current.taskId === taskId
+      && openTaskRequestRef.current.taskKey === taskKey
+      && openTaskRequestRef.current.generation === openRequest.generation
+    );
+    if (restored) {
+      // In-memory restore first: switching back to A must show A's events,
+      // files and event window immediately instead of waiting for the detail
+      // endpoint. The detail response below only performs an incremental sync.
+      const restoredWindow = restored.logWindow || {
+        start: 0,
+        total: restored.events.length,
+        cursor: restored.events.length,
+        generation: Date.now(),
+      };
+      logWindowRef.current.set(taskId, restoredWindow);
+      activeTaskIdRef.current = taskId;
+      activeTaskCacheKeyRef.current = taskKey;
+      feedPinnedRef.current = true;
+      setEvents(restored.events);
+      setFiles(restored.files);
+      setFilesTaskId(restored.filesTaskId || (restored.files.length ? taskId : ""));
+      setActive(restored.detail ? { ...task, ...restored.detail } : task);
+      setView("task"); setText("");
+      if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, taskId);
+    }
+    const result = await api(`/api/tasks/${taskId}${detailQuery}`, { signal: openRequest.controller.signal });
+    if (result._aborted || !isCurrentOpen()) return;
+    if (result.error) {
+      // Keep a restored cache visible; surface an error only when there was
+      // nothing cached to show. The visible session's refs are untouched so
+      // its polling/late-response guards keep working.
+      if (!restored) messageApi.error(`打开历史会话失败：${result.error}`);
+      return;
+    }
     const current = { ...result };
     if (current.model) {
       setMeta((previous) => ({
@@ -2359,27 +2416,28 @@ function App() {
     const recentEvents = normalizeEvents(current);
     const logStart = Number(result.logStart ?? 0);
     const logTotal = Number(result.logTotal ?? recentEvents.length);
-    const taskKey = taskCacheKey(current);
-    const cachedSession = taskSessionCacheRef.current.get(taskKey);
-    const cachedEvents = Array.isArray(cachedSession?.events) ? cachedSession.events : [];
     // The tail window ends at the journal end, so the next unread cursor is
     // the server-absolute logTotal; never derive it from client node counts.
     // A restored session keeps its older already-loaded window start so the
     // older-journal replay does not re-download the range it already has.
     const freshWindow = { start: logStart, total: logTotal, cursor: logTotal, generation: Date.now() };
-    const restoredStart = Number(cachedSession?.logWindow?.start);
-    logWindowRef.current.set(current.id, Number.isFinite(restoredStart) && restoredStart < logStart
-      ? { ...freshWindow, start: restoredStart }
-      : freshWindow);
-    activeTaskIdRef.current = current.id;
-    setFiles([]);
-    setFilesTaskId("");
+    const cachedWindow = restored?.logWindow || sessionCache.peek(taskKey)?.logWindow;
+    const nextWindow = mergeLogWindow(cachedWindow, freshWindow);
+    logWindowRef.current.set(taskId, nextWindow);
+    activeTaskIdRef.current = taskId;
+    activeTaskCacheKeyRef.current = taskKey;
     setActive(current);
-    const mergedEvents = mergeEvents(cachedEvents, recentEvents, `task:${current.id}`);
+    const mergedEvents = mergeEvents(restored?.events || [], recentEvents, `task:${taskId}`);
     setEvents(mergedEvents);
-    syncTaskSessionCache(taskKey, { events: mergedEvents, logWindow: logWindowRef.current.get(current.id) });
+    commitSessionSnapshot(sessionCache, taskKey, {
+      detail: current,
+      events: mergedEvents,
+      files: restored?.files || [],
+      filesTaskId: taskId,
+      logWindow: nextWindow,
+    }, activeTaskCacheKeyRef.current);
     setView("task"); setText("");
-    if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, current.id);
+    if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, taskId);
     // 服务端任务级自动确认为真时同步本地开关，刷新后 UI 与执行策略一致。
     if (current.autoApprove) {
       autoApproveRef.current = true;
@@ -2411,7 +2469,7 @@ function App() {
       // parse + build the graph for this session so the visualization opens
       // instantly later, without blocking the conversation first viewport.
       preloadTaskOntologyGraph(taskKey, loadedFiles, current);
-      if (activeTaskIdRef.current === current.id) {
+      if (activeTaskIdRef.current === taskId) {
         // The file panel is open by default; reopening a session with
         // generated results only ever opens it (never auto-closes a panel the
         // user kept open), while loading contents must not block the
@@ -2448,6 +2506,7 @@ function App() {
 
   const loadFiles = async (task = active) => {
     const taskId = task?.id || "";
+    const taskKey = taskCacheKey(task, MISSION);
     const requestId = ++filesRequestRef.current;
     setFilesLoading(true);
     const project = task?.project || "";
@@ -2461,8 +2520,8 @@ function App() {
       setFilesLoading(false);
       // Keep the session cache file list fresh; a changed artifact signature
       // invalidates the cached graph on the next preload/draw.
-      syncTaskSessionCache(taskCacheKey(task), { files: loadedFiles });
-      preloadTaskOntologyGraph(taskCacheKey(task), loadedFiles, task);
+      commitSessionSnapshot(taskSessionCacheRef.current, taskKey, { files: loadedFiles, filesTaskId: taskId }, activeTaskCacheKeyRef.current);
+      preloadTaskOntologyGraph(taskKey, loadedFiles, task);
       return loadedFiles;
     }
     if (filesRequestRef.current === requestId) setFilesLoading(false);
@@ -2701,6 +2760,10 @@ function App() {
   const drawOntology = async () => {
     const task = active;
     const taskId = task?.id || "";
+    // The graph cache is keyed by the same namespaced session key the preload
+    // used; querying with a bare task id would miss the preloaded graph and
+    // re-download every CSV.
+    const taskKey = taskCacheKey(task, MISSION);
     if (!ontologyFiles) {
       messageApi.warning("缺少逻辑实体 CSV，不能进行本体可视化");
       return;
@@ -2709,7 +2772,7 @@ function App() {
     const artifacts = [...ontologyFiles.entries()];
     // A graph already preloaded for this task+signature opens instantly; no
     // CSV is re-downloaded or re-parsed.
-    const status = graphCache.getStatus(taskId, artifacts);
+    const status = graphCache.getStatus(taskKey, artifacts);
     if (status.status === "ready") {
       showPreview({ path: "本体可视化", ontologyGraph: status.graph });
       return;
@@ -2717,9 +2780,9 @@ function App() {
     const requestId = ++ontologyDrawRequestRef.current;
     setOntologyDrawing(true);
     try {
-      const graph = await graphCache.ensure(taskId, artifacts, { task });
-      graphCache.evictToFit(activeTaskIdRef.current);
-      if (!graph || graphCache.getStatus(taskId, artifacts).status !== "ready") {
+      const graph = await graphCache.ensure(taskKey, artifacts, { task });
+      graphCache.evictToFit(activeTaskCacheKeyRef.current);
+      if (!graph || graphCache.getStatus(taskKey, artifacts).status !== "ready") {
         messageApi.error("本体可视化失败：会话产物已变化，请重试");
         return;
       }

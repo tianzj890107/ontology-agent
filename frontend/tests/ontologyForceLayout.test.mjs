@@ -1,8 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { buildGraphologyGraph, buildOntologyGraph } from "../src/ontologyGraphModel.js";
 import { FORCE_ATLAS_CONFIG, forceAtlasIterations, graphBounds, layoutOntologyForceAtlas, semanticSeed } from "../src/ontologyForceLayout.js";
+
+// Committed five-layer fixtures (synthetic, real structure, no production
+// data). Resolved relative to this test file so the suite never depends on
+// the current working directory or a runtime-only `output/` directory.
+const FIXTURE_DIR = new URL("./fixtures/five-layer/", import.meta.url);
 
 function model(businessObjects = 2, entitiesPerObject = 3, attributesPerEntity = 8, isolated = 2) {
   const nodes = [];
@@ -110,11 +116,11 @@ test("300+ 属性图可在有限迭代内完成", { timeout: 10000 }, () => {
 
 test("仓库真实五层输出可构图和完成布局", { timeout: 15000 }, () => {
   const records = new Map([
-    ["businessObject", csvRecords("output/business_objects.csv")],
-    ["logicalEntity", csvRecords("output/logical_entities.csv")],
-    ["businessAttribute", csvRecords("output/business_attributes.csv")],
-    ["metric", csvRecords("output/indicators.csv")],
-    ["businessRule", csvRecords("output/business_rules.csv")],
+    ["businessObject", csvRecords(fileURLToPath(new URL("business_objects.csv", FIXTURE_DIR)))],
+    ["logicalEntity", csvRecords(fileURLToPath(new URL("logical_entities.csv", FIXTURE_DIR)))],
+    ["businessAttribute", csvRecords(fileURLToPath(new URL("business_attributes.csv", FIXTURE_DIR)))],
+    ["metric", csvRecords(fileURLToPath(new URL("indicators.csv", FIXTURE_DIR)))],
+    ["businessRule", csvRecords(fileURLToPath(new URL("business_rules.csv", FIXTURE_DIR)))],
   ]);
   const ontology = buildOntologyGraph(records);
   const graph = buildGraphologyGraph(ontology, ["businessObject", "logicalEntity", "businessAttribute", "metric", "businessRule"]);

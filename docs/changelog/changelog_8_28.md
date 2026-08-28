@@ -72,14 +72,14 @@
 - v0.1.0 tag 不再移动；后续修复默认归入 v0.1.1。
 - 本次只创建 Git tag，不创建 GitHub Release，不部署、不重启服务。
 
-### v0.1.1 开发：会话缓存与本体图后台预加载
+### v0.1.1 开发：会话缓存与本体图后台预加载（最终状态）
 
-- 新增 `frontend/src/sessionCache.js` 纯模块：`createSessionCache`（LRU，默认最多 10 个会话）、`artifactSignature`（基于产物路径与 size/mtime/modifiedAt/version/hash 等元数据的稳定签名）、`createInFlightRegistry`（在途 Promise 去重）、`createOntologyGraphCache`（按 scope 缓存 graph，签名失效自动重建，失败记录错误可重试，支持活动 scope 保护的 LRU 淘汰）。
-- 47313 任务工作台：`openTask` 从缓存恢复合并事件、文件列表与 logWindow，先渲染首屏再后台增量同步；`loadFiles` 成功后写回文件列表并触发 `preloadTaskOntologyGraph`；`drawOntology` 改为先查 `taskGraphCacheRef`，有有效缓存立即打开，有同签名在途 Promise 则复用，无缓存现场加载并写回；缓存 key 按 mission identity + taskId 命名空间隔离；`ontologyDrawRequestRef` 防止旧请求的 finally 清除新请求的 loading 状态。
-- 47314 独立建模：`selectRun` 从 `standaloneSessionCacheRef` 即时恢复事件、文件列表与事件窗口；`loadRunFiles` 成功后写回文件列表并触发 `preloadStandaloneOntologyGraph`；`drawStandaloneOntology` 同样缓存优先；`standaloneDrawRequestRef` 隔离 loading；LRU 淘汰时同步释放事件窗口/cursor/合并事件引用。
-- 行为：A → B → A 切换立即恢复 A 的缓存；同一 task/run 同一产物签名只有一个在途 CSV 下载与构图；产物签名变化后 graph 失效并重新构图；预加载失败不阻止会话打开，点击可视化可重试；不使用 localStorage/sessionStorage/IndexedDB，刷新后缓存自然消失。
-- 测试：新增 `frontend/tests/sessionCache.test.mjs`（15 项：LRU、签名、去重、签名失效、迟到响应、错误重试、LRU 保护与淘汰、实例隔离等）；`frontend/tests/ontologyPreviewRuntime.test.mjs` 增加 4 项缓存接线契约；`tests/test_frontend_contract.py` 的 selectRun 契约随新实现更新。
-- 验证：前端 Node 测试 95/95、Python 全量 732 passed / 13 skipped / 448 subtests、`npm run build` 成功（新入口 `index-s3saexQQ.js`）、`git diff --check` 通过。
+- 新增 `frontend/src/sessionCache.js` 纯模块：`createSessionCache`（LRU，默认最多 10 个会话）、`artifactSignature`（基于产物路径与 size/mtime/modifiedAt/version/hash 等元数据的稳定签名）、`createInFlightRegistry`（在途 Promise 去重）、`createOntologyGraphCache`（按 scope 缓存 graph，签名失效自动重建，失败记录错误可重试，支持活动 scope 保护的 LRU 淘汰）；另提供可独立测试的开场/恢复辅助函数：`taskCacheKey`（namespaced key）、`sessionSnapshotFor`/`restoreTaskPlan`（缓存快照恢复）、`mergeLogWindow`（窗口合并，cursor 不倒退）、`commitSessionSnapshot`（写回并保护活动 key 的 LRU）、`createOpenGate`（请求 generation 判定）。
+- 47313 任务工作台：`openTask` 先按 `taskCacheKey(task, MISSION)` 计算 namespaced key，缓存存在时在详情请求返回前立即恢复任务快照、合并事件、文件列表与事件窗口，后台再请求最新详情与事件增量并幂等合并；每次打开生成新请求代次并取消旧详情请求，迟到的旧响应不能覆盖当前会话；`loadFiles` 成功后写回文件列表与 `filesTaskId` 并触发 `preloadTaskOntologyGraph`；`drawOntology` 与预加载统一使用同一个 namespaced key 查询 `taskGraphCacheRef`（不再用裸 taskId），有有效缓存立即打开、有同签名在途 Promise 则复用、无缓存现场加载并写回；`activeTaskCacheKeyRef` 统一保护会话缓存与 graph 缓存的 LRU 淘汰；`ontologyDrawRequestRef` 防止旧请求的 finally 清除新请求的 loading 状态。
+- 47314 独立建模：`selectRun` 从 `standaloneSessionCacheRef` 即时恢复事件、文件列表与事件窗口；`loadRunFiles` 成功后写回文件列表并触发 `preloadStandaloneOntologyGraph`；`drawStandaloneOntology` 与预加载共用同一 runId scope；`standaloneDrawRequestRef` 隔离 loading；LRU 淘汰时同步释放事件窗口/cursor/合并事件引用。
+- 行为：A → B → A 切换立即恢复 A 的缓存；同一 task/run 同一产物签名只有一个在途 CSV 下载与构图；产物签名变化后 graph 失效并重新构图；预加载失败不阻止会话打开，点击可视化可重试；不使用 localStorage/sessionStorage/IndexedDB，缓存仅当前页面内存有效，刷新后自然清空。
+- 测试：`frontend/tests/sessionCache.test.mjs` 覆盖 LRU、签名、去重、签名失效、迟到响应、错误重试、namespaced key 隔离、A → B → A 立即恢复与 generation 拦截；`frontend/tests/ontologyPreviewRuntime.test.mjs` 将原源码字符串测试替换为真实行为测试并保留直接防回归“drawOntology 用裸 taskId”的接线契约；`frontend/tests/ontologyForceLayout.test.mjs` 修复对仓库根目录运行时 `output/` 的依赖，改用可提交的合成五层 CSV 夹具 `frontend/tests/fixtures/five-layer/`（路径经 `import.meta.url` 相对解析）；`tests/test_frontend_contract.py` 的 selectRun 契约随新实现更新。
+- 验证：前端 Node 测试 107/107 通过、Python 全量测试通过、`npm run build` 成功、`git diff --check` 通过。
 - 状态：v0.1.1 尚未定版、未创建 tag、未创建 GitHub Release；commit/push 状态见最终报告；未部署。
 
 ### GitHub Release 双仓库发布规范

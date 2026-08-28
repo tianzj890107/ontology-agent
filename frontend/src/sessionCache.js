@@ -217,3 +217,85 @@ export function createOntologyGraphCache(options = {}) {
 
   return { getStatus, ensure, evictToFit, size: () => entries.size };
 }
+
+// ---------------------------------------------------------------------------
+// Task-session open/restore helpers (pure, React-free, unit-testable).
+//
+// The 47313 workbench computes one namespaced cache key per task so the
+// session cache, the ontology graph cache, LRU protection and request
+// generation gating all agree on the same key.  A mission task is keyed by
+// mission identity + task id; a plain task falls back to `task:<id>` so the
+// same local id can never leak across identity spaces.
+// ---------------------------------------------------------------------------
+
+export function taskCacheKey(task, fallbackMission = null) {
+  const id = String(task?.id || "").trim();
+  if (!id) return "";
+  const repositoryId = String(task?.repositoryId || fallbackMission?.repositoryId || "").trim();
+  const taskCode = String(task?.taskCode || fallbackMission?.taskCode || "").trim();
+  if (repositoryId && taskCode) return `mission:${repositoryId}:${taskCode}:${id}`;
+  return `task:${id}`;
+}
+
+// Reads a cached session snapshot and bumps its LRU recency (restoring a
+// session is a use). Returns undefined when the key is absent.
+export function sessionSnapshotFor(cache, taskKey) {
+  if (!cache || !taskKey) return undefined;
+  return cache.get(taskKey);
+}
+
+// Normalizes a raw cache entry into the fields openTask needs to switch the
+// visible session immediately, before any detail request completes.
+export function restoreTaskPlan(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  return {
+    events: Array.isArray(snapshot.events) ? snapshot.events : [],
+    files: Array.isArray(snapshot.files) ? snapshot.files : [],
+    filesTaskId: String(snapshot.filesTaskId || ""),
+    logWindow: snapshot.logWindow || null,
+    detail: snapshot.detail || null,
+  };
+}
+
+// Log-window restore rule: the server tail window is authoritative for
+// total/cursor, but a previously loaded older range keeps its smaller start
+// so reopening a session never re-downloads history it already holds.
+export function mergeLogWindow(cachedWindow, freshWindow) {
+  if (!freshWindow || typeof freshWindow !== "object") return cachedWindow || null;
+  const restoredStart = Number(cachedWindow?.start);
+  const freshStart = Number(freshWindow.start ?? 0);
+  if (Number.isFinite(restoredStart) && restoredStart < freshStart) {
+    return { ...freshWindow, start: restoredStart };
+  }
+  return freshWindow;
+}
+
+// Merges a patch into the cached session and bounds the cache, never evicting
+// the currently active namespaced key. `activeKey` must be the namespaced key,
+// never a bare task id.
+export function commitSessionSnapshot(cache, taskKey, patch, activeKey) {
+  if (!cache || !taskKey) return undefined;
+  const current = cache.get(taskKey) || {};
+  cache.set(taskKey, { ...current, ...patch });
+  cache.evictToFit(activeKey);
+  return cache.peek(taskKey);
+}
+
+// Generation gate for fast task/run switching. Each open of a session bumps
+// the generation; a late response can still write its own session cache but
+// `isCurrent` tells it whether it may touch visible React state.
+export function createOpenGate() {
+  let generation = 0;
+  return {
+    begin() {
+      generation += 1;
+      return generation;
+    },
+    isCurrent(candidate) {
+      return candidate === generation;
+    },
+    current() {
+      return generation;
+    },
+  };
+}
