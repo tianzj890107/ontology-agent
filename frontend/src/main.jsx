@@ -47,6 +47,8 @@ import { ONTOLOGY_LAYOUT_OPTIONS, ontologyLayoutOption } from "./ontologyLayoutO
 
 const OntologySigmaPreview = React.lazy(() => import("./OntologySigmaPreview.jsx"));
 
+const PRODUCT_NAME = "硕磐智能建模";
+const PRODUCT_VERSION = "v0.1.0";
 const MISSION = window.__MISSION__?.taskCode ? window.__MISSION__ : null;
 const STANDALONE = Boolean(window.__STANDALONE_MODELING__);
 const $json = (value) => JSON.stringify(value, null, 2);
@@ -900,7 +902,7 @@ function StandaloneApp() {
   return <ConfigProvider theme={{ token: { colorPrimary: "#2563eb", borderRadius: 8, fontFamily: '"PingFang SC", -apple-system, sans-serif' } }}>
     {contextHolder}
     <div className="standalone-shell">
-      <header className="standalone-header"><div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能建模</strong><Tag color="blue">v0.0.1</Tag></div><Tag color="green">服务已连接</Tag></header>
+      <header className="standalone-header"><div className="brand"><span className="brand-logo">硕</span><strong>{PRODUCT_NAME}</strong><Tag color="blue">{PRODUCT_VERSION}</Tag></div><Tag color="green">服务已连接</Tag></header>
       <div className={`standalone-layout ${run ? "standalone-layout-running" : ""}`}>
         <aside className="standalone-history"><Button type="primary" block className="standalone-new-task" onClick={startNewTask}>＋ 新任务</Button><div className="standalone-section-title">历史运行</div>{runs.length ? <List size="small" dataSource={runs} renderItem={(item) => <List.Item role="button" tabIndex={0} className={run?.runId === item.runId ? "standalone-run-active" : "standalone-run"} onClick={() => selectRun(item.runId)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectRun(item.runId); } }}><div><strong>{standaloneRunTitle(item)}</strong><small>{formatRunCreatedAt(item.createdAt)} · {statusLabel(item.status)}</small></div></List.Item>} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无运行记录" />}</aside>
         <main className="standalone-main">
@@ -2659,7 +2661,7 @@ function App() {
     {contextHolder}
     <div className="workbench">
       <aside className="sidebar">
-        <div className="brand"><span className="brand-logo">硕</span><strong>硕磐智能</strong><Tag>Agent</Tag></div>
+        <div className="brand"><span className="brand-logo">硕</span><strong>{PRODUCT_NAME}</strong><Tag color="blue">{PRODUCT_VERSION}</Tag></div>
         <div className="sidebar-scroll">
           <Button className="new-task" onClick={handleNewSession}>+ 新会话</Button>
           <button className="section-toggle" onClick={() => setHistoryOpen((value) => !value)}><HistoryIcon />历史会话</button>
@@ -2703,4 +2705,4 @@ function App() {
 
 createRoot(document.getElementById("root")).render(<AntApp>{STANDALONE ? <StandaloneApp /> : <App />}</AntApp>);
 
-export { OntologyPreviewErrorBoundary, OntologyTreePreview };
+export { OntologyPreviewErrorBoundary, OntologyTreePreview, PreviewModalTitle };

@@ -143,3 +143,33 @@ test("onError 回调收到真实渲染错误", () => {
   assert.ok(errors[0] instanceof Error);
   assert.equal(errors[0].message, "visualization boom");
 });
+
+test("PreviewModalTitle 全屏按钮真实切换 aria-label 与 onToggle 回调", () => {
+  let toggles = 0;
+  const renderer = TestRenderer.create(
+    React.createElement(mod.PreviewModalTitle, { title: "x.csv", fullscreen: false, onToggle: () => { toggles += 1; } }),
+  );
+  let button = renderer.root.findByType("button");
+  assert.equal(button.props["aria-label"], "全屏");
+  TestRenderer.act(() => button.props.onClick());
+  assert.equal(toggles, 1);
+  renderer.update(
+    React.createElement(mod.PreviewModalTitle, { title: "x.csv", fullscreen: true, onToggle: () => { toggles += 1; } }),
+  );
+  button = renderer.root.findByType("button");
+  assert.equal(button.props["aria-label"], "退出全屏");
+  TestRenderer.act(() => button.props.onClick());
+  assert.equal(toggles, 2);
+  renderer.unmount();
+});
+
+test("预览 Modal 全屏 class 契约在 47313 与 47314 两个入口一致", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const code = await readFile(new URL("../src/main.jsx", import.meta.url), "utf-8");
+  const fullscreenBindings = [...code.matchAll(/previewFullscreen \? "preview-modal preview-modal-fullscreen" : "preview-modal"/g)];
+  assert.equal(fullscreenBindings.length, 2);
+  const wrapBindings = [...code.matchAll(/wrapClassName=\{previewFullscreen \? "preview-modal-wrap-fullscreen" : ""\}/g)];
+  assert.equal(wrapBindings.length, 2);
+  assert.match(code, /centered=\{!previewFullscreen\}/);
+  assert.match(code, /function PreviewModalTitle\(\{ title, fullscreen, onToggle \}\)/);
+});

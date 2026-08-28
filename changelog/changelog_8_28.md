@@ -25,3 +25,12 @@
 - 同步修订 `debug.md`、`agent_knowledge/README.md`、`DEPLOYMENT.md`、`README (1).md`、`open-claude/README.md`、`日报.md`；历史运维部署说明仅供人工参考，保留不删。
 - 新增防回归测试 `tests/test_repository_workflow_contract.py`（7 项断言）。
 - 状态：今日所有修改均已 commit 并 push 到 `20260727`（含本 changelog 提交）；未部署、未连接服务器、未重启任何服务。
+
+### 品牌统一与全屏预览（47313/47314 共用前端）
+
+- 品牌统一：47313 左上角由“硕磐智能 + Agent”改为与 47314 一致的“硕磐智能建模 + v0.1.0”；47314 版本由 v0.0.1 改为 v0.1.0。品牌图标仍为“硕”，47314“服务已连接”状态不变。
+- 在 `frontend/src/main.jsx` 定义 `PRODUCT_NAME`/`PRODUCT_VERSION` 单一常量，两个入口共同使用，防止再次不一致。
+- 知识规范和建模契约中的 v0.0.1 未修改（本体元模型/模板/术语/动作/输入参考文件名仍为知识契约版本，不是产品 UI 版本）。
+- 全屏预览样式：`frontend/src/styles.css` 全屏 Modal 从左上角开始并占满 `100vw × 100dvh`（`top:0`、`margin:0`、`padding:0`、`height:100dvh`）；全屏下 `ant-modal-content`、header、body、`ontology-tree-scroll`/`ontology-sigma-shell`/`ontology-sigma-loading` 及文本/CSV/图片预览容器全部 `border-radius:0!important`；普通模式圆角（如 `.ontology-tree-scroll` 的 `border-radius:8px`）保持不变；设置、任务信息、上传结果等普通 Modal 不受影响。
+- 新增测试：`tests/test_frontend_contract.py`（品牌/版本契约、全屏样式契约、禁止全局取消圆角）、`frontend/tests/ontologyPreviewRuntime.test.mjs`（`PreviewModalTitle` 全屏按钮真实切换、两个入口 class 契约一致，`PreviewModalTitle` 导出供测试）。
+- 验证：全量 pytest 695 passed、Node 76/76、production build 成功、`git diff --check` 通过。

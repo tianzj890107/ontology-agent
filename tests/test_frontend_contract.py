@@ -568,6 +568,53 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('.ontology-layout-error{', styles)
         self.assertIn('.ontology-tree-loading-overlay{', styles)
 
+    def test_product_brand_and_version_unified_across_workbenches(self):
+        source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
+        # 47313 与 47314 共用同一产品品牌常量，避免两处再次不一致。
+        self.assertIn('const PRODUCT_NAME = "硕磐智能建模";', source)
+        self.assertIn('const PRODUCT_VERSION = "v0.1.0";', source)
+        # 两个品牌入口都显示“硕磐智能建模”和 v0.1.0。
+        self.assertEqual(source.count('<strong>{PRODUCT_NAME}</strong>'), 2)
+        self.assertEqual(source.count('<Tag color="blue">{PRODUCT_VERSION}</Tag>'), 2)
+        self.assertIn('硕磐智能建模', source)
+        self.assertIn('v0.1.0', source)
+        # 47313 品牌区域不再显示 <Tag>Agent</Tag>，47314 独立建模品牌不再显示 v0.0.1。
+        self.assertNotIn('<Tag>Agent</Tag>', source)
+        self.assertNotIn('<strong>硕磐智能</strong>', source)
+        self.assertNotIn('<Tag color="blue">v0.0.1</Tag>', source)
+        # 47314 右侧“服务已连接”状态保持不变。
+        self.assertIn('<Tag color="green">服务已连接</Tag>', source)
+        # 知识规范和建模契约仍保留 v0.0.1，不能全局断言仓库不存在该版本。
+        self.assertIn('v0.0.1', source)
+
+    def test_preview_modal_fullscreen_contract(self):
+        source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
+        styles = (ROOT / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+        # 两个预览 Modal（文件预览/本体可视化）共用同一全屏 class 契约。
+        self.assertEqual(source.count('"preview-modal preview-modal-fullscreen"'), 2)
+        self.assertEqual(source.count('"preview-modal-wrap-fullscreen"'), 2)
+        self.assertIn('wrapClassName={previewFullscreen ? "preview-modal-wrap-fullscreen" : ""}', source)
+        self.assertIn('className={previewFullscreen ? "preview-modal preview-modal-fullscreen" : "preview-modal"}', source)
+        self.assertIn('centered={!previewFullscreen}', source)
+        # 全屏 Modal 从左上角开始并占满 viewport。
+        fullscreen_modal = '.preview-modal-wrap-fullscreen .ant-modal{top:0!important;width:100vw!important;max-width:none!important;height:100dvh;margin:0!important;padding:0!important}'
+        self.assertIn(fullscreen_modal, styles)
+        self.assertIn('.preview-modal-wrap-fullscreen{inset:0!important;overflow:hidden!important}', styles)
+        # 全屏内容无圆角并裁切内部内容。
+        self.assertIn('.preview-modal-fullscreen .ant-modal-content{width:100vw;height:100dvh;border-radius:0!important;overflow:hidden}', styles)
+        self.assertIn('.preview-modal-fullscreen .ant-modal-header,.preview-modal-fullscreen .ant-modal-body{border-radius:0!important}', styles)
+        # 全屏圆角覆盖只作用于 preview fullscreen，不允许全局 .ant-modal-content 取消圆角。
+        self.assertNotIn('.ant-modal-content{border-radius:0}', styles)
+        self.assertNotIn('.ant-modal-content{border-radius:0!important}', styles)
+        # 普通模式保留圆角；全屏模式覆盖为无圆角。
+        self.assertIn('border-radius:8px', styles)
+        self.assertIn('.ontology-tree-scroll{', styles)
+        self.assertIn('.ontology-tree-scroll{position:relative;width:100%;height:72vh;min-height:520px;overflow:hidden;border:1px solid #dbe4ec;border-radius:8px;', styles)
+        self.assertIn('.preview-modal-fullscreen .ontology-tree-scroll,.preview-modal-fullscreen .ontology-sigma-shell,.preview-modal-fullscreen .ontology-sigma-loading{height:calc(100dvh - 81px);min-height:0;border-radius:0!important}', styles)
+        # 文件预览容器在全屏模式同样取消圆角。
+        self.assertIn('.preview-modal-fullscreen .preview-text,.preview-modal-fullscreen .csv-preview-scroll,.preview-modal-fullscreen .preview-image{border-radius:0!important}', styles)
+        self.assertIn('className="preview-text"', source)
+        self.assertIn('className="csv-preview-scroll"', source)
 
     def test_continue_run_preserves_event_cursor_and_guards_double_submit(self):
         source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
