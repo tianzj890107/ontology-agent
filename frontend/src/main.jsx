@@ -46,6 +46,7 @@ import { buildOntologyGraph } from "./ontologyGraphModel.js";
 import {
   commitSessionSnapshot,
   createOntologyGraphCache,
+  createMissionCoordinator,
   createSessionCache,
   mergeLogWindow,
   restoreTaskPlan,
@@ -2067,6 +2068,11 @@ function App() {
   // and cancels the previous detail request so a late response can never
   // overwrite the newly visible session.
   const openTaskRequestRef = useRef({ generation: 0, controller: null, taskId: "", taskKey: "" });
+  // Mission-info requests (bootstrap/history-switch refresh) share one
+  // coordinator: a slow mission response for a superseded session must never
+  // overwrite the visible mission context or clear the newer loading flag.
+  const missionCoordinatorRef = useRef(createMissionCoordinator());
+  const missionRequestRef = useRef({ controller: null });
   // Busy is request-scoped: an old request's `finally` must not clear the
   // busy flag of a newer request started after a session switch/retry.
   const busyRequestRef = useRef(0);
@@ -2117,18 +2123,33 @@ function App() {
 
   const loadMeta = async () => { const result = await api("/api/meta"); if (!result.error) setMeta(result); else messageApi.error(result.error); };
   const loadTasks = async () => { const result = await api(`/api/tasks${MISSION ? `?repositoryId=${encodeURIComponent(MISSION.repositoryId)}&taskCode=${encodeURIComponent(MISSION.taskCode)}` : ""}`); if (!result.error) { setTasks(result.tasks || []); return result.tasks || []; } return []; };
-  const loadMission = async (mission = MISSION) => {
-    if (!mission?.repositoryId || !mission?.taskCode) return;
+  const loadMission = async (mission = MISSION, options = {}) => {
+    if (!mission?.repositoryId || !mission?.taskCode) return null;
+    const identityKey = `${mission.repositoryId}:${mission.taskCode}:${mission.taskType || ""}`;
+    // Every mission request joins the coordinator. An openTask-driven request
+    // additionally shares the open request's AbortSignal and gate, while
+    // bootstrap/refresh manage their own controller + generation so a stale
+    // response can never commit visible mission state.
+    const request = missionCoordinatorRef.current.begin(identityKey);
+    const signal = options.signal || (() => {
+      missionRequestRef.current.controller?.abort();
+      const controller = new AbortController();
+      missionRequestRef.current.controller = controller;
+      return controller.signal;
+    })();
+    const isCurrent = () => (
+      missionCoordinatorRef.current.isCurrent(request)
+      && (!options.isCurrent || options.isCurrent())
+    );
     setMissionLoading(true);
     const query = new URLSearchParams({ repositoryId: mission.repositoryId, taskCode: mission.taskCode, ...(mission.taskType ? { taskType: mission.taskType } : {}) });
-    const result = await api(`/api/mission/task?${query}`);
+    const result = await api(`/api/mission/task?${query}`, { signal });
     // 任务信息只是侧栏的辅助内容；上游任务已完成、删除或暂不可查时，
-    // 保持空态即可，不能在打开历史对话时弹出错误打断用户。
-    if (!result.error) {
-      setMissionContext(result.task);
-    } else {
-      setMissionContext(null);
-    }
+    // 保持空态即可，不能在打开历史对话时弹出错误打断用户。任何被更新
+    // 请求取代的旧 mission 响应不得提交状态，也不得清除新请求的 loading。
+    if (result._aborted || !isCurrent()) return null;
+    if (!result.error) setMissionContext(result.task);
+    else setMissionContext(null);
     setMissionLoading(false);
     return result.error ? null : result;
   };
@@ -2401,16 +2422,23 @@ function App() {
       return;
     }
     const current = { ...result };
+    if (taskMission && !MISSION) {
+      const missionResult = await loadMission(
+        { ...taskMission, taskType: current.taskType || task.taskType || "" },
+        { signal: openRequest.controller.signal, isCurrent: isCurrentOpen },
+      );
+      // Every await is an async boundary: the user may have switched sessions
+      // while the mission request was in flight. Only the latest open may
+      // commit visible state (meta, active, events, files, window, approval).
+      if (result._aborted || !isCurrentOpen()) return;
+      if (missionResult?.platformStatus) current.platformStatus = missionResult.platformStatus;
+    }
     if (current.model) {
       setMeta((previous) => ({
         ...previous,
         model: current.model,
         provider: (previous.models || []).find((item) => item.id === current.model)?.provider || previous.provider,
       }));
-    }
-    if (taskMission && !MISSION) {
-      const missionResult = await loadMission({ ...taskMission, taskType: current.taskType || task.taskType || "" });
-      if (missionResult?.platformStatus) current.platformStatus = missionResult.platformStatus;
     }
     feedPinnedRef.current = true;
     const recentEvents = normalizeEvents(current);
@@ -2460,16 +2488,23 @@ function App() {
     // workspace listing are deliberately filled after that first viewport is
     // usable, so a large replay log or file tree cannot block task input.
     scheduleIdle(async () => {
+      // Only the latest open may drive background work that touches visible
+      // state. A superseded session's late history/files/preload results are
+      // discarded; its own session cache may still be written safely by the
+      // scoped loaders below.
+      if (!isCurrentOpen()) return;
       // Stop after roughly ten viewport heights so the user gets meaningful
       // recent history first; files are loaded next, then the old journal
       // resumes in the background.
       const historyHasMore = await loadOlderTaskEvents(current, 0, 10);
+      if (!isCurrentOpen()) return;
       const loadedFiles = await loadFiles(current);
+      if (!isCurrentOpen()) return;
       // Background ontology preload: once the file list is ready, download +
       // parse + build the graph for this session so the visualization opens
       // instantly later, without blocking the conversation first viewport.
       preloadTaskOntologyGraph(taskKey, loadedFiles, current);
-      if (activeTaskIdRef.current === taskId) {
+      if (isCurrentOpen() && activeTaskIdRef.current === taskId) {
         // The file panel is open by default; reopening a session with
         // generated results only ever opens it (never auto-closes a panel the
         // user kept open), while loading contents must not block the
@@ -2485,7 +2520,7 @@ function App() {
         }
         if (shouldOpenFiles) setFilesOpen(true);
       }
-      if (historyHasMore) await loadOlderTaskEvents(current);
+      if (historyHasMore && isCurrentOpen()) await loadOlderTaskEvents(current);
     });
   };
 

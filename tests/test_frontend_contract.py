@@ -216,7 +216,9 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('document.querySelector(".standalone-agent-feed")', source)
         self.assertIn('loadOlderStandaloneEvents(runId, 10)', source)
         self.assertIn('const historyHasMore = await loadOlderTaskEvents(current, 0, 10);', source)
-        self.assertIn('if (historyHasMore) await loadOlderTaskEvents(current);', source)
+        # 后台旧历史回放同样受当前 open generation 限制：被取代的会话的
+        # 迟到后台结果不能更新新会话的可见状态。
+        self.assertIn('if (historyHasMore && isCurrentOpen()) await loadOlderTaskEvents(current);', source)
         self.assertIn('if (historyHasMore) await loadOlderStandaloneEvents(runId);', source)
         self.assertIn('await waitForNextPaint();', source)
         self.assertIn('MISSION ? loadMission() : Promise.resolve()', source)

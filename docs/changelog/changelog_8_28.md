@@ -79,7 +79,9 @@
 - 47314 独立建模：`selectRun` 从 `standaloneSessionCacheRef` 即时恢复事件、文件列表与事件窗口；`loadRunFiles` 成功后写回文件列表并触发 `preloadStandaloneOntologyGraph`；`drawStandaloneOntology` 与预加载共用同一 runId scope；`standaloneDrawRequestRef` 隔离 loading；LRU 淘汰时同步释放事件窗口/cursor/合并事件引用。
 - 行为：A → B → A 切换立即恢复 A 的缓存；同一 task/run 同一产物签名只有一个在途 CSV 下载与构图；产物签名变化后 graph 失效并重新构图；预加载失败不阻止会话打开，点击可视化可重试；不使用 localStorage/sessionStorage/IndexedDB，缓存仅当前页面内存有效，刷新后自然清空。
 - 测试：`frontend/tests/sessionCache.test.mjs` 覆盖 LRU、签名、去重、签名失效、迟到响应、错误重试、namespaced key 隔离、A → B → A 立即恢复与 generation 拦截；`frontend/tests/ontologyPreviewRuntime.test.mjs` 将原源码字符串测试替换为真实行为测试并保留直接防回归“drawOntology 用裸 taskId”的接线契约；`frontend/tests/ontologyForceLayout.test.mjs` 修复对仓库根目录运行时 `output/` 的依赖，改用可提交的合成五层 CSV 夹具 `frontend/tests/fixtures/five-layer/`（路径经 `import.meta.url` 相对解析）；`tests/test_frontend_contract.py` 的 selectRun 契约随新实现更新。
-- 验证：前端 Node 测试 107/107 通过、Python 全量测试通过、`npm run build` 成功、`git diff --check` 通过。
+- mission 请求竞态隔离（定版前最后修复）：`loadMission` 纳入与 task open 相同的 generation/AbortController 保护，新增 `createMissionCoordinator` 纯控制器与 `missionRequestRef`；`openTask` 在 mission await 后、任何可见 state commit 前重新校验当前请求，`setMeta` 移入最终守卫之后，后台 `scheduleIdle` 在关键 await 后校验 generation；旧 mission 的 catch/finally 不能覆盖新 mission 上下文或清除新 loading，A → B → A 只接受最新一代结果。
+- 测试：`frontend/tests/sessionCache.test.mjs` 新增 7 项真实异步竞态行为测试（A mission 迟到不能覆盖 B、旧 finally 不能清除新 loading、A → B → A 只接受最新一代、旧失败不覆盖、abort 静默结束、身份 key 隔离）；`frontend/tests/ontologyPreviewRuntime.test.mjs` 新增 3 项接线契约（mission await 后重新校验、setMeta 位于最终守卫之后、scheduleIdle 受 generation 限制）；`tests/test_frontend_contract.py` 的旧历史回放契约更新为带 generation 守卫的形式。
+- 验证：前端 Node 测试 117/117 通过、Python 全量 739 passed / 13 skipped / 452 subtests、`npm run build` 成功、`git diff --check` 通过。
 - 状态：v0.1.1 尚未定版、未创建 tag、未创建 GitHub Release；commit/push 状态见最终报告；未部署。
 
 ### GitHub Release 双仓库发布规范

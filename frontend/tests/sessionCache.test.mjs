@@ -447,3 +447,154 @@ test("同一 task graph 预加载与点击共享同一个 namespaced key 的在�
   assert.equal(calls, 2, "同一批 CSV 只下载一次");
   assert.equal(cache.getStatus(taskKey, artifactsA()).status, "ready");
 });
+
+// ---------------------------------------------------------------------------
+// Mission request race isolation (mirrors the workbench loadMission flow: the
+// coordinator gates which response may commit visible mission state, so a
+// slow mission response for a superseded session can never overwrite the
+// visible session or clear its loading flag).
+// ---------------------------------------------------------------------------
+
+import { createMissionCoordinator } from "../src/sessionCache.js";
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function loadMissionFlow(coordinator, mission, options = {}) {
+  const key = `${mission.repositoryId}:${mission.taskCode}:${mission.taskType || ""}`;
+  const request = coordinator.begin(key);
+  const state = options.state || { loading: false, context: null };
+  const gate = options.gate || Promise.resolve({ task: mission.label });
+  state.loading = true;
+  return gate.then((result) => {
+    // Mirrors loadMission: aborted or superseded requests commit nothing and
+    // must not clear the newer request's loading.
+    if (options.aborted || !coordinator.isCurrent(request) || (options.isCurrent && !options.isCurrent())) {
+      return null;
+    }
+    if (result.error) {
+      state.context = null;
+      state.loading = false;
+      return null;
+    }
+    state.context = result.task ?? null;
+    state.loading = false;
+    return result;
+  });
+}
+
+const MISSION_A = { repositoryId: "repo-a", taskCode: "tc-a", label: "A" };
+const MISSION_B = { repositoryId: "repo-b", taskCode: "tc-b", label: "B" };
+
+test("mission 身份 key 不同则不可共用可见状态", () => {
+  const coordinator = createMissionCoordinator();
+  const requestA = coordinator.begin("repo-a:tc-a:");
+  const requestB = coordinator.begin("repo-a:tc-a:task-type-2");
+  assert.equal(coordinator.isCurrent(requestA), false, "taskType 变化也视为不同 mission 请求");
+  assert.equal(coordinator.isCurrent(requestB), true);
+});
+
+test("A mission 迟到不能覆盖 B 的 mission 状态", async () => {
+  const coordinator = createMissionCoordinator();
+  const state = { loading: false, context: null };
+  const deferA = deferred();
+  let visibleSession = "A";
+  const openA = loadMissionFlow(coordinator, MISSION_A, {
+    state,
+    gate: deferA.promise,
+    isCurrent: () => visibleSession === "A",
+  });
+  // 切换到 B：B 的 mission 立即完成并提交。
+  visibleSession = "B";
+  const openB = loadMissionFlow(coordinator, MISSION_B, {
+    state,
+    isCurrent: () => visibleSession === "B",
+  });
+  await openB;
+  assert.equal(state.context, "B");
+  assert.equal(state.loading, false);
+  // A 的 mission 最后返回：不得覆盖 B，也不得触发后续可见 commit。
+  deferA.resolve({ task: "A" });
+  const resultA = await openA;
+  assert.equal(resultA, null);
+  assert.equal(state.context, "B");
+  assert.equal(state.loading, false);
+});
+
+test("旧 mission 结束不能清除新 mission 的 loading", async () => {
+  const coordinator = createMissionCoordinator();
+  const state = { loading: false, context: null };
+  const deferA = deferred();
+  const deferB = deferred();
+  const openA = loadMissionFlow(coordinator, MISSION_A, { state, gate: deferA.promise });
+  const openB = loadMissionFlow(coordinator, MISSION_B, { state, gate: deferB.promise });
+  assert.equal(state.loading, true);
+  // A 先结束（被取代）：不得把 loading 清成 false。
+  deferA.resolve({ task: "A" });
+  await openA;
+  assert.equal(state.loading, true, "A 的结束不能清除 B 的 loading");
+  assert.equal(state.context, null);
+  // B 完成后才结束 loading。
+  deferB.resolve({ task: "B" });
+  await openB;
+  assert.equal(state.loading, false);
+  assert.equal(state.context, "B");
+});
+
+test("A → B → A 只接受最新一代 A 的结果", async () => {
+  const coordinator = createMissionCoordinator();
+  const state = { loading: false, context: null };
+  const deferA1 = deferred();
+  const deferA2 = deferred();
+  const openA1 = loadMissionFlow(coordinator, MISSION_A, { state, gate: deferA1.promise });
+  const openB = loadMissionFlow(coordinator, MISSION_B, { state, gate: Promise.resolve({ task: "B" }) });
+  await openB;
+  const openA2 = loadMissionFlow(coordinator, MISSION_A, { state, gate: deferA2.promise });
+  deferA2.resolve({ task: "A2" });
+  await openA2;
+  assert.equal(state.context, "A2");
+  // 第一代 A 最后返回：不得覆盖第二代 A。
+  deferA1.resolve({ task: "A1" });
+  await openA1;
+  assert.equal(state.context, "A2");
+  assert.equal(state.loading, false);
+});
+
+test("旧 mission 失败返回不得清空新 mission context", async () => {
+  const coordinator = createMissionCoordinator();
+  const state = { loading: false, context: null };
+  const deferA = deferred();
+  const openA = loadMissionFlow(coordinator, MISSION_A, { state, gate: deferA.promise });
+  // B 提交成功。
+  const openB = loadMissionFlow(coordinator, MISSION_B, { state, gate: Promise.resolve({ task: "B" }) });
+  await openB;
+  assert.equal(state.context, "B");
+  // A 失败返回：不得把 missionContext 清成 null。
+  deferA.resolve({ error: "not found" });
+  await openA;
+  assert.equal(state.context, "B");
+});
+
+test("当前 mission 请求失败时只设置当前空态，不切换会话", async () => {
+  const coordinator = createMissionCoordinator();
+  const state = { loading: false, context: "C" };
+  const openA = loadMissionFlow(coordinator, MISSION_A, { state, gate: Promise.resolve({ error: "上游不可查" }) });
+  await openA;
+  assert.equal(state.context, null, "当前请求失败时 mission 辅助信息为空态");
+  assert.equal(state.loading, false);
+});
+
+test("被 abort 的 mission 请求静默结束且不提交", async () => {
+  const coordinator = createMissionCoordinator();
+  const state = { loading: true, context: null };
+  const deferA = deferred();
+  const openA = loadMissionFlow(coordinator, MISSION_A, { state, gate: deferA.promise, aborted: true });
+  deferA.resolve({ task: "A" });
+  const resultA = await openA;
+  assert.equal(resultA, null);
+  assert.equal(state.context, null);
+  assert.equal(state.loading, true, "abort 后不修改 loading，由最新请求负责");
+});

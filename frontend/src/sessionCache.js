@@ -299,3 +299,32 @@ export function createOpenGate() {
     },
   };
 }
+
+// Generation gate for mission-info requests (bootstrap, history-switch and
+// refresh all share one coordinator). `begin(key)` marks the newest request;
+// `isCurrent(request)` is the single commit gate, so a slow mission response
+// for a superseded session can never overwrite the visible mission context or
+// clear its loading flag. The key is the mission identity
+// (repositoryId:taskCode:taskType) so different mission spaces never share
+// visible state.
+export function createMissionCoordinator() {
+  let generation = 0;
+  let identityKey = "";
+  return {
+    begin(key) {
+      generation += 1;
+      identityKey = String(key || "");
+      return { generation, key: String(key || "") };
+    },
+    isCurrent(request) {
+      return Boolean(
+        request
+        && request.generation === generation
+        && String(request.key || "") === identityKey
+      );
+    },
+    current() {
+      return { generation, key: identityKey };
+    },
+  };
+}

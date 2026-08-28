@@ -319,3 +319,54 @@ test("main.jsx 绘图与预加载统一使用 namespaced key，不再用裸 task
   assert.doesNotMatch(code, /taskSessionCacheRef.*(localStorage|sessionStorage|indexedDB|IndexedDB)/);
   assert.doesNotMatch(code, /standaloneSessionCacheRef.*(localStorage|sessionStorage|indexedDB|IndexedDB)/);
 });
+
+test("openTask 在 mission await 后重新校验当前请求且 setMeta 位于最终守卫之后", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const code = await readFile(new URL("../src/main.jsx", import.meta.url), "utf-8");
+  const openStart = code.indexOf("const openTask = async (task) => {");
+  const openBody = code.slice(openStart, code.indexOf("const loadFiles = async", openStart));
+  // mission 请求共享 open 请求的 AbortSignal 与当前判定。
+  assert.match(openBody, /loadMission\(\s*\{ \.\.\.taskMission, taskType: /);
+  assert.match(openBody, /signal: openRequest\.controller\.signal, isCurrent: isCurrentOpen/);
+  // mission await 之后、任何可见 state commit 之前必须重新校验。
+  const missionBlockStart = openBody.indexOf("const missionResult = await loadMission");
+  const missionBlock = openBody.slice(missionBlockStart, openBody.indexOf("feedPinnedRef.current = true;", missionBlockStart));
+  assert.match(missionBlock, /if \(result\._aborted \|\| !isCurrentOpen\(\)\) return;/);
+  // setMeta 必须位于最终守卫之后，不能由迟到的 A 覆盖 B。
+  const setMetaIndex = openBody.indexOf("if (current.model) {");
+  const finalGuardIndex = openBody.indexOf("if (result._aborted || !isCurrentOpen()) return;", missionBlockStart);
+  assert.ok(finalGuardIndex !== -1 && finalGuardIndex < setMetaIndex, "setMeta 位于最终 generation 守卫之后");
+});
+
+test("loadMission 使用 mission coordinator，旧请求不能提交可见状态", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const code = await readFile(new URL("../src/main.jsx", import.meta.url), "utf-8");
+  const missionStart = code.indexOf("const loadMission = async (mission = MISSION, options = {}) => {");
+  const missionBody = code.slice(missionStart, code.indexOf("useLayoutEffect", missionStart));
+  assert.match(missionBody, /missionCoordinatorRef\.current\.begin\(identityKey\)/);
+  assert.match(missionBody, /const signal = options\.signal \|\|/);
+  assert.match(missionBody, /missionCoordinatorRef\.current\.isCurrent\(request\)/);
+  assert.match(missionBody, /!options\.isCurrent \|\| options\.isCurrent\(\)/);
+  assert.match(missionBody, /if \(result\._aborted \|\| !isCurrent\(\)\) return null;/);
+  // 只有当前请求可以 setMissionContext / setMissionLoading(false)。
+  const guardIndex = missionBody.indexOf("if (result._aborted || !isCurrent()) return null;");
+  const afterGuard = missionBody.slice(guardIndex);
+  assert.match(afterGuard, /setMissionContext\(result\.task\)/);
+  assert.match(afterGuard, /setMissionLoading\(false\)/);
+});
+
+test("后台 scheduleIdle 受当前 open generation 限制", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const code = await readFile(new URL("../src/main.jsx", import.meta.url), "utf-8");
+  const openStart = code.indexOf("const openTask = async (task) => {");
+  const openBody = code.slice(openStart, code.indexOf("const loadFiles = async", openStart));
+  const idleStart = openBody.indexOf("scheduleIdle(async () => {");
+  const idleBody = openBody.slice(idleStart, openBody.indexOf("});", idleStart));
+  assert.match(idleBody, /if \(!isCurrentOpen\(\)\) return;/);
+  // 每个关键 await 之后都重新校验，A 的迟到后台结果不能更新 B 的文件/panel/preview。
+  const guardCount = (idleBody.match(/if \(!isCurrentOpen\(\)\) return;/g) || []).length;
+  const awaitCount = (idleBody.match(/await loadOlderTaskEvents|await loadFiles/g) || []).length;
+  assert.ok(guardCount >= awaitCount, `generation 守卫(${guardCount})不能少于关键 await 数(${awaitCount})`);
+  assert.match(idleBody, /if \(isCurrentOpen\(\) && activeTaskIdRef\.current === taskId\)/);
+  assert.match(idleBody, /if \(historyHasMore && isCurrentOpen\(\)\)/);
+});
