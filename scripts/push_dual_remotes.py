@@ -205,18 +205,37 @@ def main(argv=None):
     # 10/11. Read remote target refs and validate ancestry.
     origin_ref = "refs/heads/%s" % args.origin_branch
     personal_ref = "refs/heads/%s" % args.personal_branch
+    origin_sha = None
+    personal_sha = None
+    origin_unreachable = None
+    personal_unreachable = None
     try:
         origin_sha = remote_sha("origin", origin_ref)
+    except PushError as exc:
+        origin_unreachable = exc
+    try:
         personal_sha = remote_sha("personal", personal_ref)
     except PushError as exc:
-        print("错误：%s" % exc, file=sys.stderr)
+        personal_unreachable = exc
+
+    if origin_unreachable:
+        print("错误：无法读取 origin：%s" % origin_unreachable, file=sys.stderr)
+        print("无法确认 origin 状态，双远端推送未执行。", file=sys.stderr)
         return 2
+
     try:
         origin_state = verify_remote_state("origin", origin_sha, head_sha)
-        personal_state = verify_remote_state("personal", personal_sha, head_sha)
     except PushError as exc:
         print("错误：%s" % exc, file=sys.stderr)
         return 2
+    if personal_unreachable:
+        personal_state = "unreachable"
+    else:
+        try:
+            personal_state = verify_remote_state("personal", personal_sha, head_sha)
+        except PushError as exc:
+            print("错误：%s" % exc, file=sys.stderr)
+            return 2
 
     print("本地 HEAD: %s" % head_sha)
     print("origin  (%s) %s: %s (%s)" % (origin_url, origin_ref, origin_sha or "(缺失)", origin_state))
@@ -224,6 +243,9 @@ def main(argv=None):
 
     if args.check:
         print("--check：未执行任何 push。")
+        if personal_unreachable:
+            print("注意：personal 远端当前不可达（%s）；首次推送前请先创建或确认个人私有仓库。"
+                  % str(personal_unreachable).strip().splitlines()[0])
         return 0
 
     # 12/13. Push origin first, then personal.
@@ -242,7 +264,8 @@ def main(argv=None):
         print("错误：%s" % exc, file=sys.stderr)
         print(
             "部分成功：origin 已推送，personal 失败；两个远端暂时不一致。"
-            "请修复 personal 的权限或网络后重新执行相同 HEAD 的 push；不回滚 origin、不 force push、不创建补偿 commit。",
+            "请修复 personal 的权限或网络（或先创建个人私有仓库）后，重新执行相同 HEAD 的 push；"
+            "不回滚 origin、不 force push、不创建补偿 commit。",
             file=sys.stderr,
         )
         return 1
@@ -250,9 +273,18 @@ def main(argv=None):
     # 16/17/18. Post-push verification via ls-remote.
     try:
         new_origin_sha = remote_sha("origin", origin_ref)
+    except PushError as exc:
+        print("错误：push 后读取 origin 失败：%s" % exc, file=sys.stderr)
+        return 1
+    try:
         new_personal_sha = remote_sha("personal", personal_ref)
     except PushError as exc:
-        print("错误：push 后读取远端失败：%s" % exc, file=sys.stderr)
+        print("错误：push 后读取 personal 失败：%s" % exc, file=sys.stderr)
+        print(
+            "部分成功：origin 已推送，personal 校验失败；两个远端暂时不一致。"
+            "请修复 personal 的权限或网络后重新执行相同 HEAD 的 push；不回滚 origin、不 force push。",
+            file=sys.stderr,
+        )
         return 1
     if not hashes_match(head_sha, new_origin_sha, new_personal_sha):
         print(
