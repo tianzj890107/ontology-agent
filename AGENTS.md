@@ -6,7 +6,7 @@
    - `personal/main`（个人私有镜像仓库）。
 3. 当前仓库固定映射：
    - `origin` → `tianzj890107/ontology-agent` 的 `20260727` 分支；
-   - `personal` → `zhenzhan0408/ontology-agent` 的 `main` 分支。
+   - `personal` → `zhenzhang0408/ontology-agent` 的 `main` 分支。
 4. 双远端推送优先使用 `python scripts/push_dual_remotes.py`，该脚本会校验远端映射、工作区状态、祖先关系和推送后三个 hash。
 5. 双远端推送成功标准：`HEAD == origin/20260727 == personal/main`。
 6. `personal` 仓库只是 `origin` 开发分支的私有镜像和个人版本归档，不允许产生个人仓库独有的代码提交。

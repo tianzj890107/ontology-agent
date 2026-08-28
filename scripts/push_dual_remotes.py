@@ -4,7 +4,7 @@
 Safety-focused dual-remote mirror push:
 
 - origin      -> tianzj890107/ontology-agent   (branch 20260727)
-- personal    -> zhenzhan0408/ontology-agent   (branch main)
+- personal    -> zhenzhang0408/ontology-agent   (branch main)
 
 Usage:
     python scripts/push_dual_remotes.py [--check]
@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 ORIGIN_OWNER_REPO = "tianzj890107/ontology-agent"
-PERSONAL_OWNER_REPO = "zhenzhan0408/ontology-agent"
+PERSONAL_OWNER_REPO = "zhenzhang0408/ontology-agent"
 DEFAULT_SOURCE_BRANCH = "20260727"
 DEFAULT_ORIGIN_BRANCH = "20260727"
 DEFAULT_PERSONAL_BRANCH = "main"

@@ -5,7 +5,7 @@
 | Remote | Repository | Target branch | Purpose |
 | --- | --- | --- | --- |
 | origin | tianzj890107/ontology-agent | 20260727 | 主协作仓库 |
-| personal | zhenzhan0408/ontology-agent | main | 个人私有镜像与版本归档 |
+| personal | zhenzhang0408/ontology-agent | main | 个人私有镜像与版本归档 |
 
 ## 完成标准
 
@@ -26,7 +26,7 @@ HEAD == origin/20260727 == personal/main
 ## 首次设置
 
 ```bash
-git remote add personal git@github.com:zhenzhan0408/ontology-agent.git
+git remote add personal git@github.com:zhenzhang0408/ontology-agent.git
 ```
 
 个人仓库必须是 GitHub Private 仓库；初始化时不添加 README/.gitignore/License，不创建 fork、不启用 Pages 或部署流程。

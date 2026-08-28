@@ -59,7 +59,7 @@ class RepositoryWorkflowContractTests(unittest.TestCase):
         self.assertTrue(doc.exists())
         text = doc.read_text(encoding="utf-8")
         self.assertIn("tianzj890107/ontology-agent", text)
-        self.assertIn("zhenzhan0408/ontology-agent", text)
+        self.assertIn("zhenzhang0408/ontology-agent", text)
         self.assertIn("20260727", text)
         self.assertIn("main", text)
         self.assertIn("HEAD == origin/20260727 == personal/main", text)
