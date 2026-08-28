@@ -52,4 +52,11 @@
 - 新增 `scripts/push_dual_remotes.py`：校验远端映射、工作区干净、祖先关系与推送后三个 hash，支持 `--check` 只读检查，禁止 force push，origin 成功但 personal 失败时报告部分成功。
 - 新增本地 bare remote 测试 `tests/test_dual_remote_push.py`（13 项），更新 `tests/test_repository_workflow_contract.py`（11 项）与 `tests/test_documentation_layout.py`。
 - `AGENTS.md`、`debug.md`、`README.md`、`docs/git-dual-remote-workflow.md`、`docs/versions/v0.1.0.md` 同步双远端工作流说明。
-- 实际结果：`personal` 远端已添加但 GitHub 仓库尚未创建（本机未安装 `gh`，无法创建私有仓库）；双远端脚本已推送 `origin/20260727` 至 `63fc86f`，`personal/main` 因仓库不存在暂不可达，属于部分成功，待创建个人私有仓库后以相同 HEAD 重试；未 force push；push 不代表部署；未部署。
+- 实际结果：个人私有镜像仓库最终确认为 `zhenzhang0408/ontology-agent`，`personal` 远端已修正为 `git@github.com:zhenzhang0408/ontology-agent.git`；本地 `HEAD`、`origin/20260727` 与 `personal/main` 均同步到 `3af6d14`，未 force push；push 不代表部署。
+
+### v0.1.0 功能部署与线上验证
+
+- 部署范围：服务器由 `f5c67a1` 快进到 `3af6d14`，包含 47314 `actions.csv` 默认产物契约、47313/47314 统一“硕磐智能建模 v0.1.0”、文件与本体预览全屏无圆角、项目 README/版本文档与 changelog 目录整理，以及仅影响开发协作的双远端推送工具；无数据库迁移、无 run/任务数据格式迁移。
+- 部署前确认：本地全量 pytest `722 passed / 13 skipped / 448 subtests`，前端 Node 测试 `76/76`，`npm run build` 与 `git diff --check` 通过；服务器 47313/47314 的 active/queued execution 均为 0，运行索引和既有备份保持原样。
+- 部署结果：47313 经 `scripts/deploy_server.sh` 更新并重启为 pid `4122195`；47314 在再次确认无活动 run 后精确停止旧 pid `3830440`，经 `scripts/run_standalone_modeling.sh` 重启为 pid `4125590`。两服务 `/` 与 `/health` 均为 HTTP 200、readiness ready、active/queued 均为 0。
+- 线上资源：47313/47314 均加载 `assets/index-DvhxxeJ3.js`；线上 bundle 已核对包含“硕磐智能建模”和 `v0.1.0`，CSS `index-CpwoD9tw.css` 已核对全屏预览 `border-radius:0!important`；两服务最近启动日志无 traceback/exception/error。
