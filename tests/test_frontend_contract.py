@@ -576,12 +576,12 @@ class FrontendContractTests(unittest.TestCase):
         source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
         # 47313 与 47314 共用同一产品品牌常量，避免两处再次不一致。
         self.assertIn('const PRODUCT_NAME = "硕磐智能建模";', source)
-        self.assertIn('const PRODUCT_VERSION = "v0.1.0";', source)
-        # 两个品牌入口都显示“硕磐智能建模”和 v0.1.0。
+        self.assertIn('const PRODUCT_VERSION = "v0.1.1";', source)
+        # 两个品牌入口都显示“硕磐智能建模”和 v0.1.1。
         self.assertEqual(source.count('<strong>{PRODUCT_NAME}</strong>'), 2)
         self.assertEqual(source.count('<Tag color="blue">{PRODUCT_VERSION}</Tag>'), 2)
         self.assertIn('硕磐智能建模', source)
-        self.assertIn('v0.1.0', source)
+        self.assertIn('v0.1.1', source)
         # 47313 品牌区域不再显示 <Tag>Agent</Tag>，47314 独立建模品牌不再显示 v0.0.1。
         self.assertNotIn('<Tag>Agent</Tag>', source)
         self.assertNotIn('<strong>硕磐智能</strong>', source)

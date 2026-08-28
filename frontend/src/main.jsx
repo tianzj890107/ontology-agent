@@ -58,7 +58,7 @@ import { ONTOLOGY_LAYOUT_OPTIONS, ontologyLayoutOption } from "./ontologyLayoutO
 const OntologySigmaPreview = React.lazy(() => import("./OntologySigmaPreview.jsx"));
 
 const PRODUCT_NAME = "硕磐智能建模";
-const PRODUCT_VERSION = "v0.1.0";
+const PRODUCT_VERSION = "v0.1.1";
 const MISSION = window.__MISSION__?.taskCode ? window.__MISSION__ : null;
 const STANDALONE = Boolean(window.__STANDALONE_MODELING__);
 const $json = (value) => JSON.stringify(value, null, 2);

@@ -95,3 +95,12 @@
 - 实际 Release 状态：personal 仓库已存在 `v0.1.0` Release（id 378309186），验收并复用，正文统一为最终文案；origin 仓库缺失，已创建（id 378324865）。两个 Release 均绑定 `v0.1.0` tag、标题“硕磐智能建模 v0.1.0”、非 draft、非 prerelease、正文一致。
 - tag 核验：两端 `v0.1.0` tag object 均为 `38eae0402176e2e801ba92bcd00ee304b83eacf0`、peeled commit 均为 `188057d8a81b7d83f0aeb858e40c3ef14fddf539`，未移动；未创建 `v0.1.1` tag 或 Release。
 - 验证：全量 Python 测试通过、`git diff --check` 通过；未部署、未连接服务器。
+
+### v0.1.1 正式定版（未部署）
+
+- 产品 UI 版本常量 `PRODUCT_VERSION` 更新为 `v0.1.1`，47313 与 47314 继续共用同一常量；重新构建 `frontend/dist`；知识规范/元模型/模板/CSV 契约的 `v0.0.1` 未修改。
+- `docs/versions/v0.1.1.md` 状态更新为“已定版、未部署”，Git Tag 记录为 `v0.1.1`；`docs/versions/README.md` 将 `v0.1.1` 标为“已定版、未部署、仓库最新正式版本”，`v0.1.0` 保持“已定版、当前线上版本”；根 `README.md` 明确仓库最新正式版本为 `v0.1.1` 且当前服务器线上仍为 `v0.1.0`。
+- 发布契约：定版 commit 之后随即创建 annotated tag `v0.1.1`（message `Release v0.1.1`）并精确双推 `origin` 与 `personal`（禁止 `git push --tags` 与 force push）；随后按双仓库规则在 `tianzj890107/ontology-agent` 与 `zhenzhang0408/ontology-agent` 创建标题为“硕磐智能建模 v0.1.1”、非 draft、非 prerelease、正文一致的 GitHub Release；已存在则验收复用，不重复创建。
+- `v0.1.0` tag（object `38eae0402176e2e801ba92bcd00ee304b83eacf0`、peeled `188057d8a81b7d83f0aeb858e40c3ef14fddf539`）保持未移动。
+- 实际 tag object hash 与两个 Release URL 以本次定版最终报告为准。
+- 验证：定版前完整验证通过（前端 Node、Python 全量、production build、`git diff --check`）；未部署、未连接服务器、未启动/停止/重启任何服务；当前线上仍为 `v0.1.0`。
