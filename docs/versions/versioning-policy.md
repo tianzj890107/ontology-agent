@@ -68,7 +68,22 @@ GitHub Release：
 
 - 不是每个 tag 都必须立即创建；
 - 只有用户明确要求创建 Release 时才执行；
-- Release 必须绑定已有 tag，不得创建不同历史。
+- Release 必须绑定已有 tag，不得创建不同历史；
+- 用户明确授权创建某版本的 GitHub Release 时，必须在两个仓库同时发布，缺一不可：
+  - origin：`tianzj890107/ontology-agent`；
+  - personal：`zhenzhang0408/ontology-agent`。
+- 双仓库 Release 流程：
+  1. 验证两个远端存在完全相同的 annotated tag（tag object hash 与 peeled commit 一致）；
+  2. 查询两个仓库的 `releases/tags/{tag}`；
+  3. 已存在且符合要求的 Release 直接复用并验收，不重复创建；
+  4. 一个存在、另一个缺失时，只创建缺失的那个；
+  5. 幂等创建缺失的 Release（绑定同名 tag，标题、正文、draft、prerelease 与已存在的一方一致）；
+  6. 回查两个 Release；
+  7. 验证两者 tag、标题、正文、draft、prerelease 完全一致；
+  8. 任一仓库失败时报告部分成功：保留已成功 Release，不删除、不重建，修复权限或网络后只重试缺失仓库。
+- 已存在但标题或正文与统一内容不一致时，在不改变 tag 的前提下更新为统一内容，保留 Release 身份；
+- Release 完成不代表部署；创建 Release 后如无额外部署授权，任务结束；
+- `v0.1.1` 未定版前不得创建 `v0.1.1` tag 或 Release。
 
 服务器部署：
 
@@ -113,4 +128,7 @@ GitHub Release：
 - 禁止为了满足日历节奏机械升级版本；
 - 禁止把每次部署都升级为正式版本；
 - 禁止把 GitHub Release 或部署动作视为日常 push 的组成部分；
+- 禁止只创建 origin 或只创建 personal 的 Release 后就报告双发布完成；
+- 禁止为了补齐 Release 移动 tag、重新打 tag、`git push --tags` 或 force push；
+- 禁止在未获用户当前明确授权时创建 Release 或执行部署；
 - 禁止在未获用户当前明确授权时创建 Release 或执行部署。

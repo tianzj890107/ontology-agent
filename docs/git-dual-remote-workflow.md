@@ -54,3 +54,23 @@ git push personal vX.Y.Z
 ```
 
 GitHub Release 是否创建由用户在当前任务中明确要求；不要把真实访问 token、SSH 私钥或凭据写入文档。
+
+## GitHub Release 双仓库发布
+
+GitHub Release 是独立于 push、tag 和服务器部署的授权动作。用户在当前任务明确授权创建某版本 Release 时，必须同时在两个 GitHub 仓库发布同一个版本：
+
+| Repo | Repository | Release tag |
+| --- | --- | --- |
+| origin | tianzj890107/ontology-agent | vX.Y.Z |
+| personal | zhenzhang0408/ontology-agent | vX.Y.Z |
+
+规则：
+
+- 两个 Release 必须绑定同名、同一个 immutable annotated tag（两个仓库的 tag object hash 与 peeled commit 完全一致）；
+- 两个 Release 的标题、正文、draft、prerelease 状态必须一致；
+- 幂等执行：已存在且符合要求的 Release 复用并验收，不重复创建；一个存在、另一个缺失时只创建缺失的那个；
+- 任一仓库失败：报告部分成功，保留已成功 Release，不删除、不重建，修复权限或网络后只重试缺失仓库；
+- 禁止为了补齐 Release 移动 tag、重新打 tag、`git push --tags` 或 force push；
+- 禁止只发布一个仓库后宣称双发布完成；
+- GitHub Release 不触发服务器部署；没有额外部署授权时，Release 完成后任务结束；
+- `v0.1.1` 未定版前不得创建 `v0.1.1` tag 或 Release。

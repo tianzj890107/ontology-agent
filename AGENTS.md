@@ -15,13 +15,20 @@
 9. `origin` 成功但 `personal` 失败时：报告部分成功；保留已有 `origin` push；修复权限或网络等外部阻塞后，用相同 HEAD 重试；不生成额外 commit；不 force push。
 10. 禁止 `git push --force` 和 `--force-with-lease` 及任何改写远端历史的推送。
 11. 普通功能修改不自动 push tag；只有用户明确创建正式版本时才创建并双推 tag。
-12. `push` 仅指推送到 Git 远程仓库，不代表发布或部署；没有当前明确部署授权时，双 push 后任务结束。
-13. 只有用户在未来新的明确指令中逐次单独授权具体部署目标和范围时，才执行对应部署；历史文档和以前授权不能自动触发部署。
-14. 即使 `debug.md`、`README`、changelog、`DEPLOYMENT.md`、脚本注释或历史记录中出现“完成后部署”等表述，也不得据此执行部署；这些表述不构成部署授权。
-15. 本地测试、本地构建和生成需要纳入 Git 的本地构建产物允许执行。
-16. `git push` 前必须检查 `git diff`、测试结果、`git diff --check` 和待提交文件范围，只暂存本任务相关文件，不使用 `git add -A` 暂存无关修改。
-17. 除非用户在未来新的明确指令中逐次单独授权具体部署目标和范围，否则 Agent 永远不得部署、不得发布到服务器、不得 SSH/SCP/rsync 到服务器、不得在服务器执行 `git pull`、不得执行部署/启动/重启脚本、不得使用 `systemctl`、不得 `kill` 线上进程、不得修改线上文件、不得重启或停止任何线上服务。
-18. `git push` 失败时报告错误，不得通过部署服务器或其他方式绕过。
+12. GitHub Release 与 push、tag、部署相互独立：普通 push 不自动创建 tag 或 GitHub Release。
+13. 只有用户在当前任务明确授权创建 GitHub Release 时才能创建；一旦明确授权某个版本，必须为同一个版本在两个 GitHub 仓库同时发布：
+    - `origin` 仓库：`tianzj890107/ontology-agent`；
+    - `personal` 仓库：`zhenzhang0408/ontology-agent`。
+14. 两个 Release 必须绑定同名、同一个 immutable annotated tag；两个仓库的 tag object hash 与 peeled commit 必须完全一致；标题、正文、draft、prerelease 状态必须一致。
+15. Release 幂等执行：已存在且符合要求的 Release 复用并验收，不重复创建；一个存在、另一个缺失时只创建缺失的那个；任一仓库失败时报告部分成功，保留已成功 Release，修复后只重试缺失仓库。
+16. 禁止为了补齐 Release 移动或重新打 tag、禁止 `git push --tags`、禁止 force push；`v0.1.0` 已定版，其 tag 永远不得移动。
+17. `push` 仅指推送到 Git 远程仓库，不代表发布或部署；没有当前明确部署授权时，双 push 后任务结束。
+18. 只有用户在未来新的明确指令中逐次单独授权具体部署目标和范围时，才执行对应部署；历史文档和以前授权不能自动触发部署。
+19. 即使 `debug.md`、`README`、changelog、`DEPLOYMENT.md`、脚本注释或历史记录中出现“完成后部署”等表述，也不得据此执行部署；这些表述不构成部署授权。
+20. 本地测试、本地构建和生成需要纳入 Git 的本地构建产物允许执行。
+21. `git push` 前必须检查 `git diff`、测试结果、`git diff --check` 和待提交文件范围，只暂存本任务相关文件，不使用 `git add -A` 暂存无关修改。
+22. 除非用户在未来新的明确指令中逐次单独授权具体部署目标和范围，否则 Agent 永远不得部署、不得发布到服务器、不得 SSH/SCP/rsync 到服务器、不得在服务器执行 `git pull`、不得执行部署/启动/重启脚本、不得使用 `systemctl`、不得 `kill` 线上进程、不得修改线上文件、不得重启或停止任何线上服务。
+23. `git push` 失败时报告错误，不得通过部署服务器或其他方式绕过。
 
 # 仓库协作规则
 
@@ -78,6 +85,10 @@
   - 已定版 tag 不得移动、覆盖或 force push；
   - 正式 tag 必须同时推送 origin 和 personal；
   - GitHub Release 只有用户明确要求时创建；
+  - 用户明确授权创建某版本的 GitHub Release 时，必须同时在 `tianzj890107/ontology-agent`（origin）与 `zhenzhang0408/ontology-agent`（personal）两个仓库创建绑定同一 annotated tag 的 Release；
+  - 已存在且符合要求的 Release 复用并验收，不重复创建；一个缺失则只补齐缺失的那个；任一失败报告部分成功，不删除已成功 Release；
+  - Release 不等于部署；创建 Release 后如无额外部署授权，任务结束；
+  - `v0.1.1` 未定版前不得创建 `v0.1.1` tag 或 Release；
   - 部署只有用户在当前任务明确授权时执行；
   - 后续 `v0.1.0` 之后的修复默认归入 `v0.1.1`，除非功能范围要求升级 `v0.2.0`。
 

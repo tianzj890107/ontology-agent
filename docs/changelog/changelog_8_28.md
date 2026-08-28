@@ -81,3 +81,13 @@
 - 测试：新增 `frontend/tests/sessionCache.test.mjs`（15 项：LRU、签名、去重、签名失效、迟到响应、错误重试、LRU 保护与淘汰、实例隔离等）；`frontend/tests/ontologyPreviewRuntime.test.mjs` 增加 4 项缓存接线契约；`tests/test_frontend_contract.py` 的 selectRun 契约随新实现更新。
 - 验证：前端 Node 测试 95/95、Python 全量 732 passed / 13 skipped / 448 subtests、`npm run build` 成功（新入口 `index-s3saexQQ.js`）、`git diff --check` 通过。
 - 状态：v0.1.1 尚未定版、未创建 tag、未创建 GitHub Release；commit/push 状态见最终报告；未部署。
+
+### GitHub Release 双仓库发布规范
+
+- 全局规则固化：用户在当前任务明确授权创建某版本的 GitHub Release 时，必须在 `tianzj890107/ontology-agent`（origin）与 `zhenzhang0408/ontology-agent`（personal）两个仓库同时发布绑定同一 immutable annotated tag 的 Release。
+- 两个 Release 的 tag object hash、peeled commit、标题、正文、draft、prerelease 必须一致；已存在且符合要求的 Release 复用并验收，不重复创建；一个存在、另一个缺失时只创建缺失的那个。
+- 任一仓库失败时报告部分成功：保留已成功 Release，不删除、不重建，修复权限或网络后只重试缺失仓库；禁止只发布一个仓库后宣称双发布完成。
+- 禁止为了补齐 Release 移动 tag、重新打 tag、`git push --tags` 或 force push；`v0.1.0` tag 永远不得移动；`v0.1.1` 未定版前不得创建 tag 或 Release。
+- Release 不等于部署；创建 Release 后如无额外部署授权，任务结束。
+- 同步修改 `AGENTS.md`、`docs/versions/versioning-policy.md`、`docs/git-dual-remote-workflow.md`、`README.md`；新增 `tests/test_repository_workflow_contract.py` 双仓库 Release 策略测试（7 项）。
+- 验证：全量 Python 测试通过、`git diff --check` 通过；Release 补齐结果见最终报告；未部署。

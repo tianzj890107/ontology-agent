@@ -92,6 +92,65 @@ class RepositoryWorkflowContractTests(unittest.TestCase):
         self.assertIn("GitHub Release 只有用户明确要求时创建", text)
 
 
+class DualRepositoryReleasePolicyTests(unittest.TestCase):
+    ORIGIN_REPO = "tianzj890107/ontology-agent"
+    PERSONAL_REPO = "zhenzhang0408/ontology-agent"
+
+    def _policy_texts(self):
+        return {
+            "AGENTS.md": (ROOT / "AGENTS.md").read_text(encoding="utf-8"),
+            "versioning-policy.md": (ROOT / "docs" / "versions" / "versioning-policy.md").read_text(encoding="utf-8"),
+            "git-dual-remote-workflow.md": (ROOT / "docs" / "git-dual-remote-workflow.md").read_text(encoding="utf-8"),
+            "README.md": (ROOT / "README.md").read_text(encoding="utf-8"),
+        }
+
+    def test_release_must_cover_both_repositories(self):
+        for name, text in self._policy_texts().items():
+            with self.subTest(doc=name):
+                self.assertIn(self.ORIGIN_REPO, text, name)
+                self.assertIn(self.PERSONAL_REPO, text, name)
+        agents = self._policy_texts()["AGENTS.md"]
+        self.assertIn("必须为同一个版本在两个 GitHub 仓库同时发布", agents)
+        versioning = self._policy_texts()["versioning-policy.md"]
+        self.assertIn("必须在两个仓库同时发布，缺一不可", versioning)
+        workflow = self._policy_texts()["git-dual-remote-workflow.md"]
+        self.assertIn("同时在两个 GitHub 仓库发布同一个版本", workflow)
+
+    def test_idempotent_reuse_and_only_create_missing(self):
+        texts = "\n".join(self._policy_texts().values())
+        self.assertIn("已存在且符合要求的 Release 复用并验收，不重复创建", texts)
+        self.assertIn("只创建缺失的那个", texts)
+        self.assertIn("一个存在、另一个缺失时", texts)
+
+    def test_release_distinct_from_deployment(self):
+        texts = "\n".join(self._policy_texts().values())
+        self.assertIn("GitHub Release ≠ 部署", texts)
+        self.assertIn("Release 完成不代表部署", texts)
+        self.assertIn("Release 不触发服务器部署", texts)
+
+    def test_tag_moves_and_force_push_forbidden(self):
+        texts = "\n".join(self._policy_texts().values())
+        self.assertIn("禁止为了补齐 Release 移动 tag、重新打 tag", texts)
+        self.assertIn("禁止 `git push --tags`", texts)
+        self.assertIn("禁止 force push", texts)
+        self.assertIn("`v0.1.0` 已定版，其 tag 永远不得移动", texts)
+
+    def test_partial_failure_not_reported_as_complete(self):
+        texts = "\n".join(self._policy_texts().values())
+        self.assertIn("报告部分成功", texts)
+        self.assertIn("不删除、不重建", texts)
+        self.assertIn("只重试缺失仓库", texts)
+        self.assertIn("禁止只发布一个仓库后宣称双发布完成", texts)
+
+    def test_v011_not_auto_released(self):
+        texts = "\n".join(self._policy_texts().values())
+        self.assertIn("`v0.1.1` 未定版前不得创建 `v0.1.1` tag 或 Release", texts)
+
+    def test_release_requires_explicit_user_authorization(self):
+        agents = self._policy_texts()["AGENTS.md"]
+        self.assertIn("只有用户在当前任务明确授权创建 GitHub Release 时才能创建", agents)
+        self.assertIn("普通 push 不自动创建 tag 或 GitHub Release", agents)
+
 
 if __name__ == "__main__":
     unittest.main()

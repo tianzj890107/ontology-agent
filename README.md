@@ -128,6 +128,8 @@ python scripts/build_agent_knowledge.py
 - [查看全部正式版本](./docs/versions/README.md)
 - [版本管理规范](./docs/versions/versioning-policy.md)
 
+正式版本的 GitHub Release 默认同时在两个仓库发布（`tianzj890107/ontology-agent` 与 `zhenzhang0408/ontology-agent`），绑定同一个 immutable annotated tag；Release 不等于部署。
+
 ## Git 协作
 
 本项目使用双远端镜像工作流：
