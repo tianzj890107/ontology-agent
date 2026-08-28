@@ -28,7 +28,7 @@
 
 开始修改前必须阅读：
 
-- `changelog/` 下当天的 changelog；
+- `docs/changelog/` 下当天的 changelog；
 - 相关日期的历史 changelog；
 - `git status` 以及本次要修改的完整 diff 或提交范围。
 
@@ -36,13 +36,23 @@
 
 ## 每日与每周记录的边界
 
-- 按仓库现有命名约定使用 `changelog/changelog_M_D.md`。例如用户说创建 `changelog_8_13` 时，实际文件是 `changelog/changelog_8_13.md`。
+- 按仓库现有命名约定使用 `docs/changelog/changelog_M_D.md`。例如用户说创建 `changelog_8_13` 时，实际文件是 `docs/changelog/changelog_8_13.md`。
 - 如果当天文件不存在，参考相邻日期文件创建，补充日期标题、日期范围和维护规则；如果已经存在，则先阅读并延续其格式，不要覆盖已有记录。
 - 每日记录按功能最终状态组织，保留当天必要的功能、修复、文件范围和验证结果；不要记录单个 CSS 调整、反复试错或已被后续实现取代的中间过程。
 - 周 changelog 不在日常修改后自动更新。只有用户在周五明确要求“总结这周”“生成周 changelog”或类似指令时，才根据本周每日 changelog 整理一份更粗粒度的周总结。
 - 周总结应在每日最终状态的基础上归纳功能主题、重要结果和整体验证情况，不要机械复制每天的所有条目；每日 changelog 继续保留，不被周总结替代。
 - 除非用户明确要求修订历史，否则不要修改已经归档的旧日期或旧周期 changelog。
 - 只修改 changelog 本身时，不需要再次为这次 changelog 修改追加 changelog 条目。
+
+## 正式版本文档工作流
+
+- 正式版本说明统一保存在 `docs/versions/`，不创建根目录 `CHANGELOG.md`。
+- `docs/versions/README.md` 为正式版本索引。
+- 每个正式版本使用独立文件 `docs/versions/vX.Y.Z.md`。
+- 每日 changelog 记录工程细节，版本文档只归纳最终用户可见能力、兼容变化、升级说明和验证结论。
+- 只有用户明确确定或要求创建正式版本时才创建版本文件。
+- 创建正式版本文件后，同步更新版本索引和根 README 当前版本链接。
+- 已归档版本不得被后续版本覆盖。
 
 ## 完成前检查
 
