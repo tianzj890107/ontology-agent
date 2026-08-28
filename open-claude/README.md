@@ -334,19 +334,22 @@ Create your own skills by adding `.md` files to:
 - `~/.claude/skills/` (global, personal)
 - `.claude/skills/` (project-specific)
 
-Example skill file (`.claude/skills/deploy/SKILL.md`):
+Example skill file (`.claude/skills/prepare-release/SKILL.md`):
 
 ```markdown
 ---
-description: Deploy to production
+description: Prepare a release plan and checklist
 user-invocable: true
-argument-hint: <environment>
+argument-hint: <scope>
 ---
 
-Deploy the application to the specified environment.
+Prepare a release plan for the given scope; do not run deploy scripts or connect to servers.
 1. Run tests first
-2. Build the project
-3. Deploy using the project's deploy script
+2. Build the project locally
+3. Produce a deployment plan and a pre-release checklist (target, commands, rollback, verification)
+4. Commit the changes and push to the current branch
+
+Deployment requires separate human authorization.
 ```
 
 ### Settings (settings.json)

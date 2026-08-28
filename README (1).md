@@ -74,6 +74,9 @@ eimosp-foundation-fileserver/
 
 ### 发布命令
 
+> 说明：以下 `mvn deploy` 命令仅供人工运维发布 Java 文件服务时参考，不能作为当前 Agent 工作流的一部分自动执行。Agent 修改完成后只 commit 并 push，不运行 `mvn deploy`，不连接或部署到任何服务器。
+
+
 - **1. 清理并编译**
 
 ```bash
