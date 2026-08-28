@@ -173,3 +173,65 @@ test("预览 Modal 全屏 class 契约在 47313 与 47314 两个入口一致", a
   assert.match(code, /centered=\{!previewFullscreen\}/);
   assert.match(code, /function PreviewModalTitle\(\{ title, fullscreen, onToggle \}\)/);
 });
+
+test("47313 与 47314 的绘图入口都先查会话 graph 缓存再加载", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const code = await readFile(new URL("../src/main.jsx", import.meta.url), "utf-8");
+  // Both draw functions must consult the shared per-session graph cache before
+  // downloading any CSV, and reuse the same in-flight promise on a click.
+  const drawEntries = [...code.matchAll(/const (drawOntology|drawStandaloneOntology) = async \(\) => \{/g)];
+  assert.equal(drawEntries.length, 2);
+  for (const entry of drawEntries) {
+    const name = entry[1];
+    const start = code.indexOf(entry[0]);
+    const end = code.indexOf("};", start);
+    const body = code.slice(start, end);
+    assert.match(body, /graphCache\.getStatus/);
+    assert.match(body, /graphCache\.ensure/);
+    assert.match(body, /status\.status === "ready"/);
+  }
+  // Cache-first behavior exists on both sides, plus per-entry loading guards.
+  assert.match(code, /standaloneGraphCacheRef/);
+  assert.match(code, /taskGraphCacheRef/);
+  assert.match(code, /standaloneDrawRequestRef/);
+  assert.match(code, /ontologyDrawRequestRef/);
+});
+
+test("会话文件列表就绪后两个入口都会后台预加载本体 graph", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const code = await readFile(new URL("../src/main.jsx", import.meta.url), "utf-8");
+  // 47313: loadFiles and openTask both trigger the task graph preload.
+  assert.match(code, /preloadTaskOntologyGraph\(taskCacheKey\(task\), loadedFiles, task\)/);
+  assert.match(code, /preloadTaskOntologyGraph\(taskKey, loadedFiles, current\)/);
+  // 47314: loadRunFiles triggers the standalone graph preload.
+  assert.match(code, /preloadStandaloneOntologyGraph\(runId, loadedFiles\)/);
+  // Preload is fire-and-forget: it must never auto-open the preview Modal.
+  const preloadSites = [...code.matchAll(/void graphCache\.ensure\([\s\S]*?\)\.catch\(\(\) => \{\}\)/g)];
+  assert.equal(preloadSites.length, 2);
+  assert.ok(preloadSites.every((site) => site[0].includes("void graphCache.ensure")));
+});
+
+test("会话切换回 A 时从内存缓存恢复事件与文件列表", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const code = await readFile(new URL("../src/main.jsx", import.meta.url), "utf-8");
+  // 47313 openTask merges the cached events into the fresh tail window and
+  // restores the cached log window start; the active-task effect restores the
+  // cached file list on switch back.
+  assert.match(code, /mergeEvents\(cachedEvents, recentEvents, `task:\$\{current\.id\}`\)/);
+  assert.match(code, /restoredStart < logStart/);
+  assert.match(code, /taskSessionCacheRef\.current\.get\(taskCacheKey\(active\)\)/);
+  // 47314 selectRun restores events/files/window from the bounded run cache.
+  assert.match(code, /const cachedSession = standaloneSessionCacheRef\.current\.get\(runId\);/);
+  assert.match(code, /eventWindowRef\.current\.set\(runId, cachedSession\.eventWindow\)/);
+  assert.match(code, /files: cachedSession\?\.files\?\.length \? cachedSession\.files/);
+});
+
+test("缓存使用内存 LRU 且不写入持久化存储", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const code = await readFile(new URL("../src/main.jsx", import.meta.url), "utf-8");
+  assert.match(code, /createSessionCache\(\{ maxEntries: 10 \}\)/);
+  assert.match(code, /createOntologyGraphCache\(\{[\s\S]*?maxEntries: 10/);
+  // The graph cache keys are namespaced by mission identity where applicable.
+  assert.match(code, /taskCacheKey/);
+  assert.match(code, /mission:\$\{identity\.repositoryId\}:\$\{identity\.taskCode\}:\$\{task\?\.id\}/);
+});

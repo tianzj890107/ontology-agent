@@ -43,6 +43,7 @@ import {
   readViewport,
 } from "./ontologyRadialPrecompute.js";
 import { buildOntologyGraph } from "./ontologyGraphModel.js";
+import { createOntologyGraphCache, createSessionCache } from "./sessionCache.js";
 import { ONTOLOGY_LAYOUT_OPTIONS, ontologyLayoutOption } from "./ontologyLayoutOptions.js";
 
 const OntologySigmaPreview = React.lazy(() => import("./OntologySigmaPreview.jsx"));
@@ -320,8 +321,51 @@ function StandaloneApp() {
   const continueInFlightRef = useRef(false);
   const standaloneFileInputRef = useRef(null);
   const standaloneFeedPrependAnchorRef = useRef(null);
+  // Bounded in-memory session cache (per runId) for the standalone service.
+  // It mirrors the working refs above; evicting an old run also releases its
+  // event window, cursor and merged event list so a long-lived page cannot
+  // accumulate unbounded history.
+  const standaloneSessionCacheRef = useRef(createSessionCache({
+    maxEntries: 10,
+    onEvict: (runId) => {
+      standaloneEventCacheRef.current.delete(runId);
+      eventWindowRef.current.delete(runId);
+      eventCursorRef.current.delete(runId);
+    },
+  }));
+  const standaloneGraphCacheRef = useRef(createOntologyGraphCache({
+    maxEntries: 10,
+    loadText: async (artifact, context) => {
+      const runId = context?.runId || "";
+      if (!runId) throw new Error("缺少运行 ID");
+      const fetched = await standaloneFileResponse(`/api/modeling-runs/${encodeURIComponent(runId)}/files/content?path=${encodeURIComponent(artifact.path)}`);
+      if (fetched.error || !fetched.response) throw new Error(fetched.error || "无法读取文件");
+      if (!fetched.response.ok) throw new Error(`${artifact.name} 读取失败（HTTP ${fetched.response.status}）`);
+      return fetched.response.text();
+    },
+    buildGraph: buildOntologyRecordsGraph,
+  }));
+  const standaloneDrawRequestRef = useRef(0);
   const standaloneOntologyFiles = useMemo(() => selectOntologyArtifacts(run?.files, "output/"), [run?.files, run?.runId]);
   useEffect(() => { setStandaloneOntologyDrawing(false); setPreviewFullscreen(false); }, [run?.runId]);
+
+  const syncStandaloneSessionCache = (runId, patch) => {
+    if (!runId) return;
+    const cache = standaloneSessionCacheRef.current;
+    const current = cache.get(runId) || {};
+    cache.set(runId, { ...current, ...patch });
+    cache.evictToFit(selectedRunIdRef.current);
+  };
+  const preloadStandaloneOntologyGraph = (runId, fileList) => {
+    if (!runId) return;
+    const artifacts = selectOntologyArtifacts(fileList, "output/");
+    if (!artifacts) return;
+    const graphCache = standaloneGraphCacheRef.current;
+    // Fire-and-forget: a background failure is recorded in the per-run cache
+    // entry and only surfaces if the user actually opens the visualization.
+    void graphCache.ensure(runId, [...artifacts.entries()], { runId }).catch(() => {});
+    graphCache.evictToFit(selectedRunIdRef.current);
+  };
 
   const loadRuns = async () => {
     const result = await standaloneApi("/api/modeling-runs", "");
@@ -397,7 +441,13 @@ function StandaloneApp() {
     try {
       const result = await standaloneApi(`/api/modeling-runs/${encodeURIComponent(runId)}/files`, "");
       if (result._aborted || selectedRunIdRef.current !== runId || result.error) return;
-      setRun((current) => current?.runId === runId ? { ...current, files: result.files || [] } : current);
+      const loadedFiles = Array.isArray(result.files) ? result.files : [];
+      setRun((current) => current?.runId === runId ? { ...current, files: loadedFiles } : current);
+      syncStandaloneSessionCache(runId, { files: loadedFiles });
+      // The file list is the readiness signal for the ontology graph: start
+      // the background preload as soon as it arrives so switching back to this
+      // run or clicking the visualization does not wait for a CSV download.
+      preloadStandaloneOntologyGraph(runId, loadedFiles);
     } finally {
       if (selectedRunIdRef.current === runId) setRunFilesLoading(false);
     }
@@ -491,6 +541,12 @@ function StandaloneApp() {
       events: mergedEvents,
     };
     standaloneEventCacheRef.current.set(runId, mergedEvents);
+    syncStandaloneSessionCache(runId, {
+      events: mergedEvents,
+      eventWindow: eventWindowRef.current.get(runId),
+      eventCursor: eventCursorRef.current.get(runId),
+      files: Array.isArray(summary.files) ? summary.files : [],
+    });
     if (selectedRunIdRef.current === runId) setRun(result);
     scheduleIdle(async () => {
       // The file tree is a single cheap request; populate the panel first so
@@ -534,6 +590,10 @@ function StandaloneApp() {
             : current);
           const cached = standaloneEventCacheRef.current.get(runId) || [];
           standaloneEventCacheRef.current.set(runId, mergeEvents(older, cached, `run:${runId}`));
+          syncStandaloneSessionCache(runId, {
+            events: standaloneEventCacheRef.current.get(runId),
+            eventWindow: eventWindowRef.current.get(runId),
+          });
           await waitForNextPaint();
           const renderedFeed = document.querySelector(".standalone-agent-feed");
           if (renderedFeed && beforeHeight) {
@@ -557,12 +617,25 @@ function StandaloneApp() {
     setStandaloneComposerText("");
     setStandalonePendingFiles([]);
     const cached = runs.find((item) => item.runId === runId);
-    if (cached) {
+    const cachedSession = standaloneSessionCacheRef.current.get(runId);
+    if (cached || cachedSession) {
       // The list already has enough metadata to enter view mode. Switch
       // immediately instead of leaving the user on the new-task form while
-      // a historical event payload is fetched.
+      // a historical event payload is fetched. A cached session restores its
+      // merged events, file list and event window instantly; loadRun() then
+      // only performs the necessary incremental sync in the background.
       selectedRunIdRef.current = runId;
-      setRun({ ...cached, events: Array.isArray(cached.events) ? cached.events : [] });
+      const cachedEvents = cachedSession?.events?.length
+        ? cachedSession.events
+        : (Array.isArray(cached?.events) ? cached.events : []);
+      if (cachedEvents.length) standaloneEventCacheRef.current.set(runId, cachedEvents);
+      if (cachedSession?.eventWindow) eventWindowRef.current.set(runId, cachedSession.eventWindow);
+      if (cachedSession?.eventCursor != null) eventCursorRef.current.set(runId, cachedSession.eventCursor);
+      setRun({
+        ...(cached || {}),
+        events: cachedEvents,
+        files: cachedSession?.files?.length ? cachedSession.files : (cached?.files || []),
+      });
     }
     void loadRun(runId);
   };
@@ -623,6 +696,11 @@ function StandaloneApp() {
           ? mergeEvents(currentEvents, delta, `run:${runId}`)
           : currentEvents;
         standaloneEventCacheRef.current.set(runId, nextEvents);
+        syncStandaloneSessionCache(runId, {
+          events: nextEvents,
+          eventWindow: eventWindowRef.current.get(runId),
+          eventCursor: eventCursorRef.current.get(runId),
+        });
         return { ...summary, files: current.files || [], events: nextEvents };
       });
       updateRunSummary(summary);
@@ -879,23 +957,33 @@ function StandaloneApp() {
       setError("缺少逻辑实体 CSV，不能进行本体可视化");
       return;
     }
+    const graphCache = standaloneGraphCacheRef.current;
+    const artifacts = [...standaloneOntologyFiles.entries()];
+    // A graph already preloaded for this run+signature opens instantly; no
+    // CSV is re-downloaded or re-parsed.
+    const status = graphCache.getStatus(runId, artifacts);
+    if (status.status === "ready") {
+      setPreview({ path: "本体可视化", ontologyGraph: status.graph });
+      return;
+    }
+    const requestId = ++standaloneDrawRequestRef.current;
     setStandaloneOntologyDrawing(true);
     setError("");
     try {
-      const artifacts = [...standaloneOntologyFiles.entries()];
-      const responses = await Promise.all(artifacts.map(([, artifact]) => standaloneFileResponse(`/api/modeling-runs/${encodeURIComponent(runId)}/files/content?path=${encodeURIComponent(artifact.path)}`)));
-      const failedIndex = responses.findIndex((result) => result.error || !result.response?.ok);
-      if (failedIndex >= 0) throw new Error(`${artifacts[failedIndex][1].name} 读取失败`);
-      const texts = await Promise.all(responses.map((result) => result.response.text()));
+      const graph = await graphCache.ensure(runId, artifacts, { runId });
+      graphCache.evictToFit(selectedRunIdRef.current);
+      if (!graph || graphCache.getStatus(runId, artifacts).status !== "ready") {
+        if (selectedRunIdRef.current === runId) setError("本体可视化失败：会话产物已变化，请重试");
+        return;
+      }
       if (selectedRunIdRef.current !== runId) return;
-      const records = new Map(artifacts.map(([layer], index) => [layer, csvRecords(texts[index])]));
-      const graph = buildOntologyGraph(records);
-      if (!graph.availability.logicalEntity) throw new Error("逻辑实体产物中没有可展示的数据");
       setPreview({ path: "本体可视化", ontologyGraph: graph });
     } catch (drawError) {
       if (selectedRunIdRef.current === runId) setError(`本体可视化失败：${drawError.message}`);
     } finally {
-      if (selectedRunIdRef.current === runId) setStandaloneOntologyDrawing(false);
+      // A stale request must never clear the loading state of a newer draw
+      // started after a run switch.
+      if (selectedRunIdRef.current === runId && standaloneDrawRequestRef.current === requestId) setStandaloneOntologyDrawing(false);
     }
   };
   const statusColor = { CREATED: "default", INPUT_READY: "blue", QUEUED: "processing", ANALYZING: "processing", VALIDATING: "processing", SUCCEEDED: "success", FAILED: "default", BLOCKED: "default", CANCELLED: "warning" }[run?.status] || "default";
@@ -1486,6 +1574,16 @@ function csvRecords(text) {
   return rows.slice(1).filter((row) => row.some((value) => String(value || "").trim())).map((row) => Object.fromEntries(headers.map((header, index) => [String(header || "").trim(), String(row[index] || "").trim()])));
 }
 
+// Shared CSV -> ontology graph pipeline used by both 47313 and 47314. The
+// layer->text entries come from the session graph cache, which guarantees the
+// CSV texts belong to one artifact signature.
+function buildOntologyRecordsGraph(entries) {
+  const records = new Map(entries.map(([layer, text]) => [layer, csvRecords(text)]));
+  const graph = buildOntologyGraph(records);
+  if (!graph.availability.logicalEntity) throw new Error("逻辑实体产物中没有可展示的数据");
+  return graph;
+}
+
 function OntologyFilterIcon() {
   return <svg fill="none" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true"><path d="M0 0h16v16H0z"/><path fillRule="evenodd" fill="currentColor" d="m2.826 4.602 3.138 3.665a.826.826 0 0 1 .2.542v3.363c0 .38.086.706.256.98.17.275.425.496.766.664l.966.477c.194.096.385.139.574.13.189-.01.375-.071.559-.185a1.16 1.16 0 0 0 .413-.42c.092-.164.138-.355.138-.571V8.809a.827.827 0 0 1 .2-.542l3.138-3.665c.254-.297.404-.61.45-.936.045-.326-.014-.667-.178-1.023-.163-.355-.384-.622-.661-.8-.278-.178-.612-.267-1.004-.267H4.22c-.392 0-.726.09-1.004.267-.277.178-.498.445-.662.8-.163.356-.222.697-.177 1.023.046.327.196.639.45.936Zm4.228 3.57a1.82 1.82 0 0 0-.33-.556L3.586 3.952a.828.828 0 0 1-.205-.426.828.828 0 0 1 .08-.465.827.827 0 0 1 .302-.363.828.828 0 0 1 .456-.122h7.562c.178 0 .33.04.456.122.126.08.227.202.301.363a.828.828 0 0 1 .08.465.828.828 0 0 1-.204.426L9.276 7.616a1.82 1.82 0 0 0-.33.556c-.074.199-.11.41-.11.637v4.438a.165.165 0 0 1-.02.082.166.166 0 0 1-.059.06.163.163 0 0 1-.08.026.167.167 0 0 1-.082-.019l-.966-.477a.827.827 0 0 1-.348-.301.828.828 0 0 1-.117-.446V8.809c0-.226-.036-.438-.11-.637Z"/></svg>;
 }
@@ -1963,6 +2061,24 @@ function App() {
   const previewImageUrlRef = useRef("");
   const previewRequestRef = useRef(0);
   const filesRequestRef = useRef(0);
+  // Bounded in-memory session cache (per taskId) for the workbench. Restores
+  // merged events, file list and log window when a session is reopened, and
+  // bounds memory to the most recent tasks within one page lifetime.
+  const taskSessionCacheRef = useRef(createSessionCache({ maxEntries: 10 }));
+  const taskGraphCacheRef = useRef(createOntologyGraphCache({
+    maxEntries: 10,
+    loadText: async (artifact, context) => {
+      const task = context?.task || null;
+      const taskId = task?.id || "";
+      const project = task?.project || "";
+      const url = `/p/${encodeURIComponent(project)}/${artifact.path.split("/").map(encodeURIComponent).join("/")}${missionSearch({ taskId }, task)}`;
+      const response = await fetch(url, { credentials: "same-origin" });
+      if (!response.ok) throw new Error(`${artifact.name} 读取失败（HTTP ${response.status}）`);
+      return response.text();
+    },
+    buildGraph: buildOntologyRecordsGraph,
+  }));
+  const ontologyDrawRequestRef = useRef(0);
   const [messageApi, contextHolder] = message.useMessage();
   const fileInput = useRef(null);
   const feedRef = useRef(null);
@@ -2035,8 +2151,14 @@ function App() {
   useEffect(() => { if (active && filesOpen) loadFiles(); }, [active, filesOpen]);
   useEffect(() => {
     activeTaskIdRef.current = active?.id || "";
-    setFiles([]);
-    setFilesTaskId("");
+    // Restore a previously cached file list immediately so switching back to
+    // a session does not briefly show another session's files or wait for a
+    // fresh listing; loadFiles() still refreshes it in the background.
+    const cachedFiles = active?.id
+      ? (taskSessionCacheRef.current.get(taskCacheKey(active))?.files || [])
+      : [];
+    setFiles(cachedFiles);
+    setFilesTaskId(cachedFiles.length ? active?.id || "" : "");
     setSelectedFiles([]);
     setFocusFile("");
     closePreview();
@@ -2096,6 +2218,13 @@ function App() {
           setEvents((current) => activeTaskIdRef.current === task.id
             ? mergeEvents(older, current, `task:${task.id}`)
             : current);
+          // Absorb older history into the session cache even if the user has
+          // already switched away; reopening the task restores it instantly.
+          const cachedEntry = taskSessionCacheRef.current.get(taskCacheKey(task)) || {};
+          syncTaskSessionCache(taskCacheKey(task), {
+            events: mergeEvents(cachedEntry.events || [], older, `task:${task.id}`),
+            logWindow: logWindowRef.current.get(task.id),
+          });
           await waitForNextPaint();
           const renderedFeed = feedRef.current;
           if (renderedFeed && beforeHeight) {
@@ -2173,11 +2302,41 @@ function App() {
         total: Number(result.eventTotal ?? window.total ?? next),
         cursor: next,
       });
+      syncTaskSessionCache(taskCacheKey(active), {
+        events: mergedEvents,
+        logWindow: logWindowRef.current.get(taskId),
+      });
     } finally {
       taskPollInFlightRef.current.delete(taskId);
     }
   };
 
+  // Cache keys are namespaced by mission identity (repositoryId + taskCode)
+  // so the same local task id can never leak across identity spaces, then by
+  // the server-unique task id. The graph cache uses the same key per session.
+  const taskCacheKey = (task) => {
+    const identity = missionIdentity(task);
+    return identity
+      ? `mission:${identity.repositoryId}:${identity.taskCode}:${task?.id}`
+      : `task:${task?.id || ""}`;
+  };
+  const syncTaskSessionCache = (taskKey, patch) => {
+    if (!taskKey) return;
+    const cache = taskSessionCacheRef.current;
+    const current = cache.get(taskKey) || {};
+    cache.set(taskKey, { ...current, ...patch });
+    cache.evictToFit(activeTaskIdRef.current);
+  };
+  const preloadTaskOntologyGraph = (taskKey, fileList, task = active) => {
+    if (!taskKey) return;
+    const artifacts = selectOntologyArtifacts(fileList, "output/");
+    if (!artifacts) return;
+    const graphCache = taskGraphCacheRef.current;
+    // Fire-and-forget: a background failure is recorded in the per-task cache
+    // entry and only surfaces if the user actually opens the visualization.
+    void graphCache.ensure(taskKey, [...artifacts.entries()], { task }).catch(() => {});
+    graphCache.evictToFit(activeTaskIdRef.current);
+  };
   const openTask = async (task) => {
     const taskMission = missionIdentity(task);
     const identityQuery = taskMission ? `&repositoryId=${encodeURIComponent(taskMission.repositoryId)}&taskCode=${encodeURIComponent(taskMission.taskCode)}` : "";
@@ -2200,14 +2359,25 @@ function App() {
     const recentEvents = normalizeEvents(current);
     const logStart = Number(result.logStart ?? 0);
     const logTotal = Number(result.logTotal ?? recentEvents.length);
+    const taskKey = taskCacheKey(current);
+    const cachedSession = taskSessionCacheRef.current.get(taskKey);
+    const cachedEvents = Array.isArray(cachedSession?.events) ? cachedSession.events : [];
     // The tail window ends at the journal end, so the next unread cursor is
     // the server-absolute logTotal; never derive it from client node counts.
-    logWindowRef.current.set(current.id, { start: logStart, total: logTotal, cursor: logTotal, generation: Date.now() });
+    // A restored session keeps its older already-loaded window start so the
+    // older-journal replay does not re-download the range it already has.
+    const freshWindow = { start: logStart, total: logTotal, cursor: logTotal, generation: Date.now() };
+    const restoredStart = Number(cachedSession?.logWindow?.start);
+    logWindowRef.current.set(current.id, Number.isFinite(restoredStart) && restoredStart < logStart
+      ? { ...freshWindow, start: restoredStart }
+      : freshWindow);
     activeTaskIdRef.current = current.id;
     setFiles([]);
     setFilesTaskId("");
     setActive(current);
-    setEvents(mergeEvents([], recentEvents, `task:${current.id}`));
+    const mergedEvents = mergeEvents(cachedEvents, recentEvents, `task:${current.id}`);
+    setEvents(mergedEvents);
+    syncTaskSessionCache(taskKey, { events: mergedEvents, logWindow: logWindowRef.current.get(current.id) });
     setView("task"); setText("");
     if (MISSION) localStorage.setItem(`oc_active_task_${MISSION.repositoryId}_${MISSION.taskCode}`, current.id);
     // 服务端任务级自动确认为真时同步本地开关，刷新后 UI 与执行策略一致。
@@ -2237,6 +2407,10 @@ function App() {
       // resumes in the background.
       const historyHasMore = await loadOlderTaskEvents(current, 0, 10);
       const loadedFiles = await loadFiles(current);
+      // Background ontology preload: once the file list is ready, download +
+      // parse + build the graph for this session so the visualization opens
+      // instantly later, without blocking the conversation first viewport.
+      preloadTaskOntologyGraph(taskKey, loadedFiles, current);
       if (activeTaskIdRef.current === current.id) {
         // The file panel is open by default; reopening a session with
         // generated results only ever opens it (never auto-closes a panel the
@@ -2285,6 +2459,10 @@ function App() {
       setFiles(loadedFiles);
       setFilesTaskId(taskId);
       setFilesLoading(false);
+      // Keep the session cache file list fresh; a changed artifact signature
+      // invalidates the cached graph on the next preload/draw.
+      syncTaskSessionCache(taskCacheKey(task), { files: loadedFiles });
+      preloadTaskOntologyGraph(taskCacheKey(task), loadedFiles, task);
       return loadedFiles;
     }
     if (filesRequestRef.current === requestId) setFilesLoading(false);
@@ -2527,22 +2705,32 @@ function App() {
       messageApi.warning("缺少逻辑实体 CSV，不能进行本体可视化");
       return;
     }
+    const graphCache = taskGraphCacheRef.current;
+    const artifacts = [...ontologyFiles.entries()];
+    // A graph already preloaded for this task+signature opens instantly; no
+    // CSV is re-downloaded or re-parsed.
+    const status = graphCache.getStatus(taskId, artifacts);
+    if (status.status === "ready") {
+      showPreview({ path: "本体可视化", ontologyGraph: status.graph });
+      return;
+    }
+    const requestId = ++ontologyDrawRequestRef.current;
     setOntologyDrawing(true);
     try {
-      const artifacts = [...ontologyFiles.entries()];
-      const responses = await Promise.all(artifacts.map(([, artifact]) => fetch(fileUrl(artifact.path, task), { credentials: "same-origin" })));
-      const failedIndex = responses.findIndex((response) => !response.ok);
-      if (failedIndex >= 0) throw new Error(`${artifacts[failedIndex][1].name} 读取失败（HTTP ${responses[failedIndex].status}）`);
-      const texts = await Promise.all(responses.map((response) => response.text()));
-      const records = new Map(artifacts.map(([layer], index) => [layer, csvRecords(texts[index])]));
-      const graph = buildOntologyGraph(records);
-      if (!graph.availability.logicalEntity) throw new Error("逻辑实体产物中没有可展示的数据");
+      const graph = await graphCache.ensure(taskId, artifacts, { task });
+      graphCache.evictToFit(activeTaskIdRef.current);
+      if (!graph || graphCache.getStatus(taskId, artifacts).status !== "ready") {
+        messageApi.error("本体可视化失败：会话产物已变化，请重试");
+        return;
+      }
       if (activeTaskIdRef.current !== taskId) return;
       showPreview({ path: "本体可视化", ontologyGraph: graph });
     } catch (error) {
       messageApi.error(`本体可视化失败：${error.message}`);
     } finally {
-      setOntologyDrawing(false);
+      // A stale request must never clear the loading state of a newer draw
+      // started after a task switch.
+      if (activeTaskIdRef.current === taskId && ontologyDrawRequestRef.current === requestId) setOntologyDrawing(false);
     }
   };
   const download = () => { if (!selectedFiles.length) return; const project = active?.project || ""; const query = new URLSearchParams({ project }); selectedFiles.forEach((path) => query.append("path", path)); const taskMission = missionIdentity(active); if (taskMission) { query.set("repositoryId", taskMission.repositoryId); query.set("taskCode", taskMission.taskCode); query.set("taskId", active?.id || ""); } window.open(`/api/download?${query}`, "_blank"); };
