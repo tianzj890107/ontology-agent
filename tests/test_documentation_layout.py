@@ -72,8 +72,6 @@ class DocumentationLayoutTests(unittest.TestCase):
         self.assertIn("正式版本文档工作流", text)
         self.assertIn("docs/versions/", text)
         workflow = text.split("正式版本文档工作流", 1)[1].split("## 完成前检查", 1)[0]
-        # The workflow explicitly forbids a root CHANGELOG.md instead of
-        # treating it as an active documentation path.
         self.assertIn("不创建根目录 `CHANGELOG.md`", workflow)
 
     def test_product_version_distinct_from_knowledge_version(self):
@@ -83,12 +81,69 @@ class DocumentationLayoutTests(unittest.TestCase):
         self.assertIn("产品 UI 版本 `v0.1.0`", version_doc)
 
     def test_historical_deployment_facts_preserved(self):
-        # Historical changelogs keep their recorded deployment facts; the test
-        # must not forbid "已部署" in archived records.
         for name in ("changelog_8_27.md", "changelog_8_28.md"):
             path = ROOT / "docs" / "changelog" / name
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("not-here-sentinel", text)
+
+
+class VersioningPolicyTests(unittest.TestCase):
+    def test_policy_file_exists_and_is_linked(self):
+        policy = ROOT / "docs" / "versions" / "versioning-policy.md"
+        self.assertTrue(policy.exists())
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("./docs/versions/versioning-policy.md", readme)
+        index = (ROOT / "docs" / "versions" / "README.md").read_text(encoding="utf-8")
+        self.assertIn("./versioning-policy.md", index)
+        v010 = (ROOT / "docs" / "versions" / "v0.1.0.md").read_text(encoding="utf-8")
+        self.assertIn("./versioning-policy.md", v010)
+
+    def test_policy_version_number_rules(self):
+        text = (ROOT / "docs" / "versions" / "versioning-policy.md").read_text(encoding="utf-8")
+        self.assertIn("vMAJOR.MINOR.PATCH", text)
+        self.assertIn("修复、优化和小调整", text)
+        self.assertIn("一组用户可感知的新能力", text)
+
+    def test_policy_does_not_mechanically_follow_calendar(self):
+        text = (ROOT / "docs" / "versions" / "versioning-policy.md").read_text(encoding="utf-8")
+        self.assertIn("不按自然周机械升级", text)
+        self.assertIn("不是每天有 commit 就必须升级版本", text)
+        self.assertIn("如果一天只有文档、测试或内部维护，可以不发布正式版本", text)
+
+    def test_policy_daily_stable_release_allows_patch(self):
+        text = (ROOT / "docs" / "versions" / "versioning-policy.md").read_text(encoding="utf-8")
+        self.assertIn("可以每天增加 PATCH", text)
+
+    def test_policy_deployment_does_not_force_version(self):
+        text = (ROOT / "docs" / "versions" / "versioning-policy.md").read_text(encoding="utf-8")
+        self.assertIn("每次部署不一定创建新正式版本", text)
+
+    def test_policy_distinguishes_documentation_carriers(self):
+        text = (ROOT / "docs" / "versions" / "versioning-policy.md").read_text(encoding="utf-8")
+        for keyword in ("Git commit", "每日 changelog", "docs/versions/vX.Y.Z.md",
+                        "Git tag", "GitHub Release", "服务器部署"):
+            self.assertIn(keyword, text)
+        for rule in ("commit ≠ tag", "push ≠ 部署", "tag ≠ 部署",
+                     "GitHub Release ≠ 部署", "部署 ≠ 必然创建新版本"):
+            self.assertIn(rule, text)
+
+    def test_policy_tags_immutable(self):
+        text = (ROOT / "docs" / "versions" / "versioning-policy.md").read_text(encoding="utf-8")
+        self.assertIn("已创建的 tag 不得移动", text)
+        self.assertIn("禁止 `git tag -f` 覆盖或移动已定版 tag", text)
+
+    def test_v010_finalized_state(self):
+        v010 = (ROOT / "docs" / "versions" / "v0.1.0.md").read_text(encoding="utf-8")
+        self.assertIn("状态：已定版", v010)
+        self.assertIn("Git Tag：`v0.1.0`", v010)
+        index = (ROOT / "docs" / "versions" / "README.md").read_text(encoding="utf-8")
+        self.assertIn("已定版", index)
+
+    def test_knowledge_version_v001_not_forbidden(self):
+        # The knowledge/contract version v0.0.1 is intentionally still in use;
+        # tests must never assert the repo-wide absence of v0.0.1.
+        v010 = (ROOT / "docs" / "versions" / "v0.1.0.md").read_text(encoding="utf-8")
+        self.assertIn("v0.0.1", v010)
 
 
 if __name__ == "__main__":

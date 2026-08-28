@@ -80,6 +80,18 @@ class RepositoryWorkflowContractTests(unittest.TestCase):
         self.assertIn("Agent 安全声明", deployment)
         self.assertIn("ssh company-server", deployment)
 
+    def test_agents_links_versioning_policy(self):
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("docs/versions/versioning-policy.md", text)
+        self.assertIn("vMAJOR.MINOR.PATCH", text)
+        self.assertIn("不按自然周机械升级", text)
+        self.assertIn("每个 commit 不自动升级版本", text)
+        self.assertIn("每次部署不一定创建正式版本", text)
+        self.assertIn("每日稳定业务发布可以升级 PATCH", text)
+        self.assertIn("已定版 tag 不得移动、覆盖或 force push", text)
+        self.assertIn("GitHub Release 只有用户明确要求时创建", text)
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -122,7 +122,10 @@ python scripts/build_agent_knowledge.py
 
 当前版本：[`v0.1.0`](./docs/versions/v0.1.0.md)
 
+当前稳定版本：`v0.1.0`；后续版本遵循语义化版本规则：修复和小调整增加 PATCH，一组明显新能力增加 MINOR；版本升级由实际变化决定，不按日期机械升级。
+
 - [查看全部正式版本](./docs/versions/README.md)
+- [版本管理规范](./docs/versions/versioning-policy.md)
 
 ## Git 协作
 

@@ -60,3 +60,14 @@
 - 部署前确认：本地全量 pytest `722 passed / 13 skipped / 448 subtests`，前端 Node 测试 `76/76`，`npm run build` 与 `git diff --check` 通过；服务器 47313/47314 的 active/queued execution 均为 0，运行索引和既有备份保持原样。
 - 部署结果：47313 经 `scripts/deploy_server.sh` 更新并重启为 pid `4122195`；47314 在再次确认无活动 run 后精确停止旧 pid `3830440`，经 `scripts/run_standalone_modeling.sh` 重启为 pid `4125590`。两服务 `/` 与 `/health` 均为 HTTP 200、readiness ready、active/queued 均为 0。
 - 线上资源：47313/47314 均加载 `assets/index-DvhxxeJ3.js`；线上 bundle 已核对包含“硕磐智能建模”和 `v0.1.0`，CSS `index-CpwoD9tw.css` 已核对全屏预览 `border-radius:0!important`；两服务最近启动日志无 traceback/exception/error。
+
+### v0.1.0 正式定版与版本规范
+
+- v0.1.0 状态调整为已定版，正式 tag 为 v0.1.0。
+- 新增 `docs/versions/versioning-policy.md`，明确语义化版本、每日稳定发布、部署与版本边界。
+- 每个 commit 不自动升级版本；每次部署不一定创建正式版本。
+- 每日稳定业务发布可以增加 PATCH；MINOR 由明显的新功能或兼容变化决定，不按自然周机械升级。
+- 只有文档、测试或内部维护时可以不创建正式版本。
+- Git commit、每日 changelog、版本文档、Git tag、GitHub Release 和服务器部署职责独立。
+- v0.1.0 tag 不再移动；后续修复默认归入 v0.1.1。
+- 本次只创建 Git tag，不创建 GitHub Release，不部署、不重启服务。
