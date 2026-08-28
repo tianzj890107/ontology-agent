@@ -767,6 +767,36 @@ class StandaloneModelingWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.store.create("DATABASE", "default").requested_artifacts,
                          list(DEFAULT_ARTIFACTS))
 
+    def test_actions_artifact_is_accepted_and_mapped(self):
+        run = self.store.create("DATABASE", "actions only", ["actions.csv"])
+        self.assertEqual(run.requested_artifacts, ["actions.csv"])
+        context = self._manager()._context(run)
+        self.assertIn("actions.csv", context["expectedFiles"])
+        self.assertIn("ACTION", context["parseElements"])
+
+    def test_default_artifacts_include_actions_csv(self):
+        self.assertIn("actions.csv", DEFAULT_ARTIFACTS)
+        default = self.store.create("DATABASE", "default all")
+        self.assertIn("actions.csv", default.requested_artifacts)
+
+    def test_frontend_standalone_artifacts_are_accepted_and_default_run_succeeds(self):
+        source = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "main.jsx").read_text(
+            encoding="utf-8")
+        block = source.split("const STANDALONE_ARTIFACTS = [", 1)[1].split("];", 1)[0]
+        artifacts = [line.strip().strip('",') for line in block.splitlines() if '"' in line]
+        self.assertTrue(artifacts)
+        self.assertIn("actions.csv", artifacts)
+        run = self.store.create("DATABASE", "全部默认产物", artifacts)
+        self.assertEqual(run.requested_artifacts, artifacts)
+        context = self._manager()._context(run)
+        self.assertEqual(set(context["expectedFiles"]), set(artifacts))
+        self.assertIn("ACTION", context["parseElements"])
+        # The standalone whitelist must not grow to other modeling artifacts
+        # the frontend does not offer (statuses/events/object relations).
+        with self.assertRaises(ClientInputError) as unknown:
+            self.store.create("DATABASE", "unknown", [*artifacts, "statuses.csv"])
+        self.assertEqual(unknown.exception.status, 422)
+
     def test_empty_prompt_uses_built_in_v001_modeling_instruction(self):
         run = self.store.create("DATABASE", "")
         self.assertEqual(run.prompt, DEFAULT_MODELING_PROMPT)

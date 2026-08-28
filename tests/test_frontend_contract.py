@@ -1,6 +1,7 @@
 import json
 import pathlib
 import subprocess
+import sys
 import unittest
 
 
@@ -767,6 +768,19 @@ class FrontendContractTests(unittest.TestCase):
         self.assertEqual([], sorted(ROOT.glob("*.html")))
         for name in ("codex_web.html", "generic_claude_gpt_style_chat.html"):
             self.assertFalse((ROOT / "open-claude" / name).exists())
+
+    def test_standalone_artifacts_are_accepted_by_backend_whitelist(self):
+        sys.path.insert(0, str(ROOT / "open-claude"))
+        import standalone_modeling_server as server
+        source = (ROOT / "frontend" / "src" / "main.jsx").read_text(encoding="utf-8")
+        block = source.split("const STANDALONE_ARTIFACTS = [", 1)[1].split("];", 1)[0]
+        frontend_artifacts = [line.strip().strip('",') for line in block.splitlines()
+                              if '"' in line]
+        self.assertTrue(frontend_artifacts)
+        self.assertIn("actions.csv", frontend_artifacts)
+        self.assertEqual(sorted(frontend_artifacts), sorted(server.DEFAULT_ARTIFACTS))
+        for name in frontend_artifacts:
+            self.assertIn(name, server.ARTIFACT_PARSE_ELEMENTS)
 
 
 if __name__ == "__main__":

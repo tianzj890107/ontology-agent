@@ -116,6 +116,7 @@ DEFAULT_ARTIFACTS = (
     "business_attributes.csv",
     "entity_relations.csv",
     "business_rules.csv",
+    "actions.csv",
     "terms.csv",
     "indicators.csv",
 )
@@ -359,6 +360,7 @@ ARTIFACT_PARSE_ELEMENTS = {
     "business_attributes.csv": "BUSINESS_ATTRIBUTE",
     "entity_relations.csv": "ENTITY_RELATION",
     "business_rules.csv": "BUSINESS_RULE",
+    "actions.csv": "ACTION",
     "terms.csv": "TERM",
     "indicators.csv": "METRIC",
 }
