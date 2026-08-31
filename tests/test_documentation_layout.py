@@ -37,20 +37,26 @@ class DocumentationLayoutTests(unittest.TestCase):
     def test_daily_changelogs_migrated(self):
         changelog_dir = ROOT / "docs" / "changelog"
         self.assertTrue(changelog_dir.is_dir())
-        legacy_names = [
+        weekly_names = [
             "changelog_7.27_31.md", "changelog_8_3_7.md", "changelog_8_10_16.md",
-            "changelog_8_17_21.md", "changelog_8_24.md", "changelog_8_25.md",
-            "changelog_8_26.md", "changelog_8_27.md", "changelog_8_28.md",
+            "changelog_8_17_21.md", "changelog_8_24_28.md",
         ]
-        for name in legacy_names:
+        for name in weekly_names:
             self.assertTrue((changelog_dir / name).exists(), name)
+        for name in ("changelog_8_24.md", "changelog_8_25.md", "changelog_8_26.md",
+                     "changelog_8_27.md", "changelog_8_28.md"):
+            self.assertFalse((changelog_dir / name).exists(), name)
 
     def test_changelog_index_lists_real_records(self):
         index = ROOT / "docs" / "changelog" / "README.md"
         self.assertTrue(index.exists())
         text = index.read_text(encoding="utf-8")
-        for name in ("changelog_8_28.md", "changelog_8_27.md", "changelog_8_24.md"):
-            self.assertIn(name, text)
+        self.assertIn("changelog_8_24_28.md", text)
+        self.assertNotIn("changelog_8_28.md", text)
+        self.assertNotIn("changelog_8_27.md", text)
+        self.assertNotIn("changelog_8_26.md", text)
+        self.assertNotIn("changelog_8_25.md", text)
+        self.assertNotIn("changelog_8_24.md", text)
 
     def test_versions_index_and_v010_doc(self):
         index = ROOT / "docs" / "versions" / "README.md"
@@ -59,7 +65,7 @@ class DocumentationLayoutTests(unittest.TestCase):
         v010 = ROOT / "docs" / "versions" / "v0.1.0.md"
         self.assertTrue(v010.exists())
         text = v010.read_text(encoding="utf-8")
-        self.assertIn("../changelog/changelog_8_28.md", text)
+        self.assertIn("../changelog/changelog_8_24_28.md", text)
         self.assertIn("../changelog/README.md", text)
         self.assertIn("v0.0.1", text)
 
@@ -87,10 +93,9 @@ class DocumentationLayoutTests(unittest.TestCase):
         self.assertIn("产品 UI 版本 `v0.1.0`", version_doc)
 
     def test_historical_deployment_facts_preserved(self):
-        for name in ("changelog_8_27.md", "changelog_8_28.md"):
-            path = ROOT / "docs" / "changelog" / name
-            text = path.read_text(encoding="utf-8")
-            self.assertNotIn("not-here-sentinel", text)
+        path = ROOT / "docs" / "changelog" / "changelog_8_24_28.md"
+        text = path.read_text(encoding="utf-8")
+        self.assertNotIn("not-here-sentinel", text)
 
 
 class VersioningPolicyTests(unittest.TestCase):
